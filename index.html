@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>VR Warehouse Sandbox — Babylon.js WebXR</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    #renderCanvas { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    #hud {
+      position: absolute; left: 12px; top: 12px; max-width: 360px;
+      background: rgba(0,0,0,0.55); padding: 12px 14px; border-radius: 10px;
+      font-size: 13px; line-height: 1.45; pointer-events: none;
+    }
+    #hud b { color: #ffd166; }
+    #status { position:absolute; right:12px; top:12px; background:rgba(0,0,0,0.55); padding:8px 12px; border-radius:8px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+  <div id="hud">
+    <div><b>VR Warehouse Sandbox</b></div>
+    <div>Put on your Quest 3 and tap the <b>Enter VR</b> button (bottom-right of the screen).</div>
+    <div style="margin-top:6px;">In VR — squeeze the <b>grip</b> button near an object to grab it, release to throw. Use the <b>thumbstick</b> to teleport.</div>
+    <div style="margin-top:6px; opacity:0.8;">Desktop preview: WASD to move, mouse to look.</div>
+  </div>
+  <div id="status">Loading…</div>
+
+  <!-- Babylon.js core + materials + Havok physics -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+  <script src="https://cdn.babylonjs.com/havok/HavokPhysics_umd.js"></script>
+
+  <script>
+  (async function () {
+    const statusEl = document.getElementById('status');
+    const setStatus = (t) => { statusEl.textContent = t; };
+
+    const canvas = document.getElementById('renderCanvas');
+    const engine = new BABYLON.Engine(canvas, true, { stencil: true, preserveDrawingBuffer: true });
+    const scene  = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color3(0.05, 0.06, 0.08);
+
+    // ---------- Camera (desktop preview only; WebXR replaces it in VR) ----------
+    const camera = new BABYLON.UniversalCamera('cam', new BABYLON.Vector3(0, 1.7, -6), scene);
+    camera.setTarget(new BABYLON.Vector3(0, 1.5, 0));
+    camera.attachControl(canvas, true);
+    camera.speed = 0.25;
+    camera.minZ = 0.05;
+    camera.keysUp.push(87);    // W
+    camera.keysDown.push(83);  // S
+    camera.keysLeft.push(65);  // A
+    camera.keysRight.push(68); // D
+
+    // ---------- Lighting ----------
+    const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+    hemi.intensity = 0.55;
+    hemi.groundColor = new BABYLON.Color3(0.15, 0.15, 0.18);
+
+    const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.5, -1, 0.3), scene);
+    sun.intensity = 0.7;
+    sun.position = new BABYLON.Vector3(10, 20, -10);
+
+    // Industrial ceiling spots
+    for (let i = -1; i <= 1; i++) {
+      const sp = new BABYLON.SpotLight('sp' + i, new BABYLON.Vector3(i * 6, 7.8, 0), new BABYLON.Vector3(0, -1, 0), Math.PI / 2.5, 8, scene);
+      sp.intensity = 0.4;
+      sp.diffuse = new BABYLON.Color3(1, 0.95, 0.82);
+    }
+
+    // ---------- Physics (Havok) ----------
+    setStatus('Initializing physics…');
+    const havokInstance = await HavokPhysics();
+    const havokPlugin = new BABYLON.HavokPlugin(true, havokInstance);
+    scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), havokPlugin);
+
+    // ---------- Warehouse environment ----------
+    const ROOM = { w: 24, d: 24, h: 8 };
+
+    // Floor (concrete)
+    const floor = BABYLON.MeshBuilder.CreateGround('floor', { width: ROOM.w, height: ROOM.d }, scene);
+    const floorMat = new BABYLON.GridMaterial('floorMat', scene);
+    floorMat.majorUnitFrequency = 4;
+    floorMat.minorUnitVisibility = 0.4;
+    floorMat.gridRatio = 1;
+    floorMat.backFaceCulling = false;
+    floorMat.mainColor = new BABYLON.Color3(0.32, 0.33, 0.35);
+    floorMat.lineColor = new BABYLON.Color3(0.18, 0.18, 0.2);
+    floorMat.opacity = 0.999;
+    floor.material = floorMat;
+    new BABYLON.PhysicsAggregate(floor, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.7, restitution: 0.2 }, scene);
+
+    // Wall material
+    const wallMat = new BABYLON.StandardMaterial('wallMat', scene);
+    wallMat.diffuseColor = new BABYLON.Color3(0.42, 0.43, 0.46);
+    wallMat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+
+    // Ceiling material
+    const ceilMat = new BABYLON.StandardMaterial('ceilMat', scene);
+    ceilMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
+
+    function makeWall(name, w, h, d, x, y, z) {
+      const m = BABYLON.MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, scene);
+      m.position.set(x, y, z);
+      m.material = wallMat;
+      new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.6, restitution: 0.2 }, scene);
+      return m;
+    }
+
+    // 4 walls
+    makeWall('wallN', ROOM.w, ROOM.h, 0.4,  0, ROOM.h / 2,  ROOM.d / 2);
+    makeWall('wallS', ROOM.w, ROOM.h, 0.4,  0, ROOM.h / 2, -ROOM.d / 2);
+    makeWall('wallE', 0.4, ROOM.h, ROOM.d,  ROOM.w / 2, ROOM.h / 2, 0);
+    makeWall('wallW', 0.4, ROOM.h, ROOM.d, -ROOM.w / 2, ROOM.h / 2, 0);
+
+    // Ceiling
+    const ceiling = BABYLON.MeshBuilder.CreateBox('ceiling', { width: ROOM.w, height: 0.3, depth: ROOM.d }, scene);
+    ceiling.position.set(0, ROOM.h, 0);
+    ceiling.material = ceilMat;
+
+    // ---------- Static warehouse props (shelves) ----------
+    const shelfMat = new BABYLON.StandardMaterial('shelfMat', scene);
+    shelfMat.diffuseColor = new BABYLON.Color3(0.55, 0.4, 0.25);
+
+    function makeShelfUnit(x, z, rotY) {
+      const root = new BABYLON.TransformNode('shelfRoot', scene);
+      root.position.set(x, 0, z);
+      root.rotation.y = rotY;
+
+      const W = 3.2, D = 0.9, postH = 4.5;
+      const postPositions = [
+        [ W/2 - 0.08,  D/2 - 0.08],
+        [-W/2 + 0.08,  D/2 - 0.08],
+        [ W/2 - 0.08, -D/2 + 0.08],
+        [-W/2 + 0.08, -D/2 + 0.08],
+      ];
+      for (const [px, pz] of postPositions) {
+        const post = BABYLON.MeshBuilder.CreateBox('post', { width: 0.12, height: postH, depth: 0.12 }, scene);
+        post.position.set(px, postH/2, pz);
+        post.parent = root;
+        post.material = shelfMat;
+      }
+      for (let lvl = 0; lvl < 3; lvl++) {
+        const y = 0.05 + lvl * 1.5;
+        const shelf = BABYLON.MeshBuilder.CreateBox('shelf', { width: W, height: 0.08, depth: D }, scene);
+        shelf.position.set(0, y, 0);
+        shelf.parent = root;
+        shelf.material = shelfMat;
+      }
+
+      // Bake shelf collisions as a single static aggregate (use the children meshes)
+      root.computeWorldMatrix(true);
+      root.getChildMeshes().forEach((m) => {
+        new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.6, restitution: 0.1 }, scene);
+      });
+      return root;
+    }
+
+    makeShelfUnit(-9,  -8, 0);
+    makeShelfUnit(-9,  -2, 0);
+    makeShelfUnit(-9,   4, 0);
+    makeShelfUnit( 9,  -8, Math.PI);
+    makeShelfUnit( 9,   4, Math.PI);
+
+    setStatus('Spawning props…');
+    // ---------- Grabbable physics objects ----------
+    const grabbables = [];
+
+    function randColor() {
+      return new BABYLON.Color3(
+        0.4 + Math.random() * 0.6,
+        0.4 + Math.random() * 0.6,
+        0.4 + Math.random() * 0.6
+      );
+    }
+
+    function registerGrabbable(mesh, aggregate) {
+      mesh.metadata = mesh.metadata || {};
+      mesh.metadata.grabbable = true;
+      mesh.metadata.aggregate = aggregate;
+      grabbables.push(mesh);
+    }
+
+    function spawnBall(x, y, z, r) {
+      const m = BABYLON.MeshBuilder.CreateSphere('ball', { diameter: r * 2, segments: 18 }, scene);
+      m.position.set(x, y, z);
+      const mat = new BABYLON.StandardMaterial('ballMat', scene);
+      mat.diffuseColor = randColor();
+      m.material = mat;
+      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.SPHERE,
+        { mass: 0.6, friction: 0.5, restitution: 0.65 }, scene);
+      registerGrabbable(m, agg);
+      return m;
+    }
+
+    function spawnCrate(x, y, z, s) {
+      const m = BABYLON.MeshBuilder.CreateBox('crate', { size: s }, scene);
+      m.position.set(x, y, z);
+      const mat = new BABYLON.StandardMaterial('crateMat', scene);
+      mat.diffuseColor = new BABYLON.Color3(0.6, 0.42, 0.22);
+      m.material = mat;
+      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.BOX,
+        { mass: 1.2, friction: 0.6, restitution: 0.25 }, scene);
+      registerGrabbable(m, agg);
+      return m;
+    }
+
+    function spawnBottle(x, y, z) {
+      const m = BABYLON.MeshBuilder.CreateCylinder('bottle', { height: 0.32, diameterTop: 0.06, diameterBottom: 0.1, tessellation: 18 }, scene);
+      m.position.set(x, y, z);
+      const mat = new BABYLON.StandardMaterial('bottleMat', scene);
+      mat.diffuseColor = new BABYLON.Color3(0.2, 0.55, 0.35);
+      mat.alpha = 0.85;
+      m.material = mat;
+      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.CYLINDER,
+        { mass: 0.35, friction: 0.5, restitution: 0.3 }, scene);
+      registerGrabbable(m, agg);
+      return m;
+    }
+
+    function spawnCan(x, y, z) {
+      const m = BABYLON.MeshBuilder.CreateCylinder('can', { height: 0.14, diameter: 0.08, tessellation: 18 }, scene);
+      m.position.set(x, y, z);
+      const mat = new BABYLON.StandardMaterial('canMat', scene);
+      mat.diffuseColor = new BABYLON.Color3(0.85, 0.2, 0.2);
+      mat.specularColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+      m.material = mat;
+      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.CYLINDER,
+        { mass: 0.2, friction: 0.45, restitution: 0.45 }, scene);
+      registerGrabbable(m, agg);
+      return m;
+    }
+
+    // A table near spawn so things are within easy reach
+    function makeTable(x, z) {
+      const top = BABYLON.MeshBuilder.CreateBox('tabletop', { width: 2.4, height: 0.08, depth: 1.2 }, scene);
+      top.position.set(x, 0.9, z);
+      const tmat = new BABYLON.StandardMaterial('tmat', scene);
+      tmat.diffuseColor = new BABYLON.Color3(0.5, 0.35, 0.2);
+      top.material = tmat;
+      new BABYLON.PhysicsAggregate(top, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.7, restitution: 0.2 }, scene);
+
+      for (const [lx, lz] of [[1.1, 0.5], [-1.1, 0.5], [1.1, -0.5], [-1.1, -0.5]]) {
+        const leg = BABYLON.MeshBuilder.CreateBox('leg', { width: 0.08, height: 0.86, depth: 0.08 }, scene);
+        leg.position.set(x + lx, 0.43, z + lz);
+        leg.material = tmat;
+        new BABYLON.PhysicsAggregate(leg, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.7, restitution: 0.2 }, scene);
+      }
+    }
+    makeTable(0, -2);
+
+    // Sprinkle stuff on the table
+    spawnBall(-0.6, 1.2,  -2.2, 0.1);
+    spawnBall(-0.1, 1.2,  -1.7, 0.12);
+    spawnBall( 0.6, 1.2,  -2.2, 0.09);
+    spawnCan ( 0.0, 1.05, -2.0);
+    spawnCan ( 0.3, 1.05, -1.6);
+    spawnBottle(-0.4, 1.16, -1.6);
+    spawnBottle( 0.6, 1.16, -1.5);
+
+    // Stack of crates to knock over
+    spawnCrate( 4, 0.3,  4, 0.55);
+    spawnCrate( 4, 0.9,  4, 0.5);
+    spawnCrate( 4, 1.4,  4, 0.45);
+    spawnCrate( 5, 0.3,  4, 0.5);
+    spawnCrate( 5, 0.85, 4, 0.45);
+    spawnCrate( 3, 0.3,  4, 0.5);
+
+    // Bowling-ish pin cluster of cans, far end
+    for (let i = 0; i < 5; i++) {
+      spawnCan(-2 + i * 0.18, 0.08, 8);
+    }
+    for (let i = 0; i < 4; i++) {
+      spawnCan(-1.8 + i * 0.18, 0.08, 8.3);
+    }
+
+    // Some loose balls scattered
+    for (let i = 0; i < 10; i++) {
+      const x = (Math.random() - 0.5) * 8;
+      const z = (Math.random() - 0.5) * 6 + 1;
+      spawnBall(x, 0.3 + Math.random() * 0.5, z, 0.07 + Math.random() * 0.08);
+    }
+
+    // ---------- Helper: build / track a controller "hand" ----------
+    // For each motion controller we keep a small visible sphere at the grip,
+    // a record of recent positions for throw velocity, and the currently held object.
+    const handState = new Map(); // key: xrInputSource (or controller.uniqueId), value: state
+
+    function createHandState(controllerUniqueId, parentNode) {
+      const handMesh = BABYLON.MeshBuilder.CreateSphere('hand', { diameter: 0.08 }, scene);
+      const hm = new BABYLON.StandardMaterial('hm', scene);
+      hm.diffuseColor = new BABYLON.Color3(0.9, 0.9, 0.95);
+      hm.alpha = 0.55;
+      handMesh.material = hm;
+      handMesh.isPickable = false;
+      handMesh.parent = parentNode;
+      handMesh.position.set(0, 0, 0);
+
+      const state = {
+        controllerUniqueId,
+        handMesh,
+        parentNode,
+        held: null,             // mesh currently held
+        heldAggregate: null,
+        prevMotionType: null,
+        // velocity tracking
+        samples: [],            // [{t, pos: Vector3}]
+        lastWorldPos: new BABYLON.Vector3(),
+        lastWorldRot: new BABYLON.Quaternion(),
+      };
+      handState.set(controllerUniqueId, state);
+      return state;
+    }
+
+    function nearestGrabbable(worldPos, maxDist) {
+      let best = null;
+      let bestD = maxDist;
+      for (const mesh of grabbables) {
+        if (mesh._heldBy) continue;
+        const d = BABYLON.Vector3.Distance(mesh.getAbsolutePosition(), worldPos);
+        if (d < bestD) {
+          bestD = d;
+          best = mesh;
+        }
+      }
+      return best;
+    }
+
+    function grab(state, mesh) {
+      if (!mesh || state.held) return;
+      mesh._heldBy = state.controllerUniqueId;
+
+      const agg = mesh.metadata.aggregate;
+      state.heldAggregate = agg;
+      state.prevMotionType = agg.body.getMotionType();
+
+      // Switch to animated so we can move it kinematically while held
+      agg.body.setMotionType(BABYLON.PhysicsMotionType.ANIMATED);
+      // Snap into hand: compute offset so it doesn't jump weirdly
+      const handWorld = state.handMesh.getAbsolutePosition();
+      const meshWorld = mesh.getAbsolutePosition();
+      const offset = meshWorld.subtract(handWorld);
+
+      // We'll keep the offset in hand-local space so it rotates with the controller
+      const handWorldMat = state.handMesh.getWorldMatrix();
+      const inv = BABYLON.Matrix.Invert(handWorldMat);
+      const localOffset = BABYLON.Vector3.TransformCoordinates(meshWorld, inv);
+
+      state.held = mesh;
+      state.heldLocalOffset = localOffset;
+      // Capture initial rotation offset (hand rotation -> mesh rotation)
+      if (!mesh.rotationQuaternion) {
+        mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerVector(mesh.rotation);
+      }
+      const handRot = state.handMesh.absoluteRotationQuaternion.clone();
+      const handRotInv = BABYLON.Quaternion.Inverse(handRot);
+      state.heldRotOffset = handRotInv.multiply(mesh.rotationQuaternion.clone());
+
+      state.samples = [];
+    }
+
+    function release(state) {
+      if (!state.held) return;
+      const mesh = state.held;
+      const agg = state.heldAggregate;
+
+      // Compute velocity from recent samples
+      const now = performance.now();
+      const samples = state.samples.filter(s => now - s.t < 200);
+      let linVel = new BABYLON.Vector3(0, 0, 0);
+      let angVel = new BABYLON.Vector3(0, 0, 0);
+      if (samples.length >= 2) {
+        const first = samples[0];
+        const last = samples[samples.length - 1];
+        const dt = (last.t - first.t) / 1000;
+        if (dt > 0.001) {
+          linVel = last.pos.subtract(first.pos).scale(1 / dt);
+          // a little boost feels good in VR
+          linVel.scaleInPlace(1.15);
+        }
+      }
+
+      agg.body.setMotionType(state.prevMotionType ?? BABYLON.PhysicsMotionType.DYNAMIC);
+      agg.body.setLinearVelocity(linVel);
+      agg.body.setAngularVelocity(angVel);
+
+      mesh._heldBy = null;
+      state.held = null;
+      state.heldAggregate = null;
+      state.heldLocalOffset = null;
+      state.heldRotOffset = null;
+      state.samples = [];
+    }
+
+    // ---------- WebXR setup ----------
+    setStatus('Preparing WebXR…');
+    const xr = await scene.createDefaultXRExperienceAsync({
+      floorMeshes: [floor],
+      disableTeleportation: false,
+      optionalFeatures: true,
+    });
+
+    // When user enters VR, hide the desktop HUD
+    xr.baseExperience.onStateChangedObservable.add((s) => {
+      if (s === BABYLON.WebXRState.IN_XR) {
+        document.getElementById('hud').style.display = 'none';
+        document.getElementById('status').style.display = 'none';
+      } else {
+        document.getElementById('hud').style.display = '';
+        document.getElementById('status').style.display = '';
+      }
+    });
+
+    xr.input.onControllerAddedObservable.add((controller) => {
+      // controller.grip is a TransformNode at the controller's grip pose, present once tracked
+      const attach = () => {
+        const parent = controller.grip || controller.pointer;
+        if (!parent) return false;
+        const state = createHandState(controller.uniqueId, parent);
+        return state;
+      };
+
+      // Wait for motion controller init for button bindings
+      controller.onMotionControllerInitObservable.add((mc) => {
+        const state = handState.get(controller.uniqueId) || attach();
+        if (!state) return;
+
+        const squeeze = mc.getComponent('xr-standard-squeeze');
+        const trigger = mc.getComponent('xr-standard-trigger');
+
+        const grabHandler = () => {
+          const wp = state.handMesh.getAbsolutePosition();
+          const m = nearestGrabbable(wp, 0.28);
+          if (m) grab(state, m);
+        };
+        const releaseHandler = () => release(state);
+
+        if (squeeze) {
+          squeeze.onButtonStateChangedObservable.add(() => {
+            if (squeeze.changes.pressed) {
+              if (squeeze.pressed) grabHandler(); else releaseHandler();
+            }
+          });
+        }
+        // Also let trigger act as grab for users who prefer it
+        if (trigger) {
+          trigger.onButtonStateChangedObservable.add(() => {
+            if (trigger.changes.pressed) {
+              if (trigger.pressed) grabHandler(); else releaseHandler();
+            }
+          });
+        }
+      });
+
+      // Make hand visible even before motion controller init
+      attach();
+    });
+
+    xr.input.onControllerRemovedObservable.add((controller) => {
+      const s = handState.get(controller.uniqueId);
+      if (s) {
+        if (s.held) release(s);
+        s.handMesh.dispose();
+        handState.delete(controller.uniqueId);
+      }
+    });
+
+    // ---------- Per-frame: drive held objects, sample velocity ----------
+    scene.onBeforeRenderObservable.add(() => {
+      const now = performance.now();
+      handState.forEach((state) => {
+        if (!state.handMesh) return;
+        const wp = state.handMesh.getAbsolutePosition().clone();
+
+        // Sample velocity buffer
+        state.samples.push({ t: now, pos: wp });
+        // Trim old samples
+        while (state.samples.length > 0 && now - state.samples[0].t > 250) {
+          state.samples.shift();
+        }
+
+        // If holding, update held mesh transform
+        if (state.held && state.heldAggregate) {
+          const handMat = state.handMesh.getWorldMatrix();
+          const targetPos = BABYLON.Vector3.TransformCoordinates(state.heldLocalOffset, handMat);
+
+          // Use physics body's transform setter to avoid penetrations
+          const handRot = state.handMesh.absoluteRotationQuaternion;
+          const targetRot = handRot.multiply(state.heldRotOffset);
+
+          state.heldAggregate.body.setTargetTransform(targetPos, targetRot);
+        }
+      });
+    });
+
+    // ---------- Render loop ----------
+    setStatus('Ready — click "Enter VR" or use WASD to look around.');
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener('resize', () => engine.resize());
+
+    // Helpful console hint
+    console.log('VR Warehouse Sandbox ready. Grabbables:', grabbables.length);
+  })().catch((err) => {
+    console.error(err);
+    document.getElementById('status').textContent = 'Error: ' + (err && err.message ? err.message : err);
+  });
+  </script>
+</body>
+</html>
