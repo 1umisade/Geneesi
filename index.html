@@ -17,12 +17,28 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
   background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
   padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
   white-space:nowrap;display:none}
+#zoomtips{position:absolute;right:18px;bottom:18px;z-index:10;
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  opacity:0;transition:opacity .5s;pointer-events:none;
+  font-family:'Courier New',monospace}
+#zoomtips.show{opacity:1;pointer-events:auto}
+.zt{width:38px;height:38px;font-size:18px;line-height:1;cursor:pointer;
+  color:#5a3a1b;background:#fffef9;border:1px solid #8a5a2b;border-radius:7px;
+  box-shadow:0 2px 0 #8a5a2b;touch-action:manipulation;user-select:none;
+  display:flex;align-items:center;justify-content:center}
+.zt:active{transform:translateY(1px);box-shadow:0 1px 0 #8a5a2b}
+.ztlabel{font-size:10px;color:#8a5a2b;letter-spacing:1px}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="overlay">
   <div class="ptr"><div class="pfil" id="load-bar"></div></div>
+</div>
+<div id="zoomtips">
+  <button class="zt" id="zoom-in" aria-label="Zoom in">↑</button>
+  <button class="zt" id="zoom-out" aria-label="Zoom out">↓</button>
+  <span class="ztlabel">zoom</span>
 </div>
 
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
@@ -191,20 +207,28 @@ async function run(fileName){
        (p.type === BABYLON.PointerEventTypes.POINTERMOVE && p.event.buttons))
       lastInteraction = performance.now();
   });
-  scene.onBeforeRenderObservable.add(() => {
-    if(performance.now() - lastInteraction > 1200)
-      cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
-  });
-  // Zoom with Up/Down arrow keys instead of the mouse wheel
-  cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');   // no wheel zoom
-  cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput'); // arrows won't rotate
+  // Zoom with Up/Down arrow keys (mouse-wheel + default arrow-rotate removed)
+  cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
+  cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
+  const zoom = dir => {   // dir: -1 = in, +1 = out
+    const lo = cam.lowerRadiusLimit ?? 1, hi = cam.upperRadiusLimit ?? 1e9;
+    cam.radius = Math.max(lo, Math.min(hi, cam.radius + dir * cam.radius * 0.05));
+  };
   window.addEventListener('keydown', e => {
     if(e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    e.preventDefault();
-    lastInteraction = performance.now();                        // pause auto-spin briefly
-    const lo = cam.lowerRadiusLimit ?? 1, hi = cam.upperRadiusLimit ?? 1e9;
-    const step = cam.radius * 0.05;
-    cam.radius = Math.max(lo, Math.min(hi, cam.radius + (e.key === 'ArrowUp' ? -step : step)));
+    e.preventDefault(); lastInteraction = performance.now();   // pause auto-spin briefly
+    zoom(e.key === 'ArrowUp' ? -1 : 1);
+  });
+  // On-screen tips double as touch zoom buttons; taps don't pause the spin,
+  // so the tips (shown only while auto-rotating) stay visible for repeat taps.
+  const tips = document.getElementById('zoomtips');
+  document.getElementById('zoom-in').addEventListener('click',  () => zoom(-1));
+  document.getElementById('zoom-out').addEventListener('click', () => zoom(1));
+
+  scene.onBeforeRenderObservable.add(() => {
+    const spinning = performance.now() - lastInteraction > 1200;
+    if(spinning) cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
+    if(tips) tips.classList.toggle('show', spinning);
   });
   // Bright, full lighting so no camera-facing side falls into shadow.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
