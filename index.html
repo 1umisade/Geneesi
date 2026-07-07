@@ -195,6 +195,17 @@ async function run(fileName){
     if(performance.now() - lastInteraction > 1200)
       cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
   });
+  // Zoom with Up/Down arrow keys instead of the mouse wheel
+  cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');   // no wheel zoom
+  cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput'); // arrows won't rotate
+  window.addEventListener('keydown', e => {
+    if(e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    lastInteraction = performance.now();                        // pause auto-spin briefly
+    const lo = cam.lowerRadiusLimit ?? 1, hi = cam.upperRadiusLimit ?? 1e9;
+    const step = cam.radius * 0.05;
+    cam.radius = Math.max(lo, Math.min(hi, cam.radius + (e.key === 'ArrowUp' ? -step : step)));
+  });
   // Bright, full lighting so no camera-facing side falls into shadow.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
   hemi.intensity = 0.9; hemi.groundColor = new BABYLON.Color3(0.55,0.55,0.55);
