@@ -140,6 +140,11 @@ async function run(fileName){
   const mols = parseMol2(new TextDecoder().decode(buf));
   if(mols.length === 0) throw new Error('No molecules found in file');
 
+  // Rotate 90° about Z so the long axis lies horizontal (PSII lands on its side)
+  for(const m of mols){
+    for(let k=0;k<m.na;k++){ const x=m.x[k], y=m.y[k]; m.x[k]=y; m.y[k]=-x; }
+  }
+
   /* Lay models out side by side; compute per-model bbox + offset */
   setLbl('Arranging models…'); await yield_();
   const box = [];
