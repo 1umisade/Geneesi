@@ -12,15 +12,6 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
   color:#8ae;font-family:'Courier New',monospace;transition:opacity .8s}
 #overlay.gone{opacity:0;pointer-events:none}
 #over-title{font-size:18px;color:#bdf;letter-spacing:3px}
-#load-form{display:flex;flex-direction:column;gap:10px;align-items:center;font-size:13px}
-#load-form label{color:#8ae;display:flex;gap:8px;align-items:center}
-#file-input{background:#001018;border:1px solid #2a5070;color:#cff;
-  font-family:'Courier New',monospace;font-size:13px;padding:6px 10px;border-radius:4px;width:260px}
-#file-input:focus{outline:none;border-color:#3af}
-#load-form button{background:#12406a;border:1px solid #3af;color:#cff;
-  font-family:'Courier New',monospace;font-size:13px;padding:6px 20px;border-radius:4px;cursor:pointer}
-#load-form button:hover{background:#1a5590}
-#form-err{color:#e77;font-size:11px;min-height:14px;max-width:320px;text-align:center}
 .prow{display:flex;align-items:center;gap:12px;font-size:12px;width:440px}
 .plbl{width:250px;color:#567;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ptr{flex:1;height:3px;background:#122;border-radius:2px}
@@ -39,15 +30,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 <body>
 <canvas id="c"></canvas>
 <div id="overlay">
-  <div id="over-title">MOL2 MOLECULE VIEWER</div>
-  <form id="load-form">
-    <label>Mol2 file
-      <input id="file-input" type="text" value="PSII.mol2" autocomplete="off" spellcheck="false">
-    </label>
-    <button type="submit">Load ▸</button>
-    <div id="form-err"></div>
-  </form>
-  <div class="prow" id="progress-row" style="display:none">
+  <div id="over-title">PHOTOSYSTEM II</div>
+  <div class="prow" id="progress-row">
     <span class="plbl" id="load-lbl">Fetching…</span>
     <div class="ptr"><div class="pfil" id="load-bar"></div></div>
   </div>
@@ -200,6 +184,19 @@ async function run(fileName){
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
+  cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
+  // Slow auto-spin that pauses ~1.2 s after any interaction (time-based → self-healing)
+  let lastInteraction = 0;
+  scene.onPointerObservable.add(p => {
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN ||
+       p.type === BABYLON.PointerEventTypes.POINTERWHEEL ||
+       (p.type === BABYLON.PointerEventTypes.POINTERMOVE && p.event.buttons))
+      lastInteraction = performance.now();
+  });
+  scene.onBeforeRenderObservable.add(() => {
+    if(performance.now() - lastInteraction > 1200)
+      cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
+  });
   // Bright, full lighting so no camera-facing side falls into shadow.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
   hemi.intensity = 0.9; hemi.groundColor = new BABYLON.Color3(0.55,0.55,0.55);
@@ -255,11 +252,11 @@ async function run(fileName){
   // Space-filling surface: single translucent green material (not per-element),
   // drawn over the ball-and-stick so both are visible at once.
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
-  fillMat.diffuseColor  = new BABYLON.Color3(0.15, 0.80, 0.30);
-  fillMat.emissiveColor = new BABYLON.Color3(0.06, 0.30, 0.12);  // reads green even when unlit
+  fillMat.diffuseColor  = new BABYLON.Color3(0.10, 0.52, 0.20);
+  fillMat.emissiveColor = new BABYLON.Color3(0.02, 0.13, 0.06);  // reads green even when unlit
   fillMat.specularColor = new BABYLON.Color3(0.25, 0.25, 0.25);
   fillMat.specularPower = 64;
-  fillMat.alpha = 0.5;
+  fillMat.alpha = 0.3;   // 70% transparent
   fillMat.freeze();
   for(let e=0;e<nEl;e++){
     const [r,g,b] = info(e).c;
@@ -325,22 +322,10 @@ async function run(fileName){
   window.addEventListener('resize', () => engine.resize());
 }
 
-/* ── Filename prompt → load ────────────────────────────────────────────── */
-const form = document.getElementById('load-form');
-form.addEventListener('submit', e => {
-  e.preventDefault();
-  const name = document.getElementById('file-input').value.trim();
-  if(!name){ document.getElementById('form-err').textContent = 'Enter a filename'; return; }
-  document.getElementById('form-err').textContent = '';
-  form.style.display = 'none';
-  document.getElementById('progress-row').style.display = 'flex';
-  run(name).catch(err => {
-    console.error(err);
-    if(engine){ engine.dispose(); engine = null; }
-    document.getElementById('progress-row').style.display = 'none';
-    form.style.display = 'flex';
-    document.getElementById('form-err').textContent = err.message;
-  });
+/* ── Auto-load PSII on page load (no prompt) ───────────────────────────── */
+run('PSII.mol2').catch(err => {
+  console.error(err);
+  setLbl('Error: ' + err.message);
 });
 </script>
 </body>
