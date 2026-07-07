@@ -52,7 +52,6 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
     <div class="ptr"><div class="pfil" id="load-bar"></div></div>
   </div>
 </div>
-<div id="hud"><b>Mol2 viewer</b></div>
 <div id="controls">Drag → rotate &nbsp;|&nbsp; Scroll → zoom &nbsp;|&nbsp; Right-drag → pan</div>
 
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
@@ -261,7 +260,6 @@ async function run(fileName){
   fillMat.specularColor = new BABYLON.Color3(0.25, 0.25, 0.25);
   fillMat.specularPower = 64;
   fillMat.alpha = 0.5;
-  fillMat.needDepthPrePass = true;   // occlude interior spheres → clean single-layer 50% shell
   fillMat.freeze();
   for(let e=0;e<nEl;e++){
     const [r,g,b] = info(e).c;
@@ -303,11 +301,7 @@ async function run(fileName){
   cam.wheelPrecision   = 60/Math.max(dimX,1);
   cam.panningSensibility = 6000/Math.max(dimX,1);
 
-  /* HUD + floating per-model labels */
-  const nAtoms = mols.reduce((s,m)=>s+m.na,0), nBonds = mols.reduce((s,m)=>s+m.nb,0);
-  document.getElementById('hud').innerHTML =
-    `<b>${mols.length===1?mols[0].name:mols.length+' complexes'}</b> · ${nAtoms.toLocaleString()} atoms · `
-    + `${nBonds.toLocaleString()} bonds<br><span style="color:#456">H included · bonds split 50/50 by element</span>`;
+  /* Floating per-model labels (multi-molecule files only) */
   const labels = mols.length===1 ? [] : mols.map((m,mi) => {
     const el = document.createElement('div'); el.className = 'mlbl';
     el.textContent = m.name; document.body.appendChild(el);
