@@ -199,14 +199,21 @@ async function run(fileName){
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
-  // Slow auto-spin that pauses ~1.2 s after any interaction (time-based → self-healing)
-  let lastInteraction = 0;
+  // Auto-rotate whenever the left button is NOT held; show the zoom tips only
+  // while the user is holding left-click to rotate.
+  const tips = document.getElementById('zoomtips');
+  let leftDown = false;
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN ||
-       p.type === BABYLON.PointerEventTypes.POINTERWHEEL ||
-       (p.type === BABYLON.PointerEventTypes.POINTERMOVE && p.event.buttons))
-      lastInteraction = performance.now();
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){
+      leftDown = true;  tips && tips.classList.add('show');
+    } else if(p.type === BABYLON.PointerEventTypes.POINTERUP){
+      leftDown = false; tips && tips.classList.remove('show');
+    }
   });
+  scene.onBeforeRenderObservable.add(() => {
+    if(!leftDown) cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
+  });
+
   // Zoom with Up/Down arrow keys (mouse-wheel + default arrow-rotate removed)
   cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
   cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
@@ -216,20 +223,10 @@ async function run(fileName){
   };
   window.addEventListener('keydown', e => {
     if(e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    e.preventDefault(); lastInteraction = performance.now();   // pause auto-spin briefly
-    zoom(e.key === 'ArrowUp' ? -1 : 1);
+    e.preventDefault(); zoom(e.key === 'ArrowUp' ? -1 : 1);
   });
-  // On-screen tips double as touch zoom buttons; taps don't pause the spin,
-  // so the tips (shown only while auto-rotating) stay visible for repeat taps.
-  const tips = document.getElementById('zoomtips');
   document.getElementById('zoom-in').addEventListener('click',  () => zoom(-1));
   document.getElementById('zoom-out').addEventListener('click', () => zoom(1));
-
-  scene.onBeforeRenderObservable.add(() => {
-    const spinning = performance.now() - lastInteraction > 1200;
-    if(spinning) cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
-    if(tips) tips.classList.toggle('show', spinning);
-  });
   // Bright, full lighting so no camera-facing side falls into shadow.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
   hemi.intensity = 0.9; hemi.groundColor = new BABYLON.Color3(0.55,0.55,0.55);
