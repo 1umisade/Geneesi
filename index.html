@@ -7,36 +7,22 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;overflow:hidden;background:#000}
 #c{width:100%;height:100%;display:block;touch-action:none}
-#overlay{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:18px;background:rgba(1,2,16,0.94);
-  color:#8ae;font-family:'Courier New',monospace;transition:opacity .8s}
+#overlay{position:absolute;inset:0;z-index:20;display:flex;
+  align-items:center;justify-content:center;background:#fffef9;transition:opacity .8s}
 #overlay.gone{opacity:0;pointer-events:none}
-#over-title{font-size:18px;color:#bdf;letter-spacing:3px}
-.prow{display:flex;align-items:center;gap:12px;font-size:12px;width:440px}
-.plbl{width:250px;color:#567;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ptr{flex:1;height:3px;background:#122;border-radius:2px}
-.pfil{height:100%;width:0%;background:#3af;border-radius:2px;transition:width .15s}
-#hud{position:absolute;top:12px;left:14px;z-index:10;color:#42513f;
-  font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
-#hud b{color:#20301c;font-size:12px}
+.ptr{width:280px;height:5px;background:#e7dcc7;border-radius:3px;overflow:hidden}
+.pfil{height:100%;width:0%;background:#8a5a2b;border-radius:3px;transition:width .15s}
 .mlbl{position:absolute;z-index:9;pointer-events:none;color:#dff;
   background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
   padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
   white-space:nowrap;display:none}
-#controls{position:absolute;bottom:12px;left:14px;z-index:10;color:#345;
-  font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="overlay">
-  <div id="over-title">PHOTOSYSTEM II</div>
-  <div class="prow" id="progress-row">
-    <span class="plbl" id="load-lbl">Fetching…</span>
-    <div class="ptr"><div class="pfil" id="load-bar"></div></div>
-  </div>
+  <div class="ptr"><div class="pfil" id="load-bar"></div></div>
 </div>
-<div id="controls">Drag → rotate &nbsp;|&nbsp; Scroll → zoom &nbsp;|&nbsp; Right-drag → pan</div>
 
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
 <script>
@@ -72,7 +58,7 @@ function codeOf(sybyl){
   return c;
 }
 
-const setLbl = t => document.getElementById('load-lbl').textContent = t;
+const setLbl = t => { const e = document.getElementById('load-lbl'); if(e) e.textContent = t; };
 const setBar = v => document.getElementById('load-bar').style.width = v + '%';
 const yield_ = () => new Promise(r => setTimeout(r, 0));
 
@@ -184,7 +170,7 @@ async function run(fileName){
   const canvas = document.getElementById('c');
   engine = new BABYLON.Engine(canvas, true, {stencil:false});
   const scene = new BABYLON.Scene(engine);
-  scene.clearColor = new BABYLON.Color4(0.93,0.90,0.82,1);   // light beige
+  scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
