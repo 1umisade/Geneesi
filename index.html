@@ -38,7 +38,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
   <button class="zt" id="zoom-out" aria-label="Zoom out">−</button>
-  <span class="ztlabel">zoom</span>
+  <span class="ztlabel">suurenna</span>
 </div>
 
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
@@ -199,16 +199,15 @@ async function run(fileName){
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
-  // Auto-rotate whenever the left button is NOT held; show the zoom tips only
-  // while the user is holding left-click to rotate.
+  // Auto-rotate whenever the left button is NOT held; show the zoom tips while
+  // rotating and keep them for 2 s after the drag is released (or after a tap).
   const tips = document.getElementById('zoomtips');
-  let leftDown = false;
+  let leftDown = false, hideTimer = null;
+  const showTips = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = null; tips.classList.add('show'); };
+  const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){
-      leftDown = true;  tips && tips.classList.add('show');
-    } else if(p.type === BABYLON.PointerEventTypes.POINTERUP){
-      leftDown = false; tips && tips.classList.remove('show');
-    }
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){ leftDown = true; showTips(); }
+    else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ leftDown = false; hideTipsSoon(); }
   });
   scene.onBeforeRenderObservable.add(() => {
     if(!leftDown) cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
@@ -221,8 +220,9 @@ async function run(fileName){
     const lo = cam.lowerRadiusLimit ?? 1, hi = cam.upperRadiusLimit ?? 1e9;
     cam.radius = Math.max(lo, Math.min(hi, cam.radius + dir * cam.radius * 0.05));
   };
-  document.getElementById('zoom-in').addEventListener('click',  () => zoom(-1));
-  document.getElementById('zoom-out').addEventListener('click', () => zoom(1));
+  const btnZoom = dir => { zoom(dir); showTips(); hideTipsSoon(); };   // tap keeps tips visible 2 s more
+  document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
+  document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
   // Bright, full lighting so no camera-facing side falls into shadow.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
   hemi.intensity = 0.9; hemi.groundColor = new BABYLON.Color3(0.55,0.55,0.55);
@@ -323,6 +323,19 @@ async function run(fileName){
   cam.upperRadiusLimit = cam.radius*4;
   cam.wheelPrecision   = 60/Math.max(dimX,1);
   cam.panningSensibility = 6000/Math.max(dimX,1);
+
+  // Remember the framed "home" view; double-click resets size + position to it
+  const home = { alpha: cam.alpha, beta: cam.beta, radius: cam.radius, target: cam.target.clone() };
+  const resetView = () => {
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
+    cam.inertialPanningX = cam.inertialPanningY = 0;
+    cam.setTarget(home.target.clone());   // first — setTarget recomputes alpha/beta/radius…
+    cam.alpha = home.alpha; cam.beta = home.beta; cam.radius = home.radius;  // …then override
+  };
+  canvas.addEventListener('dblclick', resetView);                                   // desktop
+  scene.onPointerObservable.add(p => {                                              // touch double-tap
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP) resetView();
+  });
 
   /* Floating per-model labels (multi-molecule files only) */
   const labels = mols.length===1 ? [] : mols.map((m,mi) => {
