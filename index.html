@@ -1,526 +1,349 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-  <title>VR Warehouse Sandbox — Babylon.js WebXR</title>
-  <style>
-    html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; }
-    #renderCanvas { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
-    #hud {
-      position: absolute; left: 12px; top: 12px; max-width: 360px;
-      background: rgba(0,0,0,0.55); padding: 12px 14px; border-radius: 10px;
-      font-size: 13px; line-height: 1.45; pointer-events: none;
-    }
-    #hud b { color: #ffd166; }
-    #status { position:absolute; right:12px; top:12px; background:rgba(0,0,0,0.55); padding:8px 12px; border-radius:8px; font-size:12px; }
-  </style>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mol2 molecule viewer</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#000}
+#c{width:100%;height:100%;display:block;touch-action:none}
+#overlay{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:18px;background:rgba(1,2,16,0.94);
+  color:#8ae;font-family:'Courier New',monospace;transition:opacity .8s}
+#overlay.gone{opacity:0;pointer-events:none}
+#over-title{font-size:18px;color:#bdf;letter-spacing:3px}
+#load-form{display:flex;flex-direction:column;gap:10px;align-items:center;font-size:13px}
+#load-form label{color:#8ae;display:flex;gap:8px;align-items:center}
+#file-input{background:#001018;border:1px solid #2a5070;color:#cff;
+  font-family:'Courier New',monospace;font-size:13px;padding:6px 10px;border-radius:4px;width:260px}
+#file-input:focus{outline:none;border-color:#3af}
+#load-form button{background:#12406a;border:1px solid #3af;color:#cff;
+  font-family:'Courier New',monospace;font-size:13px;padding:6px 20px;border-radius:4px;cursor:pointer}
+#load-form button:hover{background:#1a5590}
+#form-err{color:#e77;font-size:11px;min-height:14px;max-width:320px;text-align:center}
+.prow{display:flex;align-items:center;gap:12px;font-size:12px;width:440px}
+.plbl{width:250px;color:#567;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptr{flex:1;height:3px;background:#122;border-radius:2px}
+.pfil{height:100%;width:0%;background:#3af;border-radius:2px;transition:width .15s}
+#hud{position:absolute;top:12px;left:14px;z-index:10;color:#7bd;
+  font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
+#hud b{color:#adf;font-size:12px}
+.mlbl{position:absolute;z-index:9;pointer-events:none;color:#dff;
+  background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
+  padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
+  white-space:nowrap;display:none}
+#controls{position:absolute;bottom:12px;left:14px;z-index:10;color:#345;
+  font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
+</style>
 </head>
 <body>
-  <canvas id="renderCanvas"></canvas>
-  <div id="hud">
-    <div><b>VR Warehouse Sandbox</b></div>
-    <div>Put on your Quest 3 and tap the <b>Enter VR</b> button (bottom-right of the screen).</div>
-    <div style="margin-top:6px;">In VR — squeeze the <b>grip</b> button near an object to grab it, release to throw. Use the <b>thumbstick</b> to teleport.</div>
-    <div style="margin-top:6px; opacity:0.8;">Desktop preview: WASD to move, mouse to look.</div>
+<canvas id="c"></canvas>
+<div id="overlay">
+  <div id="over-title">MOL2 MOLECULE VIEWER</div>
+  <form id="load-form">
+    <label>Mol2 file
+      <input id="file-input" type="text" value="PSII.mol2" autocomplete="off" spellcheck="false">
+    </label>
+    <button type="submit">Load ▸</button>
+    <div id="form-err"></div>
+  </form>
+  <div class="prow" id="progress-row" style="display:none">
+    <span class="plbl" id="load-lbl">Fetching…</span>
+    <div class="ptr"><div class="pfil" id="load-bar"></div></div>
   </div>
-  <div id="status">Loading…</div>
+</div>
+<div id="hud"><b>Mol2 viewer</b></div>
+<div id="controls">Drag → rotate &nbsp;|&nbsp; Scroll → zoom &nbsp;|&nbsp; Right-drag → pan</div>
 
-  <!-- Babylon.js core + materials + Havok physics -->
-  <script src="https://cdn.babylonjs.com/babylon.js"></script>
-  <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
-  <script src="https://cdn.babylonjs.com/havok/HavokPhysics_umd.js"></script>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script>
+'use strict';
 
-  <script>
-  (async function () {
-    const statusEl = document.getElementById('status');
-    const setStatus = (t) => { statusEl.textContent = t; };
+const BOND_R    = 0.10;  // stick radius (Å) — thinner than the smallest ball
+const GAP_FRAC  = 0.15;  // side-by-side gap as a fraction of mean model width
+const FILL_SCALE = 1.0;  // space-filling sphere size as a fraction of vdW radius
 
-    const canvas = document.getElementById('renderCanvas');
-    const engine = new BABYLON.Engine(canvas, true, { stencil: true, preserveDrawingBuffer: true });
-    const scene  = new BABYLON.Scene(engine);
-    scene.clearColor = new BABYLON.Color3(0.05, 0.06, 0.08);
+/* ── Standard CPK-ish colours (c), ball radii (r) + van der Waals radii (vr), Å.
+      C dark grey, H light grey.  vr drives the space-filling surface mode.  ── */
+const ELEM = {
+  H :{c:[0.88,0.88,0.88], r:0.23, vr:1.10},   C :{c:[0.24,0.24,0.24], r:0.32, vr:1.70},
+  N :{c:[0.19,0.31,0.97], r:0.31, vr:1.55},   O :{c:[0.94,0.15,0.15], r:0.30, vr:1.52},
+  S :{c:[1.00,0.78,0.16], r:0.38, vr:1.80},   P :{c:[1.00,0.50,0.00], r:0.38, vr:1.80},
+  MG:{c:[0.33,0.78,0.33], r:0.42, vr:1.73},   FE:{c:[0.88,0.40,0.20], r:0.42, vr:1.56},
+  MN:{c:[0.61,0.48,0.78], r:0.42, vr:1.61},   CA:{c:[0.24,0.80,0.24], r:0.46, vr:1.97},
+  ZN:{c:[0.49,0.51,0.69], r:0.40, vr:1.39},   CU:{c:[0.78,0.50,0.20], r:0.40, vr:1.40},
+  CL:{c:[0.24,0.94,0.24], r:0.36, vr:1.75},   NA:{c:[0.67,0.36,0.95], r:0.46, vr:2.27},
+  K :{c:[0.56,0.25,0.83], r:0.52, vr:2.75},   CO:{c:[0.94,0.56,0.63], r:0.42, vr:1.52},
+  FB:{c:[0.55,0.55,0.55], r:0.32, vr:1.60},
+};
+const info = code => ELEM[EL_LIST[code]] || ELEM.FB;
 
-    // ---------- Camera (desktop preview only; WebXR replaces it in VR) ----------
-    const camera = new BABYLON.UniversalCamera('cam', new BABYLON.Vector3(0, 1.7, -6), scene);
-    camera.setTarget(new BABYLON.Vector3(0, 1.5, 0));
-    camera.attachControl(canvas, true);
-    camera.speed = 0.25;
-    camera.minZ = 0.05;
-    camera.keysUp.push(87);    // W
-    camera.keysDown.push(83);  // S
-    camera.keysLeft.push(65);  // A
-    camera.keysRight.push(68); // D
+/* ── Element registry (symbol ↔ small integer code) ───────────────────── */
+const EL_CODE = new Map(), EL_LIST = [];
+function codeOf(sybyl){
+  const dot = sybyl.indexOf('.');
+  let sym = (dot === -1 ? sybyl : sybyl.slice(0, dot)).toUpperCase();
+  if(!ELEM[sym]) sym = 'FB';
+  let c = EL_CODE.get(sym);
+  if(c === undefined){ c = EL_LIST.length; EL_CODE.set(sym, c); EL_LIST.push(sym); }
+  return c;
+}
 
-    // ---------- Lighting ----------
-    const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
-    hemi.intensity = 0.55;
-    hemi.groundColor = new BABYLON.Color3(0.15, 0.15, 0.18);
+const setLbl = t => document.getElementById('load-lbl').textContent = t;
+const setBar = v => document.getElementById('load-bar').style.width = v + '%';
+const yield_ = () => new Promise(r => setTimeout(r, 0));
 
-    const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.5, -1, 0.3), scene);
-    sun.intensity = 0.7;
-    sun.position = new BABYLON.Vector3(10, 20, -10);
-
-    // Industrial ceiling spots
-    for (let i = -1; i <= 1; i++) {
-      const sp = new BABYLON.SpotLight('sp' + i, new BABYLON.Vector3(i * 6, 7.8, 0), new BABYLON.Vector3(0, -1, 0), Math.PI / 2.5, 8, scene);
-      sp.intensity = 0.4;
-      sp.diffuse = new BABYLON.Color3(1, 0.95, 0.82);
+/* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
+function parseMol2(text){
+  const lines = text.split('\n');
+  const mols = [];
+  let cur = null, section = '';
+  for(let i = 0; i < lines.length; i++){
+    const ln = lines[i];
+    if(ln.charCodeAt(0) === 64){                 // '@' → section marker
+      const t = ln.trim();
+      if(t === '@<TRIPOS>MOLECULE'){ cur = {name:null}; mols.push(cur); section = 'HDR'; }
+      else if(t === '@<TRIPOS>ATOM')  section = 'ATOM';
+      else if(t === '@<TRIPOS>BOND')  section = 'BOND';
+      else section = 'OTHER';
+      continue;
     }
-
-    // ---------- Physics (Havok) ----------
-    setStatus('Initializing physics…');
-    const havokInstance = await HavokPhysics();
-    const havokPlugin = new BABYLON.HavokPlugin(true, havokInstance);
-    scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), havokPlugin);
-
-    // ---------- Warehouse environment ----------
-    const ROOM = { w: 24, d: 24, h: 8 };
-
-    const floor = BABYLON.MeshBuilder.CreateGround('floor', { width: ROOM.w, height: ROOM.d }, scene);
-    const floorMat = new BABYLON.GridMaterial('floorMat', scene);
-    floorMat.majorUnitFrequency = 4;
-    floorMat.minorUnitVisibility = 0.4;
-    floorMat.gridRatio = 1;
-    floorMat.backFaceCulling = false;
-    floorMat.mainColor = new BABYLON.Color3(0.32, 0.33, 0.35);
-    floorMat.lineColor = new BABYLON.Color3(0.18, 0.18, 0.2);
-    floorMat.opacity = 0.999;
-    floor.material = floorMat;
-    new BABYLON.PhysicsAggregate(floor, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.7, restitution: 0.2 }, scene);
-
-    const wallMat = new BABYLON.StandardMaterial('wallMat', scene);
-    wallMat.diffuseColor = new BABYLON.Color3(0.42, 0.43, 0.46);
-    wallMat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
-
-    const ceilMat = new BABYLON.StandardMaterial('ceilMat', scene);
-    ceilMat.diffuseColor = new BABYLON.Color3(0.22, 0.22, 0.24);
-
-    function makeWall(name, w, h, d, x, y, z) {
-      const m = BABYLON.MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, scene);
-      m.position.set(x, y, z);
-      m.material = wallMat;
-      new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.6, restitution: 0.2 }, scene);
-      return m;
-    }
-
-    makeWall('wallN', ROOM.w, ROOM.h, 0.4,  0, ROOM.h / 2,  ROOM.d / 2);
-    makeWall('wallS', ROOM.w, ROOM.h, 0.4,  0, ROOM.h / 2, -ROOM.d / 2);
-    makeWall('wallE', 0.4, ROOM.h, ROOM.d,  ROOM.w / 2, ROOM.h / 2, 0);
-    makeWall('wallW', 0.4, ROOM.h, ROOM.d, -ROOM.w / 2, ROOM.h / 2, 0);
-
-    const ceiling = BABYLON.MeshBuilder.CreateBox('ceiling', { width: ROOM.w, height: 0.3, depth: ROOM.d }, scene);
-    ceiling.position.set(0, ROOM.h, 0);
-    ceiling.material = ceilMat;
-
-    // ---------- Static warehouse shelves ----------
-    const shelfMat = new BABYLON.StandardMaterial('shelfMat', scene);
-    shelfMat.diffuseColor = new BABYLON.Color3(0.55, 0.4, 0.25);
-
-    function makeShelfUnit(x, z, rotY) {
-      const root = new BABYLON.TransformNode('shelfRoot', scene);
-      root.position.set(x, 0, z);
-      root.rotation.y = rotY;
-
-      const W = 3.2, D = 0.9, postH = 4.5;
-      const postPositions = [
-        [ W/2 - 0.08,  D/2 - 0.08],
-        [-W/2 + 0.08,  D/2 - 0.08],
-        [ W/2 - 0.08, -D/2 + 0.08],
-        [-W/2 + 0.08, -D/2 + 0.08],
-      ];
-      for (const [px, pz] of postPositions) {
-        const post = BABYLON.MeshBuilder.CreateBox('post', { width: 0.12, height: postH, depth: 0.12 }, scene);
-        post.position.set(px, postH/2, pz);
-        post.parent = root;
-        post.material = shelfMat;
+    if(section === 'HDR'){
+      if(cur.name === null){ cur.name = ln.trim(); }
+      else if(cur.na === undefined){
+        const p = ln.trim().split(/\s+/);
+        cur.na = +p[0]; cur.nb = +p[1] || 0;
+        cur.x  = new Float32Array(cur.na); cur.y = new Float32Array(cur.na);
+        cur.z  = new Float32Array(cur.na); cur.el = new Uint16Array(cur.na); cur.ai = 0;
+        cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
       }
-      for (let lvl = 0; lvl < 3; lvl++) {
-        const y = 0.05 + lvl * 1.5;
-        const shelf = BABYLON.MeshBuilder.CreateBox('shelf', { width: W, height: 0.08, depth: D }, scene);
-        shelf.position.set(0, y, 0);
-        shelf.parent = root;
-        shelf.material = shelfMat;
-      }
-
-      root.computeWorldMatrix(true);
-      root.getChildMeshes().forEach((m) => {
-        new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.6, restitution: 0.1 }, scene);
-      });
-      return root;
+      continue;
     }
-
-    makeShelfUnit(-9,  -8, 0);
-    makeShelfUnit(-9,  -2, 0);
-    makeShelfUnit(-9,   4, 0);
-    makeShelfUnit( 9,  -8, Math.PI);
-    makeShelfUnit( 9,   4, Math.PI);
-
-    setStatus('Spawning props…');
-    // ---------- Grabbable physics objects ----------
-    const grabbables = [];
-
-    function randColor() {
-      return new BABYLON.Color3(
-        0.4 + Math.random() * 0.6,
-        0.4 + Math.random() * 0.6,
-        0.4 + Math.random() * 0.6
-      );
+    if(section === 'ATOM'){
+      const p = ln.trim().split(/\s+/);
+      if(p.length < 6 || cur.ai >= cur.na) continue;
+      const k = cur.ai++;
+      cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
+    } else if(section === 'BOND'){
+      const p = ln.trim().split(/\s+/);
+      if(p.length < 4 || cur.bi >= cur.nb) continue;
+      const k = cur.bi++;
+      cur.b1[k] = (+p[1]) - 1; cur.b2[k] = (+p[2]) - 1;
     }
+  }
+  return mols.filter(m => m.na > 0);
+}
 
-    function registerGrabbable(mesh, aggregate) {
-      mesh.metadata = mesh.metadata || {};
-      mesh.metadata.grabbable = true;
-      mesh.metadata.aggregate = aggregate;
-      grabbables.push(mesh);
+let engine = null;
+
+/* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
+async function run(fileName){
+  const url = /^(https?:|\.?\/)/.test(fileName) ? fileName : './' + fileName;
+
+  /* Fetch (streamed for a progress bar) */
+  setLbl(`Fetching ${fileName}…`);
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`HTTP ${res.status} — is "${fileName}" next to index.html?`);
+  const total = +res.headers.get('Content-Length') || 0;
+  const reader = res.body.getReader(); const chunks = []; let got = 0;
+  for(;;){
+    const {done, value} = await reader.read();
+    if(done) break; chunks.push(value); got += value.length;
+    if(total) setBar((got / total) * 100);
+  }
+  const buf = new Uint8Array(got); let off = 0;
+  for(const ch of chunks){ buf.set(ch, off); off += ch.length; }
+  setLbl('Parsing atoms + bonds…'); setBar(100); await yield_();
+  const mols = parseMol2(new TextDecoder().decode(buf));
+  if(mols.length === 0) throw new Error('No molecules found in file');
+
+  /* Lay models out side by side; compute per-model bbox + offset */
+  setLbl('Arranging models…'); await yield_();
+  const box = [];
+  for(const m of mols){
+    let miX=Infinity,miY=Infinity,miZ=Infinity,maX=-Infinity,maY=-Infinity,maZ=-Infinity;
+    for(let k=0;k<m.na;k++){
+      const x=m.x[k],y=m.y[k],z=m.z[k];
+      if(x<miX)miX=x; if(y<miY)miY=y; if(z<miZ)miZ=z;
+      if(x>maX)maX=x; if(y>maY)maY=y; if(z>maZ)maZ=z;
     }
+    box.push({miX,miY,miZ,maX,maY,maZ,w:maX-miX});
+  }
+  const meanW = box.reduce((s,b)=>s+b.w,0)/box.length;
+  const gap   = meanW*GAP_FRAC;
+  const rowW  = box.reduce((s,b)=>s+b.w,0)+gap*(mols.length-1);
+  let cursor  = -rowW/2;
+  for(let mi=0;mi<mols.length;mi++){
+    const b=box[mi];
+    const cx=(b.miX+b.maX)/2, cy=(b.miY+b.maY)/2, cz=(b.miZ+b.maZ)/2;
+    mols[mi].ox = (cursor + b.w/2) - cx; mols[mi].oy = -cy; mols[mi].oz = -cz;
+    cursor += b.w + gap;
+  }
 
-    function spawnBall(x, y, z, r) {
-      const m = BABYLON.MeshBuilder.CreateSphere('ball', { diameter: r * 2, segments: 18 }, scene);
-      m.position.set(x, y, z);
-      const mat = new BABYLON.StandardMaterial('ballMat', scene);
-      mat.diffuseColor = randColor();
-      m.material = mat;
-      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.SPHERE,
-        { mass: 0.6, friction: 0.5, restitution: 0.65 }, scene);
-      registerGrabbable(m, agg);
-      return m;
+  /* Count atoms + bond-halves per element (for typed-array sizing) */
+  const nEl = EL_LIST.length;
+  const atomCount = new Uint32Array(nEl), halfCount = new Uint32Array(nEl);
+  for(const m of mols){
+    for(let k=0;k<m.na;k++) atomCount[m.el[k]]++;
+    for(let k=0;k<m.nb;k++){
+      const a1=m.b1[k], a2=m.b2[k];
+      if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
+      halfCount[m.el[a1]]++; halfCount[m.el[a2]]++;
     }
+  }
 
-    function spawnCrate(x, y, z, s) {
-      const m = BABYLON.MeshBuilder.CreateBox('crate', { size: s }, scene);
-      m.position.set(x, y, z);
-      const mat = new BABYLON.StandardMaterial('crateMat', scene);
-      mat.diffuseColor = new BABYLON.Color3(0.6, 0.42, 0.22);
-      m.material = mat;
-      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.BOX,
-        { mass: 1.2, friction: 0.6, restitution: 0.25 }, scene);
-      registerGrabbable(m, agg);
-      return m;
+  /* Engine/scene */
+  const canvas = document.getElementById('c');
+  engine = new BABYLON.Engine(canvas, true, {stencil:false});
+  const scene = new BABYLON.Scene(engine);
+  scene.clearColor = new BABYLON.Color4(0.02,0.02,0.05,1);
+  const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
+    BABYLON.Vector3.Zero(), scene);
+  cam.attachControl(canvas, true);
+  cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
+  const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0.3,1,0.4), scene);
+  hemi.intensity = 0.85; hemi.groundColor = new BABYLON.Color3(0.15,0.15,0.2);
+  const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(-0.5,-1,-0.4), scene);
+  dir.intensity = 0.9;
+
+  /* Allocate instance buffers + build geometry */
+  setLbl(`Building ${mols.length} model(s)…`); await yield_();
+  const sphBuf = [], cylBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
+  for(let e=0;e<nEl;e++){
+    sphBuf[e] = new Float32Array(atomCount[e]*16);
+    cylBuf[e] = new Float32Array(halfCount[e]*16);
+  }
+  const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
+        _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
+  const bondD = BOND_R*2;
+
+  function cylTo(sx,sy,sz, ex,ey,ez, dstBuf, dstOff){
+    let dx=ex-sx, dy=ey-sy, dz=ez-sz;
+    const len=Math.hypot(dx,dy,dz)||1e-6, inv=1/len; dx*=inv; dy*=inv; dz*=inv;
+    if(dy>0.999999) _q.set(0,0,0,1);
+    else if(dy<-0.999999) _q.set(1,0,0,0);
+    else { _ax.set(dz,0,-dx); _ax.normalize(); BABYLON.Quaternion.RotationAxisToRef(_ax, Math.acos(dy), _q); }
+    _s.set(bondD,len,bondD); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
+    BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
+  }
+
+  for(const m of mols){
+    const ox=m.ox, oy=m.oy, oz=m.oz;
+    for(let k=0;k<m.na;k++){
+      const e=m.el[k];
+      BABYLON.Matrix.TranslationToRef(m.x[k]+ox, m.y[k]+oy, m.z[k]+oz, _m);
+      _m.copyToArray(sphBuf[e], (sphIdx[e]++)*16);
     }
-
-    function spawnBottle(x, y, z) {
-      const m = BABYLON.MeshBuilder.CreateCylinder('bottle', { height: 0.32, diameterTop: 0.06, diameterBottom: 0.1, tessellation: 18 }, scene);
-      m.position.set(x, y, z);
-      const mat = new BABYLON.StandardMaterial('bottleMat', scene);
-      mat.diffuseColor = new BABYLON.Color3(0.2, 0.55, 0.35);
-      mat.alpha = 0.85;
-      m.material = mat;
-      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.CYLINDER,
-        { mass: 0.35, friction: 0.5, restitution: 0.3 }, scene);
-      registerGrabbable(m, agg);
-      return m;
+    for(let k=0;k<m.nb;k++){
+      const a1=m.b1[k], a2=m.b2[k];
+      if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
+      const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
+      const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
+      const mx=(x1+x2)*0.5, my=(y1+y2)*0.5, mz=(z1+z2)*0.5;
+      const e1=m.el[a1], e2=m.el[a2];
+      cylTo(x1,y1,z1, mx,my,mz, cylBuf[e1], (cylIdx[e1]++)*16);
+      cylTo(mx,my,mz, x2,y2,z2, cylBuf[e2], (cylIdx[e2]++)*16);
     }
+  }
+  await yield_();
 
-    function spawnCan(x, y, z) {
-      const m = BABYLON.MeshBuilder.CreateCylinder('can', { height: 0.14, diameter: 0.08, tessellation: 18 }, scene);
-      m.position.set(x, y, z);
-      const mat = new BABYLON.StandardMaterial('canMat', scene);
-      mat.diffuseColor = new BABYLON.Color3(0.85, 0.2, 0.2);
-      mat.specularColor = new BABYLON.Color3(0.4, 0.4, 0.4);
-      m.material = mat;
-      const agg = new BABYLON.PhysicsAggregate(m, BABYLON.PhysicsShapeType.CYLINDER,
-        { mass: 0.2, friction: 0.45, restitution: 0.45 }, scene);
-      registerGrabbable(m, agg);
-      return m;
+  /* One sphere + one cylinder mesh per element, plus a full-vdW sphere set
+     (reusing the same instance positions) for the space-filling surface mode. */
+  setLbl('Uploading to GPU…'); await yield_();
+  // Space-filling surface: single translucent green material (not per-element),
+  // drawn over the ball-and-stick so both are visible at once.
+  const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
+  fillMat.diffuseColor  = new BABYLON.Color3(0.15, 0.80, 0.30);
+  fillMat.specularColor = new BABYLON.Color3(0.25, 0.25, 0.25);
+  fillMat.specularPower = 64;
+  fillMat.alpha = 0.5;
+  fillMat.needDepthPrePass = true;   // occlude interior spheres → clean single-layer 50% shell
+  fillMat.freeze();
+  for(let e=0;e<nEl;e++){
+    const [r,g,b] = info(e).c;
+    const mat = new BABYLON.StandardMaterial('m'+e, scene);
+    mat.diffuseColor  = new BABYLON.Color3(r,g,b);
+    mat.specularColor = new BABYLON.Color3(0.18,0.18,0.18);
+    mat.specularPower = 64; mat.freeze();
+    if(atomCount[e] > 0){
+      const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:6}, scene);
+      sph.material = mat; sph.isPickable = false;
+      sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
+      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:8}, scene);
+      fill.material = fillMat; fill.isPickable = false;
+      fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); fill.freezeWorldMatrix();
     }
-
-    function makeTable(x, z) {
-      const top = BABYLON.MeshBuilder.CreateBox('tabletop', { width: 2.4, height: 0.08, depth: 1.2 }, scene);
-      top.position.set(x, 0.9, z);
-      const tmat = new BABYLON.StandardMaterial('tmat', scene);
-      tmat.diffuseColor = new BABYLON.Color3(0.5, 0.35, 0.2);
-      top.material = tmat;
-      new BABYLON.PhysicsAggregate(top, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.7, restitution: 0.2 }, scene);
-
-      for (const [lx, lz] of [[1.1, 0.5], [-1.1, 0.5], [1.1, -0.5], [-1.1, -0.5]]) {
-        const leg = BABYLON.MeshBuilder.CreateBox('leg', { width: 0.08, height: 0.86, depth: 0.08 }, scene);
-        leg.position.set(x + lx, 0.43, z + lz);
-        leg.material = tmat;
-        new BABYLON.PhysicsAggregate(leg, BABYLON.PhysicsShapeType.BOX, { mass: 0, friction: 0.7, restitution: 0.2 }, scene);
-      }
+    if(halfCount[e] > 0){
+      const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
+        {diameter:1, height:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
+      cyl.material = mat; cyl.isPickable = false;
+      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true); cyl.freezeWorldMatrix();
     }
-    makeTable(0, -2);
+  }
 
-    // Stuff on the table
-    spawnBall(-0.6, 1.2,  -2.2, 0.1);
-    spawnBall(-0.1, 1.2,  -1.7, 0.12);
-    spawnBall( 0.6, 1.2,  -2.2, 0.09);
-    spawnCan ( 0.0, 1.05, -2.0);
-    spawnCan ( 0.3, 1.05, -1.6);
-    spawnBottle(-0.4, 1.16, -1.6);
-    spawnBottle( 0.6, 1.16, -1.5);
+  /* Frame camera on the whole row (fit both axes for any viewport aspect) */
+  let gMiX=Infinity,gMiY=Infinity,gMaX=-Infinity,gMaY=-Infinity,gMiZ=Infinity,gMaZ=-Infinity;
+  for(let mi=0;mi<mols.length;mi++){
+    const b=box[mi];
+    gMiX=Math.min(gMiX,b.miX+mols[mi].ox); gMaX=Math.max(gMaX,b.maX+mols[mi].ox);
+    gMiY=Math.min(gMiY,b.miY+mols[mi].oy); gMaY=Math.max(gMaY,b.maY+mols[mi].oy);
+    gMiZ=Math.min(gMiZ,b.miZ+mols[mi].oz); gMaZ=Math.max(gMaZ,b.maZ+mols[mi].oz);
+  }
+  const dimX=gMaX-gMiX, dimY=gMaY-gMiY, dimZ=Math.max(gMaZ-gMiZ,1);
+  cam.setTarget(new BABYLON.Vector3((gMiX+gMaX)/2,(gMiY+gMaY)/2,(gMiZ+gMaZ)/2));
+  const aspect = engine.getRenderWidth()/Math.max(engine.getRenderHeight(),1);
+  const tanV = Math.tan(cam.fov/2);
+  cam.radius = Math.max(dimY/2/tanV, dimX/2/(tanV*aspect), dimZ)*1.08;
+  cam.lowerRadiusLimit = Math.max(dimY,dimZ)*0.03;
+  cam.upperRadiusLimit = cam.radius*4;
+  cam.wheelPrecision   = 60/Math.max(dimX,1);
+  cam.panningSensibility = 6000/Math.max(dimX,1);
 
-    // Stack of crates to knock over
-    spawnCrate( 4, 0.3,  4, 0.55);
-    spawnCrate( 4, 0.9,  4, 0.5);
-    spawnCrate( 4, 1.4,  4, 0.45);
-    spawnCrate( 5, 0.3,  4, 0.5);
-    spawnCrate( 5, 0.85, 4, 0.45);
-    spawnCrate( 3, 0.3,  4, 0.5);
-
-    // Bowling-pin cluster of cans, far end
-    for (let i = 0; i < 5; i++) spawnCan(-2 + i * 0.18, 0.08, 8);
-    for (let i = 0; i < 4; i++) spawnCan(-1.8 + i * 0.18, 0.08, 8.3);
-
-    // Loose balls scattered
-    for (let i = 0; i < 10; i++) {
-      const x = (Math.random() - 0.5) * 8;
-      const z = (Math.random() - 0.5) * 6 + 1;
-      spawnBall(x, 0.3 + Math.random() * 0.5, z, 0.07 + Math.random() * 0.08);
-    }
-
-    // ---------- Blue hand mesh (replaces controller models) ----------
-    const handMat = new BABYLON.StandardMaterial('handMat', scene);
-    handMat.diffuseColor = new BABYLON.Color3(0.18, 0.42, 0.95);
-    handMat.specularColor = new BABYLON.Color3(0.25, 0.25, 0.35);
-    handMat.emissiveColor = new BABYLON.Color3(0.02, 0.05, 0.12);
-
-    function buildHand(isRight) {
-      const root = new BABYLON.TransformNode('hand_' + (isRight ? 'R' : 'L'), scene);
-
-      // Palm — flattened ellipsoid pointing along +Z
-      const palm = BABYLON.MeshBuilder.CreateSphere('palm', { diameter: 0.085, segments: 14 }, scene);
-      palm.scaling = new BABYLON.Vector3(1, 0.55, 1.5);
-      palm.material = handMat;
-      palm.isPickable = false;
-      palm.parent = root;
-
-      // 4 fingers extending forward
-      for (let i = 0; i < 4; i++) {
-        const finger = BABYLON.MeshBuilder.CreateCapsule('finger' + i, { radius: 0.012, height: 0.07, tessellation: 12 }, scene);
-        finger.material = handMat;
-        finger.isPickable = false;
-        finger.parent = root;
-        const x = (i - 1.5) * 0.022;
-        finger.position.set(x, 0, 0.075);
-        finger.rotation.x = Math.PI / 2;
-      }
-
-      // Thumb angled inward
-      const thumb = BABYLON.MeshBuilder.CreateCapsule('thumb', { radius: 0.014, height: 0.06, tessellation: 12 }, scene);
-      thumb.material = handMat;
-      thumb.isPickable = false;
-      thumb.parent = root;
-      const side = isRight ? -1 : 1;
-      thumb.position.set(side * 0.045, 0, 0.015);
-      thumb.rotation.x = Math.PI / 2;
-      thumb.rotation.y = side * Math.PI / 5;
-
-      // Wrist cuff
-      const cuff = BABYLON.MeshBuilder.CreateCylinder('cuff', { height: 0.04, diameter: 0.08, tessellation: 16 }, scene);
-      cuff.material = handMat;
-      cuff.isPickable = false;
-      cuff.parent = root;
-      cuff.position.set(0, 0, -0.05);
-      cuff.rotation.x = Math.PI / 2;
-
-      return root;
-    }
-
-    // ---------- Per-controller state ----------
-    const handState = new Map();
-
-    function createHandState(controllerUniqueId, parentNode, isRight) {
-      const handRoot = buildHand(isRight);
-      handRoot.parent = parentNode;
-      handRoot.position.set(0, 0, 0);
-
-      const grabAnchor = new BABYLON.TransformNode('grabAnchor', scene);
-      grabAnchor.parent = handRoot;
-      grabAnchor.position.set(0, 0, 0.04);
-
-      const state = {
-        controllerUniqueId,
-        handRoot,
-        grabAnchor,
-        parentNode,
-        isRight,
-        held: null,
-        heldAggregate: null,
-        prevMotionType: null,
-        samples: [],
-        heldLocalOffset: null,
-        heldRotOffset: null,
-      };
-      handState.set(controllerUniqueId, state);
-      return state;
-    }
-
-    function nearestGrabbable(worldPos, maxDist) {
-      let best = null;
-      let bestD = maxDist;
-      for (const mesh of grabbables) {
-        if (mesh._heldBy) continue;
-        const d = BABYLON.Vector3.Distance(mesh.getAbsolutePosition(), worldPos);
-        if (d < bestD) { bestD = d; best = mesh; }
-      }
-      return best;
-    }
-
-    function grab(state, mesh) {
-      if (!mesh || state.held) return;
-      mesh._heldBy = state.controllerUniqueId;
-
-      const agg = mesh.metadata.aggregate;
-      state.heldAggregate = agg;
-      state.prevMotionType = agg.body.getMotionType();
-      agg.body.setMotionType(BABYLON.PhysicsMotionType.ANIMATED);
-
-      const anchorMat = state.grabAnchor.getWorldMatrix();
-      const meshWorld = mesh.getAbsolutePosition();
-      const inv = BABYLON.Matrix.Invert(anchorMat);
-      const localOffset = BABYLON.Vector3.TransformCoordinates(meshWorld, inv);
-
-      state.held = mesh;
-      state.heldLocalOffset = localOffset;
-
-      if (!mesh.rotationQuaternion) {
-        mesh.rotationQuaternion = BABYLON.Quaternion.FromEulerVector(mesh.rotation);
-      }
-      const handRot = state.grabAnchor.absoluteRotationQuaternion.clone();
-      const handRotInv = BABYLON.Quaternion.Inverse(handRot);
-      state.heldRotOffset = handRotInv.multiply(mesh.rotationQuaternion.clone());
-
-      state.samples = [];
-    }
-
-    function release(state) {
-      if (!state.held) return;
-      const agg = state.heldAggregate;
-
-      const now = performance.now();
-      const samples = state.samples.filter(s => now - s.t < 200);
-      let linVel = new BABYLON.Vector3(0, 0, 0);
-      const angVel = new BABYLON.Vector3(0, 0, 0);
-      if (samples.length >= 2) {
-        const first = samples[0];
-        const last = samples[samples.length - 1];
-        const dt = (last.t - first.t) / 1000;
-        if (dt > 0.001) {
-          linVel = last.pos.subtract(first.pos).scale(1 / dt);
-          linVel.scaleInPlace(1.15);
-        }
-      }
-
-      agg.body.setMotionType(state.prevMotionType ?? BABYLON.PhysicsMotionType.DYNAMIC);
-      agg.body.setLinearVelocity(linVel);
-      agg.body.setAngularVelocity(angVel);
-
-      state.held._heldBy = null;
-      state.held = null;
-      state.heldAggregate = null;
-      state.heldLocalOffset = null;
-      state.heldRotOffset = null;
-      state.samples = [];
-    }
-
-    // ---------- WebXR setup ----------
-    setStatus('Preparing WebXR…');
-    const xr = await scene.createDefaultXRExperienceAsync({
-      floorMeshes: [floor],
-      disableTeleportation: false,
-      optionalFeatures: true,
-      inputOptions: {
-        doNotLoadControllerMeshes: true, // we render blue hands instead
-      },
-    });
-
-    xr.baseExperience.onStateChangedObservable.add((s) => {
-      if (s === BABYLON.WebXRState.IN_XR) {
-        document.getElementById('hud').style.display = 'none';
-        document.getElementById('status').style.display = 'none';
-      } else {
-        document.getElementById('hud').style.display = '';
-        document.getElementById('status').style.display = '';
-      }
-    });
-
-    xr.input.onControllerAddedObservable.add((controller) => {
-      const isRight = controller.inputSource && controller.inputSource.handedness === 'right';
-
-      const attach = () => {
-        const parent = controller.grip || controller.pointer;
-        if (!parent) return null;
-        return createHandState(controller.uniqueId, parent, isRight);
-      };
-
-      controller.onMotionControllerInitObservable.add((mc) => {
-        const state = handState.get(controller.uniqueId) || attach();
-        if (!state) return;
-
-        const squeeze = mc.getComponent('xr-standard-squeeze');
-        const trigger = mc.getComponent('xr-standard-trigger');
-
-        const doGrab = () => {
-          const wp = state.grabAnchor.getAbsolutePosition();
-          const m = nearestGrabbable(wp, 0.3);
-          if (m) grab(state, m);
-        };
-        const doRelease = () => release(state);
-
-        if (squeeze) {
-          squeeze.onButtonStateChangedObservable.add(() => {
-            if (squeeze.changes.pressed) {
-              if (squeeze.pressed) doGrab(); else doRelease();
-            }
-          });
-        }
-        if (trigger) {
-          trigger.onButtonStateChangedObservable.add(() => {
-            if (trigger.changes.pressed) {
-              if (trigger.pressed) doGrab(); else doRelease();
-            }
-          });
-        }
-
-        // Hide any default controller mesh that may have slipped through
-        if (mc.rootMesh) mc.rootMesh.setEnabled(false);
-      });
-
-      attach();
-    });
-
-    xr.input.onControllerRemovedObservable.add((controller) => {
-      const s = handState.get(controller.uniqueId);
-      if (s) {
-        if (s.held) release(s);
-        s.handRoot.dispose();
-        handState.delete(controller.uniqueId);
-      }
-    });
-
-    // ---------- Per-frame: drive held objects, sample velocity ----------
-    scene.onBeforeRenderObservable.add(() => {
-      const now = performance.now();
-      handState.forEach((state) => {
-        if (!state.grabAnchor) return;
-        const wp = state.grabAnchor.getAbsolutePosition().clone();
-
-        state.samples.push({ t: now, pos: wp });
-        while (state.samples.length > 0 && now - state.samples[0].t > 250) {
-          state.samples.shift();
-        }
-
-        if (state.held && state.heldAggregate) {
-          const anchorMat = state.grabAnchor.getWorldMatrix();
-          const targetPos = BABYLON.Vector3.TransformCoordinates(state.heldLocalOffset, anchorMat);
-          const anchorRot = state.grabAnchor.absoluteRotationQuaternion;
-          const targetRot = anchorRot.multiply(state.heldRotOffset);
-          state.heldAggregate.body.setTargetTransform(targetPos, targetRot);
-        }
-      });
-    });
-
-    setStatus('Ready — click "Enter VR" or use WASD to look around.');
-    engine.runRenderLoop(() => scene.render());
-    window.addEventListener('resize', () => engine.resize());
-
-    console.log('VR Warehouse Sandbox ready. Grabbables:', grabbables.length);
-  })().catch((err) => {
-    console.error(err);
-    document.getElementById('status').textContent = 'Error: ' + (err && err.message ? err.message : err);
+  /* HUD + floating per-model labels */
+  const nAtoms = mols.reduce((s,m)=>s+m.na,0), nBonds = mols.reduce((s,m)=>s+m.nb,0);
+  document.getElementById('hud').innerHTML =
+    `<b>${mols.length===1?mols[0].name:mols.length+' complexes'}</b> · ${nAtoms.toLocaleString()} atoms · `
+    + `${nBonds.toLocaleString()} bonds<br><span style="color:#456">H included · bonds split 50/50 by element</span>`;
+  const labels = mols.length===1 ? [] : mols.map((m,mi) => {
+    const el = document.createElement('div'); el.className = 'mlbl';
+    el.textContent = m.name; document.body.appendChild(el);
+    const b = box[mi];
+    el.pos = new BABYLON.Vector3((b.miX+b.maX)/2+m.ox, b.maY+m.oy+dimY*0.02, (b.miZ+b.maZ)/2+m.oz);
+    return el;
   });
-  </script>
+  scene.registerAfterRender(() => {
+    const vp = cam.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+    const tm = scene.getTransformMatrix();
+    for(const el of labels){
+      const p = BABYLON.Vector3.Project(el.pos, BABYLON.Matrix.Identity(), tm, vp);
+      const vis = p.z>0 && p.z<1;
+      el.style.display = vis ? 'block' : 'none';
+      if(vis){ el.style.left=(p.x-el.offsetWidth/2)+'px'; el.style.top=(p.y-el.offsetHeight-4)+'px'; }
+    }
+  });
+
+  document.getElementById('overlay').classList.add('gone');
+  engine.runRenderLoop(() => scene.render());
+  window.addEventListener('resize', () => engine.resize());
+}
+
+/* ── Filename prompt → load ────────────────────────────────────────────── */
+const form = document.getElementById('load-form');
+form.addEventListener('submit', e => {
+  e.preventDefault();
+  const name = document.getElementById('file-input').value.trim();
+  if(!name){ document.getElementById('form-err').textContent = 'Enter a filename'; return; }
+  document.getElementById('form-err').textContent = '';
+  form.style.display = 'none';
+  document.getElementById('progress-row').style.display = 'flex';
+  run(name).catch(err => {
+    console.error(err);
+    if(engine){ engine.dispose(); engine = null; }
+    document.getElementById('progress-row').style.display = 'none';
+    form.style.display = 'flex';
+    document.getElementById('form-err').textContent = err.message;
+  });
+});
+</script>
 </body>
 </html>

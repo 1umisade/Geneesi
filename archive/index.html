@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mol2 viewer + electron orbitals (archive)</title>
+<!--
+  ARCHIVE / EXPERIMENTAL VARIANT
+  Same mol2 ball-and-stick viewer as ../index.html, plus an animated
+  electron-orbital layer: each atom's ground-state electrons (IUPAC config)
+  orbit the nucleus — s spherical, p dumbbell, d rose curve — coloured by the
+  atom's element.  Orbitals are only built when the total electron count is
+  small enough to animate every frame (ORB_MAX below); large complexes fall
+  back to plain ball-and-stick.
+-->
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#000}
+#c{width:100%;height:100%;display:block;touch-action:none}
+#overlay{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:18px;background:rgba(1,2,16,0.94);
+  color:#8ae;font-family:'Courier New',monospace;transition:opacity .8s}
+#overlay.gone{opacity:0;pointer-events:none}
+#over-title{font-size:18px;color:#bdf;letter-spacing:3px}
+#load-form{display:flex;flex-direction:column;gap:10px;align-items:center;font-size:13px}
+#load-form label{color:#8ae;display:flex;gap:8px;align-items:center}
+#file-input{background:#001018;border:1px solid #2a5070;color:#cff;
+  font-family:'Courier New',monospace;font-size:13px;padding:6px 10px;border-radius:4px;width:260px}
+#file-input:focus{outline:none;border-color:#3af}
+#load-form button{background:#12406a;border:1px solid #3af;color:#cff;
+  font-family:'Courier New',monospace;font-size:13px;padding:6px 20px;border-radius:4px;cursor:pointer}
+#load-form button:hover{background:#1a5590}
+#form-err{color:#e77;font-size:11px;min-height:14px;max-width:320px;text-align:center}
+#orb-row{display:flex;gap:6px;align-items:center;color:#567;font-size:11px}
+.prow{display:flex;align-items:center;gap:12px;font-size:12px;width:440px}
+.plbl{width:250px;color:#567;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptr{flex:1;height:3px;background:#122;border-radius:2px}
+.pfil{height:100%;width:0%;background:#3af;border-radius:2px;transition:width .15s}
+#hud{position:absolute;top:12px;left:14px;z-index:10;color:#7bd;
+  font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
+#hud b{color:#adf;font-size:12px}
+.mlbl{position:absolute;z-index:9;pointer-events:none;color:#dff;
+  background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
+  padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
+  white-space:nowrap;display:none}
+#controls{position:absolute;bottom:12px;left:14px;z-index:10;color:#345;
+  font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  <div id="over-title">MOL2 VIEWER · ELECTRON ORBITALS</div>
+  <form id="load-form">
+    <label>Mol2 file
+      <input id="file-input" type="text" value="PSII.mol2" autocomplete="off" spellcheck="false">
+    </label>
+    <label id="orb-row"><input type="checkbox" id="orb-toggle" checked> show electron orbitals (small molecules)</label>
+    <button type="submit">Load ▸</button>
+    <div id="form-err"></div>
+  </form>
+  <div class="prow" id="progress-row" style="display:none">
+    <span class="plbl" id="load-lbl">Fetching…</span>
+    <div class="ptr"><div class="pfil" id="load-bar"></div></div>
+  </div>
+</div>
+<div id="hud"><b>Mol2 viewer</b></div>
+<div id="controls">Drag → rotate &nbsp;|&nbsp; Scroll → zoom &nbsp;|&nbsp; Right-drag → pan</div>
+
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script>
+'use strict';
+
+const BOND_R   = 0.10;    // stick radius (Å)
+const GAP_FRAC = 0.15;    // side-by-side gap as a fraction of mean model width
+const ORB_MAX  = 40000;   // max electrons to animate; above this orbitals are skipped
+
+/* ── Standard CPK-ish colours + ball radii (Å).  C dark grey, H light grey. ── */
+const ELEM = {
+  H :{c:[0.88,0.88,0.88], r:0.23},   C :{c:[0.24,0.24,0.24], r:0.32},
+  N :{c:[0.19,0.31,0.97], r:0.31},   O :{c:[0.94,0.15,0.15], r:0.30},
+  S :{c:[1.00,0.78,0.16], r:0.38},   P :{c:[1.00,0.50,0.00], r:0.38},
+  MG:{c:[0.33,0.78,0.33], r:0.42},   FE:{c:[0.88,0.40,0.20], r:0.42},
+  MN:{c:[0.61,0.48,0.78], r:0.42},   CA:{c:[0.24,0.80,0.24], r:0.46},
+  ZN:{c:[0.49,0.51,0.69], r:0.40},   CU:{c:[0.78,0.50,0.20], r:0.40},
+  CL:{c:[0.24,0.94,0.24], r:0.36},   NA:{c:[0.67,0.36,0.95], r:0.46},
+  K :{c:[0.56,0.25,0.83], r:0.52},   CO:{c:[0.94,0.56,0.63], r:0.42},
+  FB:{c:[0.55,0.55,0.55], r:0.32},
+};
+const info = code => ELEM[EL_LIST[code]] || ELEM.FB;
+
+/* ── Electron configurations (IUPAC ground state), [shell_n, {s,p,d}] ──── */
+const ECONF = {
+  H :[[1,{s:1}]],
+  C :[[1,{s:2}],[2,{s:2,p:2}]],
+  N :[[1,{s:2}],[2,{s:2,p:3}]],
+  O :[[1,{s:2}],[2,{s:2,p:4}]],
+  P :[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:3}]],
+  S :[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:4}]],
+  CL:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:5}]],
+  NA:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:1}]],
+  MG:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2}]],
+  K :[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6}],[4,{s:1}]],
+  CA:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6}],[4,{s:2}]],
+  MN:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6,d:5}],[4,{s:2}]],
+  FE:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6,d:6}],[4,{s:2}]],
+  CO:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6,d:7}],[4,{s:2}]],
+  CU:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6,d:10}],[4,{s:1}]],
+  ZN:[[1,{s:2}],[2,{s:2,p:6}],[3,{s:2,p:6,d:10}],[4,{s:2}]],
+};
+const econfOf = code => ECONF[EL_LIST[code]] || null;
+const nElectrons = code => { const c = econfOf(code); if(!c) return 0;
+  let n=0; for(const [,o] of c) n += (o.s||0)+(o.p||0)+(o.d||0); return n; };
+
+const setLbl = t => document.getElementById('load-lbl').textContent = t;
+const setBar = v => document.getElementById('load-bar').style.width = v + '%';
+const yield_ = () => new Promise(r => setTimeout(r, 0));
+
+/* ── Element registry ─────────────────────────────────────────────────── */
+const EL_CODE = new Map(), EL_LIST = [];
+function codeOf(sybyl){
+  const dot = sybyl.indexOf('.');
+  let sym = (dot === -1 ? sybyl : sybyl.slice(0, dot)).toUpperCase();
+  if(!ELEM[sym]) sym = 'FB';
+  let c = EL_CODE.get(sym);
+  if(c === undefined){ c = EL_LIST.length; EL_CODE.set(sym, c); EL_LIST.push(sym); }
+  return c;
+}
+
+/* ── Parse multi-molecule mol2 ────────────────────────────────────────── */
+function parseMol2(text){
+  const lines = text.split('\n');
+  const mols = [];
+  let cur = null, section = '';
+  for(let i = 0; i < lines.length; i++){
+    const ln = lines[i];
+    if(ln.charCodeAt(0) === 64){
+      const t = ln.trim();
+      if(t === '@<TRIPOS>MOLECULE'){ cur = {name:null}; mols.push(cur); section = 'HDR'; }
+      else if(t === '@<TRIPOS>ATOM')  section = 'ATOM';
+      else if(t === '@<TRIPOS>BOND')  section = 'BOND';
+      else section = 'OTHER';
+      continue;
+    }
+    if(section === 'HDR'){
+      if(cur.name === null){ cur.name = ln.trim(); }
+      else if(cur.na === undefined){
+        const p = ln.trim().split(/\s+/);
+        cur.na = +p[0]; cur.nb = +p[1] || 0;
+        cur.x  = new Float32Array(cur.na); cur.y = new Float32Array(cur.na);
+        cur.z  = new Float32Array(cur.na); cur.el = new Uint16Array(cur.na); cur.ai = 0;
+        cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
+      }
+      continue;
+    }
+    if(section === 'ATOM'){
+      const p = ln.trim().split(/\s+/);
+      if(p.length < 6 || cur.ai >= cur.na) continue;
+      const k = cur.ai++;
+      cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
+    } else if(section === 'BOND'){
+      const p = ln.trim().split(/\s+/);
+      if(p.length < 4 || cur.bi >= cur.nb) continue;
+      const k = cur.bi++;
+      cur.b1[k] = (+p[1]) - 1; cur.b2[k] = (+p[2]) - 1;
+    }
+  }
+  return mols.filter(m => m.na > 0);
+}
+
+let engine = null;
+
+async function run(fileName, wantOrbitals){
+  const url = /^(https?:|\.?\/)/.test(fileName) ? fileName : './' + fileName;
+
+  setLbl(`Fetching ${fileName}…`);
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`HTTP ${res.status} — is "${fileName}" beside this page (or in the parent folder)?`);
+  const total = +res.headers.get('Content-Length') || 0;
+  const reader = res.body.getReader(); const chunks = []; let got = 0;
+  for(;;){
+    const {done, value} = await reader.read();
+    if(done) break; chunks.push(value); got += value.length;
+    if(total) setBar((got / total) * 100);
+  }
+  const buf = new Uint8Array(got); let off = 0;
+  for(const ch of chunks){ buf.set(ch, off); off += ch.length; }
+  setLbl('Parsing atoms + bonds…'); setBar(100); await yield_();
+  const mols = parseMol2(new TextDecoder().decode(buf));
+  if(mols.length === 0) throw new Error('No molecules found in file');
+
+  /* Layout side by side */
+  setLbl('Arranging models…'); await yield_();
+  const box = [];
+  for(const m of mols){
+    let miX=Infinity,miY=Infinity,miZ=Infinity,maX=-Infinity,maY=-Infinity,maZ=-Infinity;
+    for(let k=0;k<m.na;k++){
+      const x=m.x[k],y=m.y[k],z=m.z[k];
+      if(x<miX)miX=x; if(y<miY)miY=y; if(z<miZ)miZ=z;
+      if(x>maX)maX=x; if(y>maY)maY=y; if(z>maZ)maZ=z;
+    }
+    box.push({miX,miY,miZ,maX,maY,maZ,w:maX-miX});
+  }
+  const meanW = box.reduce((s,b)=>s+b.w,0)/box.length;
+  const gap   = meanW*GAP_FRAC;
+  const rowW  = box.reduce((s,b)=>s+b.w,0)+gap*(mols.length-1);
+  let cursor  = -rowW/2;
+  for(let mi=0;mi<mols.length;mi++){
+    const b=box[mi];
+    const cx=(b.miX+b.maX)/2, cy=(b.miY+b.maY)/2, cz=(b.miZ+b.maZ)/2;
+    mols[mi].ox = (cursor + b.w/2) - cx; mols[mi].oy = -cy; mols[mi].oz = -cz;
+    cursor += b.w + gap;
+  }
+
+  /* Per-element counts */
+  const nEl = EL_LIST.length;
+  const atomCount = new Uint32Array(nEl), halfCount = new Uint32Array(nEl);
+  let nAtomsTotal = 0, nElecTotal = 0;
+  for(const m of mols){
+    nAtomsTotal += m.na;
+    for(let k=0;k<m.na;k++){ atomCount[m.el[k]]++; nElecTotal += nElectrons(m.el[k]); }
+    for(let k=0;k<m.nb;k++){
+      const a1=m.b1[k], a2=m.b2[k];
+      if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
+      halfCount[m.el[a1]]++; halfCount[m.el[a2]]++;
+    }
+  }
+  const doOrbitals = wantOrbitals && nElecTotal > 0 && nElecTotal <= ORB_MAX;
+
+  /* Engine/scene */
+  const canvas = document.getElementById('c');
+  engine = new BABYLON.Engine(canvas, true, {stencil:false});
+  const scene = new BABYLON.Scene(engine);
+  scene.clearColor = new BABYLON.Color4(0.02,0.02,0.05,1);
+  const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
+    BABYLON.Vector3.Zero(), scene);
+  cam.attachControl(canvas, true);
+  cam.fov = 0.8; cam.minZ = 0.02; cam.inertia = 0.85; cam.panningSensibility = 20;
+  const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0.3,1,0.4), scene);
+  hemi.intensity = 0.85; hemi.groundColor = new BABYLON.Color3(0.15,0.15,0.2);
+  const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(-0.5,-1,-0.4), scene);
+  dir.intensity = 0.9;
+
+  /* Build ball + stick geometry, and a flat world-position/element table */
+  setLbl(`Building ${mols.length} model(s)…`); await yield_();
+  const sphBuf = [], cylBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
+  for(let e=0;e<nEl;e++){
+    sphBuf[e] = new Float32Array(atomCount[e]*16);
+    cylBuf[e] = new Float32Array(halfCount[e]*16);
+  }
+  const allX = new Float32Array(nAtomsTotal), allY = new Float32Array(nAtomsTotal),
+        allZ = new Float32Array(nAtomsTotal), allEl = new Uint16Array(nAtomsTotal);
+  let gi = 0;
+  const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
+        _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
+  const bondD = BOND_R*2;
+  function cylTo(sx,sy,sz, ex,ey,ez, dstBuf, dstOff){
+    let dx=ex-sx, dy=ey-sy, dz=ez-sz;
+    const len=Math.hypot(dx,dy,dz)||1e-6, inv=1/len; dx*=inv; dy*=inv; dz*=inv;
+    if(dy>0.999999) _q.set(0,0,0,1);
+    else if(dy<-0.999999) _q.set(1,0,0,0);
+    else { _ax.set(dz,0,-dx); _ax.normalize(); BABYLON.Quaternion.RotationAxisToRef(_ax, Math.acos(dy), _q); }
+    _s.set(bondD,len,bondD); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
+    BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
+  }
+  const gBase = [];   // global-index of first atom of each molecule
+  for(const m of mols){
+    gBase.push(gi);
+    const ox=m.ox, oy=m.oy, oz=m.oz;
+    for(let k=0;k<m.na;k++){
+      const e=m.el[k], wx=m.x[k]+ox, wy=m.y[k]+oy, wz=m.z[k]+oz;
+      allX[gi]=wx; allY[gi]=wy; allZ[gi]=wz; allEl[gi]=e; gi++;
+      BABYLON.Matrix.TranslationToRef(wx, wy, wz, _m);
+      _m.copyToArray(sphBuf[e], (sphIdx[e]++)*16);
+    }
+    for(let k=0;k<m.nb;k++){
+      const a1=m.b1[k], a2=m.b2[k];
+      if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
+      const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
+      const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
+      const mx=(x1+x2)*0.5, my=(y1+y2)*0.5, mz=(z1+z2)*0.5;
+      const e1=m.el[a1], e2=m.el[a2];
+      cylTo(x1,y1,z1, mx,my,mz, cylBuf[e1], (cylIdx[e1]++)*16);
+      cylTo(mx,my,mz, x2,y2,z2, cylBuf[e2], (cylIdx[e2]++)*16);
+    }
+  }
+  await yield_();
+
+  setLbl('Uploading to GPU…'); await yield_();
+  for(let e=0;e<nEl;e++){
+    const [r,g,b] = info(e).c;
+    const mat = new BABYLON.StandardMaterial('m'+e, scene);
+    mat.diffuseColor  = new BABYLON.Color3(r,g,b);
+    mat.specularColor = new BABYLON.Color3(0.18,0.18,0.18);
+    mat.specularPower = 64; mat.freeze();
+    if(atomCount[e] > 0){
+      const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:6}, scene);
+      sph.material = mat; sph.isPickable = false;
+      sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
+    }
+    if(halfCount[e] > 0){
+      const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
+        {diameter:1, height:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
+      cyl.material = mat; cyl.isPickable = false;
+      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true); cyl.freezeWorldMatrix();
+    }
+  }
+
+  /* ── Electron-orbital layer (small molecules only) ─────────────────────
+     One record per electron: s = spherical Lissajous, p = dumbbell along a
+     principal axis, d = 4-lobed rose curve.  Rendered as thin-instanced
+     spheres, one mesh per element (electrons coloured by their atom). */
+  let orbTick = null;
+  if(doOrbitals){
+    setLbl('Building electron orbitals…'); await yield_();
+    const P_AXES = [new BABYLON.Vector3(1,0,0), new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(0,0,1)];
+    const D_PLANES = [
+      [new BABYLON.Vector3(1,0,0), new BABYLON.Vector3(0,1,0)],
+      [new BABYLON.Vector3(1,0,0), new BABYLON.Vector3(0,0,1)],
+      [new BABYLON.Vector3(0,1,0), new BABYLON.Vector3(0,0,1)],
+      [new BABYLON.Vector3(0.707,0.707,0).normalize(), new BABYLON.Vector3(0,0,1)],
+      [new BABYLON.Vector3(0.577,0.577,0.577).normalize(), new BABYLON.Vector3(-0.707,0.707,0).normalize()],
+    ];
+    const orbByEl = [];               // element code → array of electron records
+    for(let e=0;e<nEl;e++) orbByEl[e] = [];
+    for(let a=0; a<nAtomsTotal; a++){
+      const e = allEl[a], conf = econfOf(e); if(!conf) continue;
+      const ballR = info(e).r;
+      let di = 0;
+      for(const [n, orbs] of conf){
+        const shellR = ballR*1.5 + (n-1)*0.28, spd = 0.06/n;
+        for(let k=0;k<(orbs.s||0);k++)
+          orbByEl[e].push({a, r:shellR, type:0, spd, spd2:spd*1.618,
+            ph:Math.random()*6.283, ph2:Math.random()*3.14});
+        for(let k=0;k<(orbs.p||0);k++){
+          const axis = P_AXES[k%3].clone();
+          const ref = Math.abs(axis.x)<0.9 ? new BABYLON.Vector3(1,0,0) : new BABYLON.Vector3(0,1,0);
+          const u = BABYLON.Vector3.Cross(axis, ref).normalize();
+          const v = BABYLON.Vector3.Cross(axis, u).normalize();
+          orbByEl[e].push({a, r:shellR, type:1, axis, u, v, spd:spd*1.5, spd2:spd*1.5*1.618,
+            ph:Math.random()*6.283, ph2:Math.random()*6.283});
+        }
+        for(let k=0;k<(orbs.d||0);k++){
+          const [u,v] = D_PLANES[di%5]; const nn = BABYLON.Vector3.Cross(u,v).normalize();
+          orbByEl[e].push({a, r:shellR, type:2, u:u.clone(), v:v.clone(), n:nn,
+            spd:spd*2, spd2:spd*0.37, ph:Math.random()*6.283, ph2:Math.random()*6.283});
+          if(k%2===1) di++;
+        }
+      }
+    }
+    const orbMeshes = [];
+    const em = new BABYLON.Matrix();
+    for(let e=0;e<nEl;e++){
+      const list = orbByEl[e]; if(list.length===0) continue;
+      const [r,g,b] = info(e).c;
+      const mesh = BABYLON.MeshBuilder.CreateSphere('e'+e, {diameter:0.09, segments:4}, scene);
+      const mat = new BABYLON.StandardMaterial('em'+e, scene);
+      mat.diffuseColor  = new BABYLON.Color3(r,g,b);
+      mat.emissiveColor = new BABYLON.Color3(r*0.55+0.15, g*0.55+0.15, b*0.55+0.15);
+      mat.specularColor = new BABYLON.Color3(0.6,0.6,0.6);
+      mesh.material = mat; mesh.isPickable = false;
+      const buf = new Float32Array(list.length*16);
+      mesh.thinInstanceSetBuffer('matrix', buf, 16, false);
+      orbMeshes.push({mesh, mat, buf, list, base:new BABYLON.Color3(r,g,b)});
+    }
+    let frame = 0;
+    orbTick = () => {
+      frame++;
+      const pulse = 0.55 + 0.45*Math.sin(frame*0.06);
+      for(const om of orbMeshes){
+        const {buf, list, base} = om;
+        om.mat.emissiveColor.set(base.r*0.4*pulse+0.12, base.g*0.4*pulse+0.12, base.b*0.4*pulse+0.12);
+        for(let i=0;i<list.length;i++){
+          const o = list[i], cx=allX[o.a], cy=allY[o.a], cz=allZ[o.a];
+          const t = o.ph + frame*o.spd;
+          let ex,ey,ez;
+          if(o.type===1){                       // p — dumbbell
+            const along = Math.sin(t)*o.r;
+            const w = Math.abs(Math.sin(t))*o.r*0.38;
+            const s2 = o.ph2 + frame*o.spd2;
+            ex = cx + o.axis.x*along + (o.u.x*Math.cos(s2)+o.v.x*Math.sin(s2))*w;
+            ey = cy + o.axis.y*along + (o.u.y*Math.cos(s2)+o.v.y*Math.sin(s2))*w;
+            ez = cz + o.axis.z*along + (o.u.z*Math.cos(s2)+o.v.z*Math.sin(s2))*w;
+          } else if(o.type===0){                // s — spherical Lissajous
+            const th = o.ph2 + frame*o.spd2, st = Math.sin(th);
+            ex = cx + o.r*st*Math.cos(t); ey = cy + o.r*st*Math.sin(t); ez = cz + o.r*Math.cos(th);
+          } else {                              // d — rose curve
+            const rho = o.r*Math.abs(Math.sin(2*t));
+            const drift = o.r*0.18*Math.sin(o.ph2 + frame*o.spd2);
+            ex = cx + rho*(o.u.x*Math.cos(t)+o.v.x*Math.sin(t)) + o.n.x*drift;
+            ey = cy + rho*(o.u.y*Math.cos(t)+o.v.y*Math.sin(t)) + o.n.y*drift;
+            ez = cz + rho*(o.u.z*Math.cos(t)+o.v.z*Math.sin(t)) + o.n.z*drift;
+          }
+          BABYLON.Matrix.TranslationToRef(ex,ey,ez,em); em.copyToArray(buf,i*16);
+        }
+        om.mesh.thinInstanceSetBuffer('matrix', buf, 16, false);
+      }
+    };
+    scene.registerBeforeRender(orbTick);
+  }
+
+  /* Frame camera */
+  let gMiX=Infinity,gMiY=Infinity,gMaX=-Infinity,gMaY=-Infinity,gMiZ=Infinity,gMaZ=-Infinity;
+  for(let mi=0;mi<mols.length;mi++){
+    const b=box[mi];
+    gMiX=Math.min(gMiX,b.miX+mols[mi].ox); gMaX=Math.max(gMaX,b.maX+mols[mi].ox);
+    gMiY=Math.min(gMiY,b.miY+mols[mi].oy); gMaY=Math.max(gMaY,b.maY+mols[mi].oy);
+    gMiZ=Math.min(gMiZ,b.miZ+mols[mi].oz); gMaZ=Math.max(gMaZ,b.maZ+mols[mi].oz);
+  }
+  const dimX=gMaX-gMiX, dimY=gMaY-gMiY, dimZ=Math.max(gMaZ-gMiZ,1);
+  cam.setTarget(new BABYLON.Vector3((gMiX+gMaX)/2,(gMiY+gMaY)/2,(gMiZ+gMaZ)/2));
+  const aspect = engine.getRenderWidth()/Math.max(engine.getRenderHeight(),1);
+  const tanV = Math.tan(cam.fov/2);
+  cam.radius = Math.max(dimY/2/tanV, dimX/2/(tanV*aspect), dimZ)*1.08;
+  cam.lowerRadiusLimit = Math.max(dimY,dimZ)*0.02;
+  cam.upperRadiusLimit = cam.radius*4;
+  cam.wheelPrecision   = 60/Math.max(dimX,1);
+  cam.panningSensibility = 6000/Math.max(dimX,1);
+
+  /* HUD + labels */
+  const nBonds = mols.reduce((s,m)=>s+m.nb,0);
+  const orbNote = doOrbitals ? `orbitals on · ${nElecTotal.toLocaleString()} electrons`
+    : (wantOrbitals ? `orbitals off · ${nElecTotal.toLocaleString()} electrons > ${ORB_MAX.toLocaleString()} cap` : 'orbitals off');
+  document.getElementById('hud').innerHTML =
+    `<b>${mols.length===1?mols[0].name:mols.length+' complexes'}</b> · ${nAtomsTotal.toLocaleString()} atoms · `
+    + `${nBonds.toLocaleString()} bonds<br><span style="color:#456">${orbNote}</span>`;
+  const labels = mols.length===1 ? [] : mols.map((m,mi) => {
+    const el = document.createElement('div'); el.className = 'mlbl';
+    el.textContent = m.name; document.body.appendChild(el);
+    const b = box[mi];
+    el.pos = new BABYLON.Vector3((b.miX+b.maX)/2+m.ox, b.maY+m.oy+dimY*0.02, (b.miZ+b.maZ)/2+m.oz);
+    return el;
+  });
+  scene.registerAfterRender(() => {
+    const vp = cam.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+    const tm = scene.getTransformMatrix();
+    for(const el of labels){
+      const p = BABYLON.Vector3.Project(el.pos, BABYLON.Matrix.Identity(), tm, vp);
+      const vis = p.z>0 && p.z<1;
+      el.style.display = vis ? 'block' : 'none';
+      if(vis){ el.style.left=(p.x-el.offsetWidth/2)+'px'; el.style.top=(p.y-el.offsetHeight-4)+'px'; }
+    }
+  });
+
+  document.getElementById('overlay').classList.add('gone');
+  engine.runRenderLoop(() => scene.render());
+  window.addEventListener('resize', () => engine.resize());
+}
+
+/* ── Filename prompt → load ────────────────────────────────────────────── */
+const form = document.getElementById('load-form');
+form.addEventListener('submit', e => {
+  e.preventDefault();
+  const name = document.getElementById('file-input').value.trim();
+  if(!name){ document.getElementById('form-err').textContent = 'Enter a filename'; return; }
+  const wantOrb = document.getElementById('orb-toggle').checked;
+  document.getElementById('form-err').textContent = '';
+  form.style.display = 'none';
+  document.getElementById('progress-row').style.display = 'flex';
+  run(name, wantOrb).catch(err => {
+    console.error(err);
+    if(engine){ engine.dispose(); engine = null; }
+    document.getElementById('progress-row').style.display = 'none';
+    form.style.display = 'flex';
+    document.getElementById('form-err').textContent = err.message;
+  });
+});
+</script>
+</body>
+</html>
