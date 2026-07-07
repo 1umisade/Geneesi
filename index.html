@@ -25,9 +25,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 .plbl{width:250px;color:#567;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ptr{flex:1;height:3px;background:#122;border-radius:2px}
 .pfil{height:100%;width:0%;background:#3af;border-radius:2px;transition:width .15s}
-#hud{position:absolute;top:12px;left:14px;z-index:10;color:#7bd;
+#hud{position:absolute;top:12px;left:14px;z-index:10;color:#42513f;
   font-family:'Courier New',monospace;font-size:11px;line-height:1.7;pointer-events:none}
-#hud b{color:#adf;font-size:12px}
+#hud b{color:#20301c;font-size:12px}
 .mlbl{position:absolute;z-index:9;pointer-events:none;color:#dff;
   background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
   padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
@@ -196,15 +196,18 @@ async function run(fileName){
   const canvas = document.getElementById('c');
   engine = new BABYLON.Engine(canvas, true, {stencil:false});
   const scene = new BABYLON.Scene(engine);
-  scene.clearColor = new BABYLON.Color4(0.02,0.02,0.05,1);
+  scene.clearColor = new BABYLON.Color4(0.93,0.90,0.82,1);   // light beige
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
-  const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0.3,1,0.4), scene);
-  hemi.intensity = 0.85; hemi.groundColor = new BABYLON.Color3(0.15,0.15,0.2);
-  const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(-0.5,-1,-0.4), scene);
-  dir.intensity = 0.9;
+  // Bright, full lighting so no camera-facing side falls into shadow.
+  const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
+  hemi.intensity = 0.9; hemi.groundColor = new BABYLON.Color3(0.55,0.55,0.55);
+  const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(-0.4,-1,-0.5), scene);
+  dir.intensity = 0.6;
+  const dir2 = new BABYLON.DirectionalLight('d2', new BABYLON.Vector3(0.6,-0.2,0.5), scene);
+  dir2.intensity = 0.45;
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
@@ -254,6 +257,7 @@ async function run(fileName){
   // drawn over the ball-and-stick so both are visible at once.
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
   fillMat.diffuseColor  = new BABYLON.Color3(0.15, 0.80, 0.30);
+  fillMat.emissiveColor = new BABYLON.Color3(0.06, 0.30, 0.12);  // reads green even when unlit
   fillMat.specularColor = new BABYLON.Color3(0.25, 0.25, 0.25);
   fillMat.specularPower = 64;
   fillMat.alpha = 0.5;
