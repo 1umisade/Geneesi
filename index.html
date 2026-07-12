@@ -358,6 +358,27 @@ async function run(fileName){
 
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
+
+  // Perf fallback: after a short warm-up, measure the full-scene frame rate;
+  // if the device can't sustain ~30 fps, drop the atoms + bonds and keep only
+  // the (much lighter) van der Waals surface.
+  const surfaceOnly = () => {
+    for(const m of scene.meshes) if(/^[ab]\d+$/.test(m.name)) m.setEnabled(false);
+  };
+  let warmUntil = 0, winStart = 0, winFrames = 0, probeObs = null;
+  probeObs = scene.onAfterRenderObservable.add(() => {
+    const now = performance.now();
+    if(warmUntil === 0){ warmUntil = now + 700; return; }   // ignore first ~0.7 s (shader/upload jank)
+    if(now < warmUntil) return;
+    if(winStart === 0){ winStart = now; winFrames = 0; return; }
+    winFrames++;
+    if(now - winStart >= 1500){                              // measure over 1.5 s
+      const fps = winFrames * 1000 / (now - winStart);
+      scene.onAfterRenderObservable.remove(probeObs);
+      if(fps < 30) surfaceOnly();
+    }
+  });
+
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
 }
