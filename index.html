@@ -121,30 +121,6 @@ function parseMol2(text){
   return mols.filter(m => m.na > 0);
 }
 
-/* David Goodsell–style ink outline: mark pixels where the linear depth jumps
-   (silhouette against the background + big steps between spheres). A ring of
-   samples at `thickness` px gives a solid band ~2×thickness wide. */
-BABYLON.Effect.ShadersStore['goodsellFragmentShader'] = `
-precision highp float;
-varying vec2 vUV;
-uniform sampler2D textureSampler;
-uniform sampler2D depthSampler;
-uniform vec2 texel;
-uniform vec3 outlineColor;
-uniform float thickness;
-uniform float threshold;
-void main(void){
-  float c = texture2D(depthSampler, vUV).r;
-  float md = 0.0;
-  for(int i=0;i<8;i++){
-    float a = float(i)*0.7853981634;
-    vec2 o = vec2(cos(a),sin(a))*texel*thickness;
-    md = max(md, abs(texture2D(depthSampler, vUV+o).r - c));
-  }
-  vec4 col = texture2D(textureSampler, vUV);
-  gl_FragColor = mix(col, vec4(outlineColor,1.0), step(threshold, md));
-}`;
-
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
@@ -382,22 +358,8 @@ async function run(fileName){
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
 
-  // Space-filling only: the opaque surface hides the ball-and-stick, so drop those
-  // meshes entirely — big perf win, since it also removes them from the depth pass.
+  // Space-filling only: the opaque surface hides the ball-and-stick, so drop those.
   for(const m of scene.meshes) if(/^[ab]\d+$/.test(m.name)) m.setEnabled(false);
-
-  // David Goodsell look: dark ink outline via depth-based edge detection
-  const depthRenderer = scene.enableDepthRenderer(cam, false, true);
-  const outlinePP = new BABYLON.PostProcess('goodsell', 'goodsell',
-    ['texel','outlineColor','thickness','threshold'], ['depthSampler'], 1.0, cam);
-  const outlineCol = new BABYLON.Color3(0.09, 0.11, 0.09);
-  outlinePP.onApply = (effect) => {
-    effect.setTexture('depthSampler', depthRenderer.getDepthMap());
-    effect.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    effect.setColor3('outlineColor', outlineCol);
-    effect.setFloat('thickness', 1.5);
-    effect.setFloat('threshold', 0.03);
-  };
 
   // Perf fallback: after a short warm-up, measure the full-scene frame rate;
   // if the device can't sustain ~30 fps, drop the atoms + bonds and keep only
