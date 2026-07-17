@@ -382,7 +382,11 @@ async function run(fileName){
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
 
-  // David Goodsell look: thick dark ink outline via depth-based edge detection
+  // Space-filling only: the opaque surface hides the ball-and-stick, so drop those
+  // meshes entirely — big perf win, since it also removes them from the depth pass.
+  for(const m of scene.meshes) if(/^[ab]\d+$/.test(m.name)) m.setEnabled(false);
+
+  // David Goodsell look: dark ink outline via depth-based edge detection
   const depthRenderer = scene.enableDepthRenderer(cam, false, true);
   const outlinePP = new BABYLON.PostProcess('goodsell', 'goodsell',
     ['texel','outlineColor','thickness','threshold'], ['depthSampler'], 1.0, cam);
@@ -391,7 +395,7 @@ async function run(fileName){
     effect.setTexture('depthSampler', depthRenderer.getDepthMap());
     effect.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     effect.setColor3('outlineColor', outlineCol);
-    effect.setFloat('thickness', 3.0);
+    effect.setFloat('thickness', 1.5);
     effect.setFloat('threshold', 0.03);
   };
 
