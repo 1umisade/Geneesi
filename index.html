@@ -121,6 +121,30 @@ function parseMol2(text){
   return mols.filter(m => m.na > 0);
 }
 
+/* David Goodsell–style ink outline: mark pixels where the linear depth jumps
+   (silhouette against the background + big steps between spheres). A ring of
+   samples at `thickness` px gives a solid band ~2×thickness wide. */
+BABYLON.Effect.ShadersStore['goodsellFragmentShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform sampler2D depthSampler;
+uniform vec2 texel;
+uniform vec3 outlineColor;
+uniform float thickness;
+uniform float threshold;
+void main(void){
+  float c = texture2D(depthSampler, vUV).r;
+  float md = 0.0;
+  for(int i=0;i<8;i++){
+    float a = float(i)*0.7853981634;
+    vec2 o = vec2(cos(a),sin(a))*texel*thickness;
+    md = max(md, abs(texture2D(depthSampler, vUV+o).r - c));
+  }
+  vec4 col = texture2D(textureSampler, vUV);
+  gl_FragColor = mix(col, vec4(outlineColor,1.0), step(threshold, md));
+}`;
+
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
@@ -278,11 +302,10 @@ async function run(fileName){
   // Space-filling surface: single translucent green material (not per-element),
   // drawn over the ball-and-stick so both are visible at once.
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
-  fillMat.diffuseColor  = new BABYLON.Color3(0.10, 0.52, 0.20);
-  fillMat.emissiveColor = new BABYLON.Color3(0.02, 0.13, 0.06);  // reads green even when unlit
-  fillMat.specularColor = new BABYLON.Color3(0.25, 0.25, 0.25);
-  fillMat.specularPower = 64;
-  fillMat.alpha = 0.3;   // 70% transparent
+  fillMat.diffuseColor  = new BABYLON.Color3(0.16, 0.55, 0.24);
+  fillMat.emissiveColor = new BABYLON.Color3(0.03, 0.11, 0.05);  // gentle fill so shadows aren't muddy
+  fillMat.specularColor = new BABYLON.Color3(0, 0, 0);           // matte — no highlights (Goodsell)
+  fillMat.alpha = 1.0;                                            // opaque
   fillMat.freeze();
   for(let e=0;e<nEl;e++){
     const [r,g,b] = info(e).c;
@@ -358,6 +381,19 @@ async function run(fileName){
 
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
+
+  // David Goodsell look: thick dark ink outline via depth-based edge detection
+  const depthRenderer = scene.enableDepthRenderer(cam, false, true);
+  const outlinePP = new BABYLON.PostProcess('goodsell', 'goodsell',
+    ['texel','outlineColor','thickness','threshold'], ['depthSampler'], 1.0, cam);
+  const outlineCol = new BABYLON.Color3(0.09, 0.11, 0.09);
+  outlinePP.onApply = (effect) => {
+    effect.setTexture('depthSampler', depthRenderer.getDepthMap());
+    effect.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
+    effect.setColor3('outlineColor', outlineCol);
+    effect.setFloat('thickness', 3.0);
+    effect.setFloat('threshold', 0.03);
+  };
 
   // Perf fallback: after a short warm-up, measure the full-scene frame rate;
   // if the device can't sustain ~30 fps, drop the atoms + bonds and keep only
