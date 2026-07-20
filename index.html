@@ -478,8 +478,6 @@ async function run(fileName){
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     eff.setFloat('strength', 0.75);
   };
-  new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);   // anti-alias impostor silhouettes
-
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
 }
