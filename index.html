@@ -182,6 +182,7 @@ uniform float fogEnd;
 uniform float aoNear;
 uniform float aoFar;
 uniform float opacity;   // 1.0 is opaque inner atoms, lower is the translucent vdW shell
+uniform float shellCut;  // translucent shell renders only where view-depth is below this (near atoms)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -192,6 +193,7 @@ void main(void){
   float zc = sqrt(1.0 - r2);
   vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
   vec3 posV = vCenterV + n * radius;
+  if(opacity < 0.999 && posV.z > shellCut) discard;   // translucent shell only on near atoms
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
@@ -322,9 +324,10 @@ async function run(fileName){
   let hideTimer = null;
   const showTips = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = null; tips.classList.add('show'); };
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
+  let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0) showTips();
-    else if(p.type === BABYLON.PointerEventTypes.POINTERUP) hideTipsSoon();
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){ showTips(); dragging = true; }
+    else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false; }
   });
 
   // Scroll-wheel zoom stays enabled; only the arrow-key camera input is removed.
@@ -395,7 +398,7 @@ async function run(fileName){
   const impostorMat = (name, radius, opacity) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar','opacity']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar','opacity','shellCut']
     });
     mat.setFloat('radius', radius);
     mat.setFloat('opacity', opacity);
@@ -407,6 +410,7 @@ async function run(fileName){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
+      eff.setFloat('shellCut', Math.abs(cam.radius) * 1.02);   // shell only on atoms in front of the focal point
     });
     return mat;
   };
@@ -439,11 +443,11 @@ async function run(fileName){
     }
 
     /* Van der Waals shell — GPU sphere impostors. Opacity is switched by zoom:
-       opaque below 6× (hides the core), 30% at/above 6× (reveals it).
-       needDepthPrePass → only the frontmost shell layer is shaded, so overlapping
-       spheres don't stack into darker blobs. */
+       opaque below 6× (hides the core), 30% at/above 6× (reveals it). Above 6× the
+       shell only draws on near atoms (shellCut) so it stays a thin front slab, and
+       forceDepthWrite keeps nearest-wins so it doesn't stack into darker blobs. */
     const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);
-    impMat.needDepthPrePass = true;
+    impMat.forceDepthWrite = true;
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
     fill.thinInstanceEnablePicking = true;
@@ -552,7 +556,7 @@ async function run(fileName){
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ centerOnAtom(); return; }   // touch double-tap
     if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
       const now = performance.now();
-      if(now - hoverT < 45 || now < flashUntil) return;       // throttle; don't fight the flash
+      if(dragging || now - hoverT < 80 || now < flashUntil) return;   // skip while rotating; throttle; don't fight the flash
       hoverT = now;
       const a = pickAtom();
       if(a) setHL(a.center, a.vr, 1.04, 0.45); else hl.setEnabled(false);
