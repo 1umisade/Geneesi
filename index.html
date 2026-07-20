@@ -192,9 +192,9 @@ void main(void){
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
-  vec3 col = vColor * (0.52 + 0.48 * ndl);
-  col *= 1.0 - 0.5 * smoothstep(0.15, 1.0, r2);      // soft edge darkening → crevice shadow
-  col *= mix(1.0, 0.07, smoothstep(0.9, 1.0, r2));   // crisp thin dark rim → Goodsell ink outline
+  vec3 col = vColor * (0.66 + 0.34 * ndl);
+  col *= 1.0 - 0.32 * smoothstep(0.2, 1.0, r2);      // gentle edge darkening → soft crevice
+  col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));   // crisp thin dark rim → Goodsell ink outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
 }`;
@@ -273,7 +273,7 @@ async function run(fileName){
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
-  scene.fogColor = new BABYLON.Color3(0.01,0.02,0.01);         // near-black → strong contrast
+  scene.fogColor = new BABYLON.Color3(0.16,0.17,0.13);         // dark olive-grey (not black) → lighter vibe
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
