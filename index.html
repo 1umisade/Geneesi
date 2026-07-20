@@ -192,7 +192,9 @@ void main(void){
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
-  vec3 col = vColor * (0.42 + 0.58 * ndl);
+  vec3 col = vColor * (0.52 + 0.48 * ndl);
+  col *= 1.0 - 0.5 * smoothstep(0.15, 1.0, r2);      // soft edge darkening → crevice shadow
+  col *= mix(1.0, 0.07, smoothstep(0.82, 1.0, r2));  // crisp dark rim → Goodsell ink outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
 }`;
