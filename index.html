@@ -216,8 +216,12 @@ void main(void){
   for(int i=0;i<12;i++){
     float a = float(i) * 0.5235988;
     vec2 dir = vec2(cos(a), sin(a));
-    occ += step(texture2D(textureSampler, vUV + dir*texel*3.0).a + 0.004, d);
-    occ += 0.5 * step(texture2D(textureSampler, vUV + dir*texel*7.0).a + 0.006, d);
+    float n1 = texture2D(textureSampler, vUV + dir*texel*2.5).a;
+    float n2 = texture2D(textureSampler, vUV + dir*texel*5.0).a;
+    // range check: only occlude across small depth gaps (crevices), not big
+    // silhouette jumps — kills the offset outline-halo artifact
+    occ += step(n1 + 0.004, d) * (1.0 - smoothstep(0.010, 0.028, d - n1));
+    occ += 0.5 * step(n2 + 0.006, d) * (1.0 - smoothstep(0.014, 0.034, d - n2));
   }
   occ = min(occ / 12.0, 1.0);
   gl_FragColor = vec4(c.rgb * (1.0 - strength*occ), 1.0);
