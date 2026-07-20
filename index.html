@@ -179,6 +179,8 @@ uniform float radius;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
+uniform float aoNear;
+uniform float aoFar;
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -196,7 +198,7 @@ void main(void){
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);     // subtle sphere self-shade
   col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));   // crisp thin dark rim → Goodsell ink outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float da = clamp((posV.z - fogStart) / max(fogEnd - fogStart, 1.0), 0.0, 1.0);  // depth for AO pass
+  float da = clamp((posV.z - aoNear) / max(aoFar - aoNear, 1.0), 0.0, 1.0);  // depth for AO pass (wide range so near surfaces aren't clipped flat)
   gl_FragColor = vec4(mix(fogColor, col, fog), da);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
@@ -377,12 +379,15 @@ async function run(fileName){
     if(atomCount[e] === 0) continue;
     const impMat = new BABYLON.ShaderMaterial('imp'+e, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar']
     });
     impMat.setFloat('radius', info(e).vr*FILL_SCALE);
     impMat.backFaceCulling = false;
     impMat.onBindObservable.add(() => {
       const eff = impMat.getEffect(); if(!eff) return;
+      // AO depth range spans the full model so near-camera surfaces keep their occlusion (no flat/bright patches)
+      eff.setFloat('aoNear', cam.radius - modelR*1.05);
+      eff.setFloat('aoFar',  cam.radius + modelR*1.05);
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
