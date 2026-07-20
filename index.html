@@ -195,7 +195,7 @@ async function run(fileName){
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
-  scene.fogColor = new BABYLON.Color3(0.05,0.07,0.05);
+  scene.fogColor = new BABYLON.Color3(0.01,0.02,0.01);         // near-black → strong contrast
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
@@ -287,16 +287,16 @@ async function run(fileName){
     mat.specularColor = new BABYLON.Color3(0.15,0.15,0.15);
     mat.specularPower = 64; mat.freeze();
     if(atomCount[e] > 0){
-      const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:4}, scene);
+      const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:3}, scene);
       sph.material = mat; sph.isPickable = false;
       sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
-      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:4}, scene);
+      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:3}, scene);
       fill.material = fillMat; fill.isPickable = false;
       fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); fill.freezeWorldMatrix();
     }
     if(halfCount[e] > 0){
       const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
-        {diameter:1, height:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
+        {diameter:1, height:1, tessellation:4, cap:BABYLON.Mesh.NO_CAP}, scene);
       cyl.material = mat; cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true); cyl.freezeWorldMatrix();
     }
@@ -327,8 +327,8 @@ async function run(fileName){
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
     const r = cam.getDirection(BABYLON.Axis.X);   // view right
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
-    scene.fogStart = Math.max(0.1, cam.radius - modelR*0.85);
-    scene.fogEnd   = cam.radius + modelR*0.85;
+    scene.fogStart = Math.max(0.1, cam.radius - modelR*0.55);   // steeper ramp = more contrast
+    scene.fogEnd   = cam.radius + modelR*0.6;
   });
 
   // Remember the framed "home" view; double-click resets size + position to it
