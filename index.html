@@ -177,17 +177,11 @@ async function run(fileName){
     cursor += b.w + gap;
   }
 
-  /* Count atoms + bond-halves per element (for typed-array sizing) */
+  /* Count heavy atoms per element (H is skipped — invisible in the packed vdW
+     surface and ~half the atoms, so dropping it is a big perf win). */
   const nEl = EL_LIST.length;
-  const atomCount = new Uint32Array(nEl), halfCount = new Uint32Array(nEl);
-  for(const m of mols){
-    for(let k=0;k<m.na;k++) atomCount[m.el[k]]++;
-    for(let k=0;k<m.nb;k++){
-      const a1=m.b1[k], a2=m.b2[k];
-      if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
-      halfCount[m.el[a1]]++; halfCount[m.el[a2]]++;
-    }
-  }
+  const atomCount = new Uint32Array(nEl);
+  for(const m of mols) for(let k=0;k<m.na;k++){ const e=m.el[k]; if(EL_LIST[e]!=='H') atomCount[e]++; }
 
   /* Engine/scene */
   const canvas = document.getElementById('c');
@@ -233,76 +227,33 @@ async function run(fileName){
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
-  const sphBuf = [], cylBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
-  for(let e=0;e<nEl;e++){
-    sphBuf[e] = new Float32Array(atomCount[e]*16);
-    cylBuf[e] = new Float32Array(halfCount[e]*16);
-  }
-  const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
-        _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
-  const bondD = BOND_R*2;
-
-  function cylTo(sx,sy,sz, ex,ey,ez, dstBuf, dstOff){
-    let dx=ex-sx, dy=ey-sy, dz=ez-sz;
-    const len=Math.hypot(dx,dy,dz)||1e-6, inv=1/len; dx*=inv; dy*=inv; dz*=inv;
-    if(dy>0.999999) _q.set(0,0,0,1);
-    else if(dy<-0.999999) _q.set(1,0,0,0);
-    else { _ax.set(dz,0,-dx); _ax.normalize(); BABYLON.Quaternion.RotationAxisToRef(_ax, Math.acos(dy), _q); }
-    _s.set(bondD,len,bondD); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
-    BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
-  }
+  const sphBuf = [], sphIdx = new Uint32Array(nEl);
+  for(let e=0;e<nEl;e++) sphBuf[e] = new Float32Array(atomCount[e]*16);
+  const _m = new BABYLON.Matrix();
 
   for(const m of mols){
     const ox=m.ox, oy=m.oy, oz=m.oz;
     for(let k=0;k<m.na;k++){
-      const e=m.el[k];
+      const e=m.el[k]; if(EL_LIST[e]==='H') continue;
       BABYLON.Matrix.TranslationToRef(m.x[k]+ox, m.y[k]+oy, m.z[k]+oz, _m);
       _m.copyToArray(sphBuf[e], (sphIdx[e]++)*16);
-    }
-    for(let k=0;k<m.nb;k++){
-      const a1=m.b1[k], a2=m.b2[k];
-      if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
-      const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
-      const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
-      const mx=(x1+x2)*0.5, my=(y1+y2)*0.5, mz=(z1+z2)*0.5;
-      const e1=m.el[a1], e2=m.el[a2];
-      cylTo(x1,y1,z1, mx,my,mz, cylBuf[e1], (cylIdx[e1]++)*16);
-      cylTo(mx,my,mz, x2,y2,z2, cylBuf[e2], (cylIdx[e2]++)*16);
     }
   }
   await yield_();
 
-  /* One sphere + one cylinder mesh per element, plus a full-vdW sphere set
-     (reusing the same instance positions) for the space-filling surface mode. */
+  /* Space-filling surface only: one low-poly vdW sphere mesh per element.
+     (Ball-and-stick is hidden behind the opaque surface, so we don't build it.) */
   setLbl('Uploading to GPU…'); await yield_();
-  // Space-filling surface: single translucent green material (not per-element),
-  // drawn over the ball-and-stick so both are visible at once.
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
   fillMat.diffuseColor  = new BABYLON.Color3(0.16, 0.55, 0.24);
   fillMat.emissiveColor = new BABYLON.Color3(0.03, 0.11, 0.05);  // gentle fill so shadows aren't muddy
-  fillMat.specularColor = new BABYLON.Color3(0, 0, 0);           // matte — no highlights (Goodsell)
-  fillMat.alpha = 1.0;                                            // opaque
+  fillMat.specularColor = new BABYLON.Color3(0, 0, 0);           // matte
   fillMat.freeze();
   for(let e=0;e<nEl;e++){
-    const [r,g,b] = info(e).c;
-    const mat = new BABYLON.StandardMaterial('m'+e, scene);
-    mat.diffuseColor  = new BABYLON.Color3(r,g,b);
-    mat.specularColor = new BABYLON.Color3(0.18,0.18,0.18);
-    mat.specularPower = 64; mat.freeze();
-    if(atomCount[e] > 0){
-      const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:6}, scene);
-      sph.material = mat; sph.isPickable = false;
-      sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
-      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:8}, scene);
-      fill.material = fillMat; fill.isPickable = false;
-      fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); fill.freezeWorldMatrix();
-    }
-    if(halfCount[e] > 0){
-      const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
-        {diameter:1, height:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
-      cyl.material = mat; cyl.isPickable = false;
-      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true); cyl.freezeWorldMatrix();
-    }
+    if(atomCount[e] === 0) continue;
+    const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:3}, scene);
+    fill.material = fillMat; fill.isPickable = false;
+    fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); fill.freezeWorldMatrix();
   }
 
   /* Frame camera on the whole row (fit both axes for any viewport aspect) */
@@ -357,29 +308,6 @@ async function run(fileName){
 
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
-
-  // Space-filling only: the opaque surface hides the ball-and-stick, so drop those.
-  for(const m of scene.meshes) if(/^[ab]\d+$/.test(m.name)) m.setEnabled(false);
-
-  // Perf fallback: after a short warm-up, measure the full-scene frame rate;
-  // if the device can't sustain ~30 fps, drop the atoms + bonds and keep only
-  // the (much lighter) van der Waals surface.
-  const surfaceOnly = () => {
-    for(const m of scene.meshes) if(/^[ab]\d+$/.test(m.name)) m.setEnabled(false);
-  };
-  let warmUntil = 0, winStart = 0, winFrames = 0, probeObs = null;
-  probeObs = scene.onAfterRenderObservable.add(() => {
-    const now = performance.now();
-    if(warmUntil === 0){ warmUntil = now + 700; return; }   // ignore first ~0.7 s (shader/upload jank)
-    if(now < warmUntil) return;
-    if(winStart === 0){ winStart = now; winFrames = 0; return; }
-    winFrames++;
-    if(now - winStart >= 1500){                              // measure over 1.5 s
-      const fps = winFrames * 1000 / (now - winStart);
-      scene.onAfterRenderObservable.remove(probeObs);
-      if(fps < 30) surfaceOnly();
-    }
-  });
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
