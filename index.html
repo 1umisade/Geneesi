@@ -406,6 +406,7 @@ async function run(fileName){
     ssao.maxZ = cam.upperRadiusLimit + modelR;
     ssao.expensiveBlur = false;                  // gaussian blur → soft, blended crevices
   }
+  new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);   // anti-alias the faceted silhouettes
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
