@@ -83,6 +83,25 @@ const setBar = v => { const e = document.getElementById('load-bar');
   if(e) e.style.transform = 'scaleX(' + Math.max(0, Math.min(1, v/100)) + ')'; };
 const yield_ = () => new Promise(r => setTimeout(r, 0));
 
+/* ── Goodsell-style muted palette, coloured by molecular component ─────── */
+const CAT_COLORS = [
+  [0.52,0.47,0.27],   // 0 protein     — muted olive/khaki
+  [0.30,0.48,0.28],   // 1 chlorophyll — muted green
+  [0.86,0.47,0.17],   // 2 carotenoid  — orange
+  [0.60,0.22,0.18],   // 3 heme        — rust red
+  [0.72,0.63,0.39],   // 4 lipid       — tan
+  [0.52,0.55,0.62],   // 5 metal/ion   — slate
+  [0.60,0.55,0.44],   // 6 other       — neutral tan
+];
+const RES_CAT = {};
+'ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL HOH'.split(' ').forEach(r=>RES_CAT[r]=0);
+'CHL CLA PHO BCL'.split(' ').forEach(r=>RES_CAT[r]=1);
+'BCR LUT NEX XAT VIO ZEA'.split(' ').forEach(r=>RES_CAT[r]=2);
+'HEM HEC'.split(' ').forEach(r=>RES_CAT[r]=3);
+'DGD LMG LHG PL9 SQD LMT'.split(' ').forEach(r=>RES_CAT[r]=4);
+'CL FE2 FE MG MN CA NA K ZN OEX BCT CU CO'.split(' ').forEach(r=>RES_CAT[r]=5);
+const catOf = res => RES_CAT[res] ?? 6;
+
 /* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
 function parseMol2(text){
   const lines = text.split('\n');
@@ -105,6 +124,7 @@ function parseMol2(text){
         cur.na = +p[0]; cur.nb = +p[1] || 0;
         cur.x  = new Float32Array(cur.na); cur.y = new Float32Array(cur.na);
         cur.z  = new Float32Array(cur.na); cur.el = new Uint16Array(cur.na); cur.ai = 0;
+        cur.cat = new Uint8Array(cur.na);
         cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
       }
       continue;
@@ -114,6 +134,7 @@ function parseMol2(text){
       if(p.length < 6 || cur.ai >= cur.na) continue;
       const k = cur.ai++;
       cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
+      cur.cat[k] = catOf(p[7] || '');
     } else if(section === 'BOND'){
       const p = ln.trim().split(/\s+/);
       if(p.length < 4 || cur.bi >= cur.nb) continue;
@@ -237,10 +258,11 @@ async function run(fileName){
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
-  const sphBuf = [], cylBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
+  const sphBuf = [], cylBuf = [], colBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
     cylBuf[e] = new Float32Array(halfCount[e]*16);
+    colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
   }
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
@@ -258,9 +280,11 @@ async function run(fileName){
   for(const m of mols){
     const ox=m.ox, oy=m.oy, oz=m.oz;
     for(let k=0;k<m.na;k++){
-      const e=m.el[k];
+      const e=m.el[k], ci=sphIdx[e]++;
       BABYLON.Matrix.TranslationToRef(m.x[k]+ox, m.y[k]+oy, m.z[k]+oz, _m);
-      _m.copyToArray(sphBuf[e], (sphIdx[e]++)*16);
+      _m.copyToArray(sphBuf[e], ci*16);
+      const col = CAT_COLORS[m.cat[k]];
+      colBuf[e][ci*4]=col[0]; colBuf[e][ci*4+1]=col[1]; colBuf[e][ci*4+2]=col[2]; colBuf[e][ci*4+3]=1;
     }
     for(let k=0;k<m.nb;k++){
       const a1=m.b1[k], a2=m.b2[k];
@@ -278,10 +302,9 @@ async function run(fileName){
   /* Colored ball-and-stick (H included) inside a 50%-transparent vdW surface. */
   setLbl('Uploading to GPU…'); await yield_();
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
-  fillMat.diffuseColor  = new BABYLON.Color3(0.16, 0.55, 0.24);
-  fillMat.emissiveColor = new BABYLON.Color3(0.03, 0.11, 0.05);
-  fillMat.specularColor = new BABYLON.Color3(0, 0, 0);
-  fillMat.alpha = 0.5;
+  fillMat.diffuseColor  = new BABYLON.Color3(1,1,1);   // tinted per-instance (by component)
+  fillMat.specularColor = new BABYLON.Color3(0, 0, 0); // matte
+  fillMat.alpha = 1.0;
   fillMat.needDepthPrePass = true;   // single-layer shell so the interior shows through cleanly
   for(let e=0;e<nEl;e++){
     const [r,g,b] = info(e).c;
@@ -295,7 +318,9 @@ async function run(fileName){
       sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
       const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:3}, scene);
       fill.material = fillMat; fill.isPickable = false;
-      fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); fill.freezeWorldMatrix();
+      fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
+      fill.thinInstanceSetBuffer('color', colBuf[e], 4, true);   // component colours
+      fill.freezeWorldMatrix();
     }
     if(halfCount[e] > 0){
       const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
@@ -376,6 +401,17 @@ async function run(fileName){
 
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
+
+  // Ambient occlusion — crevice shadows for the David Goodsell painted look
+  if(BABYLON.SSAO2RenderingPipeline && BABYLON.SSAO2RenderingPipeline.IsSupported){
+    const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:0.75, blurRatio:0.5}, [cam]);
+    ssao.radius = Math.max(2.0, modelR*0.02);   // sampling radius ~ a few atoms
+    ssao.totalStrength = 1.5;                    // shadow darkness
+    ssao.base = 0.2;                             // ambient floor
+    ssao.samples = 12;
+    ssao.maxZ = cam.upperRadiusLimit + modelR;
+    ssao.expensiveBlur = true;
+  }
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
