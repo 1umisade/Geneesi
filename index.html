@@ -193,10 +193,32 @@ void main(void){
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
-  col *= 1.0 - 0.5 * smoothstep(0.35, 1.0, r2);      // deep crevice → tunnels darker, faces stay bright
+  col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);     // subtle sphere self-shade
   col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));   // crisp thin dark rim → Goodsell ink outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
+  float da = clamp((posV.z - fogStart) / max(fogEnd - fogStart, 1.0), 0.0, 1.0);  // depth for AO pass
+  gl_FragColor = vec4(mix(fogColor, col, fog), da);
+}`;
+/* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
+   surrounded by nearer neighbours sits in a tunnel → darken it. */
+BABYLON.Effect.ShadersStore['aoFragmentShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform vec2 texel;
+uniform float strength;
+void main(void){
+  vec4 c = texture2D(textureSampler, vUV);
+  if(c.a >= 0.985){ gl_FragColor = vec4(c.rgb, 1.0); return; }   // background — no AO
+  float d = c.a, occ = 0.0;
+  for(int i=0;i<12;i++){
+    float a = float(i) * 0.5235988;
+    vec2 dir = vec2(cos(a), sin(a));
+    occ += step(texture2D(textureSampler, vUV + dir*texel*3.0).a + 0.004, d);
+    occ += 0.5 * step(texture2D(textureSampler, vUV + dir*texel*7.0).a + 0.006, d);
+  }
+  occ = min(occ / 12.0, 1.0);
+  gl_FragColor = vec4(c.rgb * (1.0 - strength*occ), 1.0);
 }`;
 
 let engine = null;
@@ -441,6 +463,12 @@ async function run(fileName){
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
 
+  // Ambient occlusion (tunnels darker than the surface), reading impostor depth
+  const aoPP = new BABYLON.PostProcess('ao', 'ao', ['texel','strength'], [], 1.0, cam);
+  aoPP.onApply = (eff) => {
+    eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
+    eff.setFloat('strength', 0.75);
+  };
   new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);   // anti-alias impostor silhouettes
 
   engine.runRenderLoop(() => scene.render());
