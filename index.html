@@ -252,9 +252,9 @@ async function run(fileName){
   // Ambient fill + a headlight that follows the camera (direction set each frame),
   // so shading stays consistent as the model rotates instead of sweeping around.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
-  hemi.intensity = 0.55; hemi.groundColor = new BABYLON.Color3(0.30,0.34,0.30);
+  hemi.intensity = 0.80; hemi.groundColor = new BABYLON.Color3(0.50,0.50,0.50);  // flat, matte fill
   const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(0,-0.4,1), scene);
-  dir.intensity = 0.95;
+  dir.intensity = 0.45;   // gentle form; AO + rim carry the shading
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
@@ -303,9 +303,16 @@ async function run(fileName){
   setLbl('Uploading to GPU…'); await yield_();
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
   fillMat.diffuseColor  = new BABYLON.Color3(1,1,1);   // tinted per-instance (by component)
-  fillMat.specularColor = new BABYLON.Color3(0, 0, 0); // matte
+  fillMat.specularColor = new BABYLON.Color3(0, 0, 0); // matte — no highlights
   fillMat.alpha = 1.0;
   fillMat.needDepthPrePass = true;   // single-layer shell so the interior shows through cleanly
+  // Slight dark rim on every sphere (Goodsell ink line) via a diffuse fresnel:
+  // full colour facing the camera, darkening toward each sphere's silhouette.
+  fillMat.diffuseFresnelParameters = new BABYLON.FresnelParameters();
+  fillMat.diffuseFresnelParameters.leftColor  = new BABYLON.Color3(1,1,1);
+  fillMat.diffuseFresnelParameters.rightColor = new BABYLON.Color3(0.10,0.10,0.10);
+  fillMat.diffuseFresnelParameters.bias = 0.0;
+  fillMat.diffuseFresnelParameters.power = 3.2;
   for(let e=0;e<nEl;e++){
     const [r,g,b] = info(e).c;
     const mat = new BABYLON.StandardMaterial('m'+e, scene);
@@ -405,9 +412,9 @@ async function run(fileName){
   // Ambient occlusion — crevice shadows for the David Goodsell painted look
   if(BABYLON.SSAO2RenderingPipeline && BABYLON.SSAO2RenderingPipeline.IsSupported){
     const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:0.75, blurRatio:0.5}, [cam]);
-    ssao.radius = Math.max(2.0, modelR*0.02);   // sampling radius ~ a few atoms
-    ssao.totalStrength = 1.5;                    // shadow darkness
-    ssao.base = 0.2;                             // ambient floor
+    ssao.radius = Math.max(1.5, modelR*0.014);   // tight ~ inter-sphere crevices
+    ssao.totalStrength = 1.8;                     // deeper crevice shadow
+    ssao.base = 0.12;                             // low ambient floor so AO reads
     ssao.samples = 12;
     ssao.maxZ = cam.upperRadiusLimit + modelR;
     ssao.expensiveBlur = true;
