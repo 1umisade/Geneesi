@@ -145,6 +145,58 @@ function parseMol2(text){
   return mols.filter(m => m.na > 0);
 }
 
+/* GPU sphere impostors: a camera-facing quad per atom; the fragment shader
+   ray-traces a perfect sphere and writes real depth, so spheres are smooth at
+   any zoom and cost 2 triangles each. */
+BABYLON.Effect.ShadersStore['impVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec4 instanceColor;
+attribute vec4 world0;
+attribute vec4 world1;
+attribute vec4 world2;
+attribute vec4 world3;
+uniform mat4 view;
+uniform mat4 projection;
+uniform float radius;
+varying vec2 vUV;
+varying vec3 vCenterV;
+varying vec3 vColor;
+void main(void){
+  mat4 W = mat4(world0, world1, world2, world3);
+  vec4 cV = view * vec4(W[3].xyz, 1.0);
+  vCenterV = cV.xyz;
+  vUV = position.xy;
+  vColor = instanceColor.rgb;
+  vec3 cornerV = cV.xyz + vec3(position.xy * radius, 0.0);
+  gl_Position = projection * vec4(cornerV, 1.0);
+}`;
+BABYLON.Effect.ShadersStore['impFragmentShader'] = `
+#extension GL_EXT_frag_depth : enable
+precision highp float;
+uniform mat4 projection;
+uniform float radius;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogEnd;
+varying vec2 vUV;
+varying vec3 vCenterV;
+varying vec3 vColor;
+const vec3 L = normalize(vec3(0.35, 0.55, -0.9));   // headlight in view space
+void main(void){
+  float r2 = dot(vUV, vUV);
+  if(r2 > 1.0) discard;
+  float zc = sqrt(1.0 - r2);
+  vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
+  vec3 posV = vCenterV + n * radius;
+  vec4 clip = projection * vec4(posV, 1.0);
+  gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
+  float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
+  vec3 col = vColor * (0.42 + 0.58 * ndl);
+  float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
+  gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
+}`;
+
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
@@ -294,38 +346,29 @@ async function run(fileName){
   }
   await yield_();
 
-  /* Colored ball-and-stick (H included) inside a 50%-transparent vdW surface. */
+  /* Van der Waals surface as GPU sphere impostors — one camera-facing quad per
+     atom, ray-traced to a perfect sphere in the fragment shader (smooth at any zoom). */
   setLbl('Uploading to GPU…'); await yield_();
-  const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
-  fillMat.diffuseColor  = new BABYLON.Color3(1,1,1);   // tinted per-instance (by component)
-  fillMat.specularColor = new BABYLON.Color3(0, 0, 0); // matte — no highlights
-  fillMat.alpha = 1.0;                                 // opaque space-fill (Goodsell)
   for(let e=0;e<nEl;e++){
-    const [r,g,b] = info(e).c;
-    const mat = new BABYLON.StandardMaterial('m'+e, scene);
-    mat.diffuseColor  = new BABYLON.Color3(r,g,b);
-    mat.specularColor = new BABYLON.Color3(0.15,0.15,0.15);
-    mat.specularPower = 64; mat.freeze();
-    if(atomCount[e] > 0){
-      const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:3}, scene);
-      sph.material = mat; sph.isPickable = false;
-      sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
-      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:8}, scene);
-      fill.material = fillMat; fill.isPickable = true;
-      fill.thinInstanceEnablePicking = true;                      // double-click centring
-      fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
-      fill.thinInstanceSetBuffer('color', colBuf[e], 4, true);   // component colours
-      fill.freezeWorldMatrix();
-      // opaque surface hides the ball-and-stick — don't render it (perf)
-      const sphM = scene.getMeshByName('a'+e); if(sphM) sphM.setEnabled(false);
-    }
-    if(halfCount[e] > 0){
-      const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
-        {diameter:1, height:1, tessellation:4, cap:BABYLON.Mesh.NO_CAP}, scene);
-      cyl.material = mat; cyl.isPickable = false;
-      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true); cyl.freezeWorldMatrix();
-      cyl.setEnabled(false);   // hidden behind the opaque surface
-    }
+    if(atomCount[e] === 0) continue;
+    const impMat = new BABYLON.ShaderMaterial('imp'+e, scene, 'imp', {
+      attributes: ['position','instanceColor','world0','world1','world2','world3'],
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd']
+    });
+    impMat.setFloat('radius', info(e).vr*FILL_SCALE);
+    impMat.backFaceCulling = false;
+    impMat.onBindObservable.add(() => {
+      const eff = impMat.getEffect(); if(!eff) return;
+      eff.setColor3('fogColor', scene.fogColor);
+      eff.setFloat('fogStart', scene.fogStart);
+      eff.setFloat('fogEnd', scene.fogEnd);
+    });
+    const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
+    fill.material = impMat; fill.isPickable = true;
+    fill.thinInstanceEnablePicking = true;
+    fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
+    fill.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
+    fill.alwaysSelectAsActiveMesh = true;   // instances span the model; skip base-plane culling
   }
 
   /* Frame camera on the whole row (fit both axes for any viewport aspect) */
@@ -396,17 +439,7 @@ async function run(fileName){
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
 
-  // Ambient occlusion — crevice shadows for the David Goodsell painted look
-  if(BABYLON.SSAO2RenderingPipeline && BABYLON.SSAO2RenderingPipeline.IsSupported){
-    const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:1.0, blurRatio:1.0}, [cam]);
-    ssao.radius = Math.max(2.0, modelR*0.02);    // inter-sphere crevices
-    ssao.totalStrength = 1.05;                    // gentle
-    ssao.base = 0.38;                             // high ambient floor → soft, not black
-    ssao.samples = 24;                            // many samples → smooth, not noisy/crude
-    ssao.maxZ = cam.upperRadiusLimit + modelR;
-    ssao.expensiveBlur = false;                  // gaussian blur → soft, blended crevices
-  }
-  new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);   // anti-alias the faceted silhouettes
+  new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);   // anti-alias impostor silhouettes
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
