@@ -121,6 +121,32 @@ function parseMol2(text){
   return mols.filter(m => m.na > 0);
 }
 
+/* Cel shading + thick ink outline (Genshin / David Goodsell hybrid):
+   posterize the scene colour into flat bands, and draw a dark outline where the
+   linear depth jumps (silhouette against background + big steps between spheres). */
+BABYLON.Effect.ShadersStore['toonFragmentShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform sampler2D depthSampler;
+uniform vec2 texel;
+uniform vec3 outlineColor;
+uniform float thickness;
+uniform float threshold;
+uniform float levels;
+void main(void){
+  float c = texture2D(depthSampler, vUV).r;
+  float md = 0.0;
+  for(int i=0;i<8;i++){
+    float a = float(i)*0.7853981634;
+    vec2 o = vec2(cos(a),sin(a))*texel*thickness;
+    md = max(md, abs(texture2D(depthSampler, vUV+o).r - c));
+  }
+  vec3 col = texture2D(textureSampler, vUV).rgb;
+  vec3 toon = floor(col*levels + 0.5)/levels;          // flat cel bands
+  gl_FragColor = mix(vec4(toon,1.0), vec4(outlineColor,1.0), step(threshold, md));
+}`;
+
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
@@ -308,6 +334,20 @@ async function run(fileName){
 
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
+
+  // Cel shading + thick ink outline (one fullscreen pass + a depth pass)
+  const depthRenderer = scene.enableDepthRenderer(cam, false, true);
+  const stylePP = new BABYLON.PostProcess('toon', 'toon',
+    ['texel','outlineColor','thickness','threshold','levels'], ['depthSampler'], 1.0, cam);
+  const outlineCol = new BABYLON.Color3(0.05, 0.07, 0.05);
+  stylePP.onApply = (effect) => {
+    effect.setTexture('depthSampler', depthRenderer.getDepthMap());
+    effect.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
+    effect.setColor3('outlineColor', outlineCol);
+    effect.setFloat('thickness', 2.5);
+    effect.setFloat('threshold', 0.03);
+    effect.setFloat('levels', 4.0);
+  };
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
