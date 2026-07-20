@@ -359,15 +359,27 @@ async function run(fileName){
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.02; cam.inertia = 0.85; cam.panningSensibility = 20;
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
+  cam.inputs.attached.pointers.buttons = [0, 2];          // middle button freed for drag-zoom (left=rotate, right=pan)
+  canvas.addEventListener('mousedown', e => { if(e.button === 1) e.preventDefault(); });   // block middle-click autoscroll
   // Show the zoom tips while dragging; keep them 2 s after release (or after a tap).
   const tips = document.getElementById('zoomtips');
   let hideTimer = null;
   const showTips = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = null; tips.classList.add('show'); };
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
+  // Middle-button vertical drag = smooth zoom (drag up → in, drag down → out; can cross 0).
+  const dragZoom = dz => {
+    const lo = cam.lowerRadiusLimit ?? -1e9, hi = cam.upperRadiusLimit ?? 1e9;
+    const step = dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005);
+    cam.radius = Math.max(lo, Math.min(hi, cam.radius + step));
+  };
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){ showTips(); dragging = true; }
+    else if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 1) showTips();
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false; }
+    else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE && (p.event.buttons & 4)){   // middle held
+      dragZoom(p.event.movementY || 0); showTips();
+    }
   });
 
   // Scroll-wheel zoom stays enabled; only the arrow-key camera input is removed.
@@ -435,7 +447,7 @@ async function run(fileName){
 
   const NUC_SCALE = 0.042;    // nucleus radius per nucleon (Å) → H(1) is 1/12 of C(12), etc.
   const nucRadius = e => Math.min(info(e).n * NUC_SCALE, info(e).vr * 0.9);   // cap so it stays inside the vdW shell
-  const BUBBLE_R = 66.0;      // camera reveal-sphere radius (Å) — atoms within it go translucent
+  const BUBBLE_R = 198.0;     // camera reveal-sphere radius (Å) — atoms within it go translucent
   const coreMeshes = [];      // inner atoms + bonds, enabled only when the bubble reaches the model
   const impostorMat = (name, radius, isShell) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
@@ -496,7 +508,7 @@ async function run(fileName){
        outside. forceDepthWrite → nearest-wins, so overlaps don't stack. */
     const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1
     impMat.alpha = 0.30;                 // transparent render queue (blending enabled)
-    impMat.forceDepthWrite = true;
+    impMat.disableDepthWrite = true;     // see-through: farther shells still render & blend behind nearer ones
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
     fill.thinInstanceEnablePicking = true;
@@ -601,7 +613,7 @@ async function run(fileName){
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ centerOnAtom(); return; }   // touch double-tap
     if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
       const now = performance.now();
-      if(dragging || now - hoverT < 80 || now < flashUntil) return;   // skip while rotating; throttle; don't fight the flash
+      if(dragging || p.event.buttons || now - hoverT < 80 || now < flashUntil) return;   // skip while any button held; throttle; don't fight the flash
       hoverT = now;
       const a = pickAtom();
       if(a) setHL(a.center, a.vr, 1.04, 0.45); else hl.setEnabled(false);
