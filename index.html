@@ -465,7 +465,7 @@ async function run(fileName){
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
   const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.15)));   // lighter supersample for the very dense orbital scene
+  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));   // crisp supersample (quality over FPS)
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
@@ -622,7 +622,7 @@ async function run(fileName){
   }
   await yield_();
 
-  const BUBBLE_R = 99.0;      // camera reveal-sphere radius (Å) — atoms within it go translucent
+  const BUBBLE_R = 49.5;      // camera reveal-sphere radius (Å) — atoms within it go translucent
   const coreMeshes = [];      // inner atoms + bonds, enabled only when the bubble reaches the model
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
@@ -750,13 +750,13 @@ async function run(fileName){
         attributes: ['position','normal','ocol','world0','world1','world2','world3'],
         uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd']
       });
-      orbMat.setFloat('bubbleR', BUBBLE_R); orbMat.setFloat('opacity', 1.0);   // opaque → early-z (fast)
-      orbMat.backFaceCulling = true;
+      orbMat.setFloat('bubbleR', BUBBLE_R); orbMat.setFloat('opacity', 0.4);   // transparent (see-through nested shells)
+      orbMat.alpha = 0.4; orbMat.disableDepthWrite = true; orbMat.backFaceCulling = false;
       orbMat.onBindObservable.add(() => {
         const eff = orbMat.getEffect(); if(!eff) return;
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       });
-      const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:2, diameter:1}, scene);   // very low-poly (octahedral) → cheap
+      const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:6, diameter:1}, scene);   // smooth orbital lobes (FPS not a concern)
       orb.material = orbMat; orb.isPickable = false;
       orb.thinInstanceSetBuffer('matrix', orbBuf[e], 16, true);
       orb.thinInstanceSetBuffer('ocol', orbColBuf[e], 3, true);
@@ -852,10 +852,10 @@ async function run(fileName){
     // (nearest atom ≈ |radius| − modelR). Keeps the far overview cheap.
     const coreWanted = (ar - modelR) < BUBBLE_R;
     if(coreWanted !== coreOn){ coreOn = coreWanted; for(const m of coreMeshes) m.setEnabled(coreWanted); }
-    if(engine.getFps() < 30){
-      if(++lowFrames > 60){ lowFrames = 0;
+    if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
+      if(++lowFrames > 90){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
-        if(cur < 1.0) engine.setHardwareScalingLevel(Math.min(cur + 0.15, 1.0));  // lower res until smooth
+        if(cur < 1.0) engine.setHardwareScalingLevel(Math.min(cur + 0.15, 1.0));
       }
     } else lowFrames = 0;
   });
