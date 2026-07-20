@@ -230,10 +230,9 @@ varying vec3 vViewPos;
 varying vec3 vNrmV;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  // Local Y (−0.5 near atom … +0.5 far atom); scale the cross-section toward the far end.
-  float wsc = 1.0 + taper * (position.y + 0.5);
+  float wsc = taper;   // per-lobe overall width multiplier (electronegative atom's lobe is wider → pair forms a cone)
   vec3 pos = vec3(position.x*wsc, position.y, position.z*wsc);
-  vec3 nrm = vec3(normal.x, normal.y*wsc, normal.z);   // rough normal fix for the taper
+  vec3 nrm = normal;
   vec4 vp = view * W * vec4(pos, 1.0);
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(nrm, 0.0)).xyz;
@@ -425,7 +424,7 @@ async function run(fileName){
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
-  cam.fov = 0.8; cam.minZ = 0.02; cam.inertia = 0.85; cam.panningSensibility = 20;
+  cam.fov = 0.8; cam.minZ = 0.15; cam.inertia = 0.85; cam.panningSensibility = 20;   // minZ up from 0.02 → far better depth precision (kills z-fighting stripes)
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
   cam.inputs.attached.pointers.buttons = [0, 2];          // middle button freed for drag-zoom (left=rotate, right=pan)
   canvas.addEventListener('mousedown', e => { if(e.button === 1) e.preventDefault(); });   // block middle-click autoscroll
@@ -480,18 +479,15 @@ async function run(fileName){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], lpBuf = [], colBuf = [],
-        sphIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
+  const sphBuf = [], cylBuf = [], wBuf = [], lpBuf = [], colBuf = [],
+        sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
+    cylBuf[e] = new Float32Array(halfCount[e]*16);             // bonding half-lobes (one per bond half)
+    wBuf[e]   = new Float32Array(halfCount[e]);                // per-lobe width (electronegativity)
     lpBuf[e]  = new Float32Array(atomCount[e]*lonePairs(e)*16); // lone-pair lobes (translucent)
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
   }
-  // Bonding orbitals: one cone per bond (single mesh, per-instance colour gradient + taper).
-  const maxBonds = mols.reduce((s,m)=>s+m.nb,0);
-  const coneMatBuf = new Float32Array(maxBonds*16), coneTpr = new Float32Array(maxBonds),
-        coneColA = new Float32Array(maxBonds*3), coneColB = new Float32Array(maxBonds*3);
-  let coneN = 0;
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
   const LOBE_W = 0.42;                 // hybrid-orbital lobe width (Å)
@@ -545,17 +541,16 @@ async function run(fileName){
       if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
       const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
       const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
-      const e1=m.el[a1], e2=m.el[a2];
+      const e1=m.el[a1], e2=m.el[a2], f=0.62;   // each lobe reaches past the midpoint → the two orbitals overlap
       const en1=info(e1).en, en2=info(e2).en;
-      // Cone from the less electronegative atom (point) to the more electronegative (base).
-      const lo = en1<=en2 ? [x1,y1,z1,e1] : [x2,y2,z2,e2];   // point end
-      const hi = en1<=en2 ? [x2,y2,z2,e2] : [x1,y1,z1,e1];   // base end
-      cylTo(lo[0],lo[1],lo[2], hi[0],hi[1],hi[2], coneMatBuf, coneN*16);
-      coneTpr[coneN] = 1.0 - Math.min(0.92, Math.abs(en1-en2)*0.8);   // EN diff 0 → 1 (tube); large → pointy
-      const ca=info(lo[3]).c, cb=info(hi[3]).c;
-      coneColA[coneN*3]=ca[0]; coneColA[coneN*3+1]=ca[1]; coneColA[coneN*3+2]=ca[2];
-      coneColB[coneN*3]=cb[0]; coneColB[coneN*3+1]=cb[1]; coneColB[coneN*3+2]=cb[2];
-      coneN++;
+      // Two overlapping orbitals; the more electronegative atom's lobe is wider → the pair
+      // reads as a cone (wide at the electronegative atom, tapering to the other).
+      const w1 = Math.min(1.7, Math.max(0.5, 0.55 + (en1-en2)*0.5 + 0.5));   // width share by polarity
+      const w2 = Math.min(1.7, Math.max(0.5, 0.55 + (en2-en1)*0.5 + 0.5));
+      const i1=cylIdx[e1]++, i2=cylIdx[e2]++;
+      cylTo(x1,y1,z1, x1+(x2-x1)*f, y1+(y2-y1)*f, z1+(z2-z1)*f, cylBuf[e1], i1*16);
+      cylTo(x2,y2,z2, x2+(x1-x2)*f, y2+(y1-y2)*f, z2+(z1-z2)*f, cylBuf[e2], i2*16);
+      wBuf[e1][i1] = w1; wBuf[e2][i2] = w2;
       bd[a1].push(nrm([x2-x1,y2-y1,z2-z1])); bd[a2].push(nrm([x1-x2,y1-y2,z1-z2]));
     }
     for(let k=0;k<m.na;k++){                          // non-bonding (lone-pair) orbitals → separate translucent buffer
@@ -659,12 +654,21 @@ async function run(fileName){
       });
       return mat;
     };
-    // Non-bonding (lone-pair) lobes — 50% transparent, no taper.
+    // Bonding orbitals — two overlapping opaque lobes per bond; width = polarity share.
+    if(cylIdx[e] > 0){
+      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:4, diameter:1}, scene);
+      cyl.material = lobeMat('bond'+e, 1.0, false); cyl.isPickable = false;
+      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
+      cyl.thinInstanceSetBuffer('taper', wBuf[e], 1, true);   // per-lobe width multiplier
+      cyl.thinInstanceCount = cylIdx[e];
+      cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
+    }
+    // Non-bonding (lone-pair) lobes — 50% transparent, uniform width.
     if(lpIdx[e] > 0){
       const lpm = BABYLON.MeshBuilder.CreateSphere('lp'+e, {segments:3, diameter:1}, scene);
       lpm.material = lobeMat('lobeLP'+e, 0.5, true); lpm.isPickable = false;
       lpm.thinInstanceSetBuffer('matrix', lpBuf[e], 16, true);
-      lpm.thinInstanceSetBuffer('taper', new Float32Array(lpBuf[e].length/16), 1, true);   // taper = 0 (uniform); length matches matrix
+      lpm.thinInstanceSetBuffer('taper', new Float32Array(lpBuf[e].length/16).fill(1.0), 1, true);   // width = 1 (uniform)
       lpm.thinInstanceCount = lpIdx[e];   // buffer over-allocated (atoms without bonds); render only what was written
       lpm.alwaysSelectAsActiveMesh = true; coreMeshes.push(lpm);
     }
@@ -678,28 +682,6 @@ async function run(fileName){
     shell.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     shell.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
     shell.alwaysSelectAsActiveMesh = true;
-  }
-
-  /* Bonding orbitals — one cone per bond (single mesh, per-instance colour + taper). */
-  if(coneN > 0){
-    const coneMat = new BABYLON.ShaderMaterial('cone', scene, 'cone', {
-      attributes: ['position','normal','taper','colA','colB','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd']
-    });
-    coneMat.setFloat('bubbleR', BUBBLE_R);
-    coneMat.backFaceCulling = true;
-    coneMat.onBindObservable.add(() => {
-      const eff = coneMat.getEffect(); if(!eff) return;
-      eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-    });
-    const cm = BABYLON.MeshBuilder.CreateCylinder('cone', {height:1, diameterTop:1, diameterBottom:1, tessellation:7}, scene);
-    cm.material = coneMat; cm.isPickable = false;
-    cm.thinInstanceSetBuffer('matrix', coneMatBuf, 16, true);
-    cm.thinInstanceSetBuffer('taper', coneTpr, 1, true);
-    cm.thinInstanceSetBuffer('colA', coneColA, 3, true);
-    cm.thinInstanceSetBuffer('colB', coneColB, 3, true);
-    cm.thinInstanceCount = coneN;
-    cm.alwaysSelectAsActiveMesh = true; coreMeshes.push(cm);
   }
 
   // Orbitals + nuclei are enabled only when the camera bubble reaches the model.
@@ -735,6 +717,7 @@ async function run(fileName){
     const r = cam.getDirection(BABYLON.Axis.X);   // view right
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
     const ar = Math.abs(cam.radius);                            // abs → fog still works inside / on the far side
+    cam.maxZ = ar + modelR*2.0 + 20;                            // tight far clip → depth precision (no z-fighting stripes)
     scene.fogStart = Math.max(0.1, ar - modelR*0.55);           // steeper ramp = more contrast
     scene.fogEnd   = ar + modelR*0.6;
     const zoom = fitRadius / Math.max(0.01, ar);
