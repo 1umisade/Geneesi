@@ -321,33 +321,37 @@ precision highp float;
 attribute vec3 position;
 attribute vec3 normal;
 attribute vec3 ocol;
+attribute vec3 ocen;       // this orbital's atom centre (world) → compare to the selected atom
 attribute vec4 world0;
 attribute vec4 world1;
 attribute vec4 world2;
 attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec3 selCenter;    // focused atom centre (or far away = none selected)
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
+varying float vSel;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 vp = view * W * vec4(position, 1.0);
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(normal, 0.0)).xyz;
   vCol = ocol;
+  vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['orbFragmentShader'] = `
 precision highp float;
 uniform float bubbleR;
-uniform float opacity;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
+varying float vSel;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   if(length(vViewPos) >= bubbleR) discard;   // orbitals only inside the camera sphere
@@ -358,7 +362,8 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 3.0);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.2, 0.0, 1.0));   // electric-blue outline
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), opacity);
+  float op = mix(1.0, 0.35, vSel);            // only the selected atom's orbitals are transparent
+  gl_FragColor = vec4(mix(fogColor, c, fog), op);
 }`;
 
 /* Hover/flash highlight: a bright white Fresnel rim (transparent centre) around the nucleus. */
@@ -366,14 +371,20 @@ BABYLON.Effect.ShadersStore['hloVertexShader'] = `
 precision highp float;
 attribute vec3 position;
 attribute vec3 normal;
-uniform mat4 worldView;
-uniform mat4 worldViewProjection;
+attribute vec4 world0;
+attribute vec4 world1;
+attribute vec4 world2;
+attribute vec4 world3;
+uniform mat4 view;
+uniform mat4 projection;
 varying vec3 vVP;
 varying vec3 vN;
 void main(void){
-  vVP = (worldView * vec4(position, 1.0)).xyz;
-  vN  = (worldView * vec4(normal, 0.0)).xyz;
-  gl_Position = worldViewProjection * vec4(position, 1.0);
+  mat4 W = mat4(world0, world1, world2, world3);
+  vec4 vp = view * W * vec4(position, 1.0);
+  vVP = vp.xyz;
+  vN  = (view * W * vec4(normal, 0.0)).xyz;
+  gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['hloFragmentShader'] = `
 precision highp float;
@@ -712,27 +723,30 @@ async function run(fileName){
                   cube.concat([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) ];   // f — 14
   const TMUL = [0.60, 1.0, 1.45, 1.9];   // per-type brightness of the element colour (s dim … f bright) → tells s/p/d/f apart
   const orbCount = e => econf(e).reduce((s,sh)=>s + (sh[1]===0 ? 1 : OTMPL[sh[1]].length), 0);
-  const orbBuf = [], orbColBuf = [];
+  const orbBuf = [], orbColBuf = [], orbCenBuf = [];
   for(let e=0;e<nEl;e++){
     orbBuf[e]    = new Float32Array(atomCount[e]*orbCount(e)*16);
     orbColBuf[e] = new Float32Array(atomCount[e]*orbCount(e)*3);
+    orbCenBuf[e] = new Float32Array(atomCount[e]*orbCount(e)*3);   // atom centre per orbital (selection test)
   }
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const cfg = econf(e), sb = sphBuf[e], ob = orbBuf[e], oc = orbColBuf[e], ec = info(e).c; let w = 0;
+    const cfg = econf(e), sb = sphBuf[e], oc = orbColBuf[e], oce = orbCenBuf[e], ec = info(e).c; let w = 0;
+    const put = () => { oce[w*3]=cx0; oce[w*3+1]=cy0; oce[w*3+2]=cz0; };
+    let cx0, cy0, cz0;
     for(let a=0;a<atomCount[e];a++){
-      const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
+      const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14]; cx0=cx; cy0=cy; cz0=cz;
       for(const sh of cfg){
         const R = sh[0]*SHELL_STEP, ty = sh[1], m = TMUL[ty];   // element colour, brightened by orbital type
         const cr=Math.min(1,ec[0]*m), cg=Math.min(1,ec[1]*m), cb=Math.min(1,ec[2]*m);
         if(ty === 0){                                     // s → sphere
           sphereMat(cx,cy,cz, R*0.72, orbBuf[e], w*16);
-          oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; w++;
+          oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; put(); w++;
         } else {                                          // p/d/f → elongated lobes (dumbbell / cloverleaf)
           const Lw = R*0.34;
           for(const d of OTMPL[ty]){
             cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);
-            oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; w++;
+            oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; put(); w++;
           }
         }
       }
@@ -758,6 +772,7 @@ async function run(fileName){
     return mat;
   };
 
+  const selCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);   // focused atom centre (far = none) → its orbitals go transparent
   setLbl('Uploading to GPU…'); await yield_();
   for(let e=0;e<nEl;e++){
     if(atomCount[e] === 0) continue;
@@ -773,19 +788,21 @@ async function run(fileName){
     /* Electron orbitals — real-shaped lobes (s sphere, p dumbbell, d/f cloverleaf). */
     if(orbCount(e) > 0){
       const orbMat = new BABYLON.ShaderMaterial('orb'+e, scene, 'orb', {
-        attributes: ['position','normal','ocol','world0','world1','world2','world3'],
-        uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd']
+        attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
+        uniforms: ['view','projection','bubbleR','selCenter','fogColor','fogStart','fogEnd']
       });
-      orbMat.setFloat('bubbleR', BUBBLE_R); orbMat.setFloat('opacity', 0.4);   // transparent (see-through nested shells)
-      orbMat.alpha = 0.4; orbMat.disableDepthWrite = true; orbMat.backFaceCulling = false;
+      orbMat.setFloat('bubbleR', BUBBLE_R);
+      orbMat.alpha = 0.999; orbMat.forceDepthWrite = true; orbMat.backFaceCulling = true;   // opaque by default; selected atom → transparent
       orbMat.onBindObservable.add(() => {
         const eff = orbMat.getEffect(); if(!eff) return;
+        eff.setVector3('selCenter', selCenter);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       });
       const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:6, diameter:1}, scene);   // smooth orbital lobes (FPS not a concern)
       orb.material = orbMat; orb.isPickable = false;
       orb.thinInstanceSetBuffer('matrix', orbBuf[e], 16, true);
       orb.thinInstanceSetBuffer('ocol', orbColBuf[e], 3, true);
+      orb.thinInstanceSetBuffer('ocen', orbCenBuf[e], 3, true);
       orb.alwaysSelectAsActiveMesh = true; coreMeshes.push(orb);
     }
 
@@ -889,14 +906,15 @@ async function run(fileName){
   /* ── Hover highlight + double-click flash/focus ──────────────────────────
      A single emissive sphere follows the atom under the cursor; double-click
      pulses it and eases the camera onto that atom. */
-  // Bright white outline (a Fresnel rim, not a filled ball) around the hovered/clicked nucleus.
+  // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
   const hlMat = new BABYLON.ShaderMaterial('hlMat', scene, 'hlo', {
-    attributes: ['position','normal'], uniforms: ['worldView','worldViewProjection']
+    attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection']
   });
   hlMat.alpha = 0.5; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;
-  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:24}, scene);
+  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:16}, scene);
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
+  const hlBuf = new Float32Array(80*16);   // up to 80 nucleons
 
   // Exact ray-vs-sphere pick: nearest atom (by true vdW sphere) in front of the camera.
   // The impostor quads don't match the visible spheres, so scene.pick was unreliable
@@ -920,26 +938,34 @@ async function run(fileName){
     }
     if(bE < 0) return null;
     const sb = sphBuf[bE], o = bA*16;
-    return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), nr: nucClusterR(bE) };
+    return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), nr: nucClusterR(bE), e: bE, idx: bA };
   };
 
-  let hoverT = 0, flashUntil = 0, flashC = null, flashVr = 0;
-  const setHL = (c, vr, scale) => {
-    hl.position.copyFrom(c); const s = 2*vr*scale; hl.scaling.set(s,s,s);
-    hl.setEnabled(true);   // rim shader drives its own opacity
+  let hoverT = 0, flashUntil = 0, flashAtom = null;
+  // Outline every nucleon of the given atom (thin instances of the rim sphere).
+  const setHL = (atom, scale) => {
+    const e = atom.e, idx = atom.idx, A = info(e).n, nb = nucBuf[e], R = NUCLEON_R * scale;
+    for(let i=0;i<A;i++){
+      const src = (idx*A + i)*16, o = i*16;
+      hlBuf.set([2*R,0,0,0, 0,2*R,0,0, 0,0,2*R,0, nb[src+12],nb[src+13],nb[src+14],1], o);
+    }
+    hl.thinInstanceSetBuffer('matrix', hlBuf, 16, true);
+    hl.thinInstanceCount = A;
+    hl.setEnabled(true);
   };
-  // Per-frame: run the flash pulse, else keep the hover glow parked on the atom.
+  // Per-frame: run the flash pulse on the clicked atom's nucleons.
   scene.onBeforeRenderObservable.add(() => {
     const now = performance.now();
-    if(now < flashUntil && flashC){
+    if(now < flashUntil && flashAtom){
       const t = (flashUntil - now) / 600;                     // 1 → 0
-      setHL(flashC, flashVr, 1.05 * (1.0 + 0.7*t));   // bright pop that shrinks in
+      setHL(flashAtom, 1.35 * (1.0 + 0.6*t));   // bright pop that shrinks in
     }
   });
 
   const centerOnAtom = () => {
     const a = pickAtom(); if(!a) return;
-    flashC = a.center; flashVr = a.nr; flashUntil = performance.now() + 600;   // flash the nucleus
+    selCenter.copyFrom(a.center);   // this atom's orbitals become transparent
+    flashAtom = a; flashUntil = performance.now() + 600;   // flash the nucleons
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     cam.inertialPanningX = cam.inertialPanningY = 0;
     BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,        // focus
@@ -953,7 +979,7 @@ async function run(fileName){
       if(dragging || p.event.buttons || now - hoverT < 80 || now < flashUntil) return;   // skip while any button held; throttle; don't fight the flash
       hoverT = now;
       const a = pickAtom();
-      if(a) setHL(a.center, a.nr, 1.3); else hl.setEnabled(false);   // bright white outline around the nucleus
+      if(a) setHL(a, 1.35); else hl.setEnabled(false);   // white outline around each nucleon
     }
   });
 
