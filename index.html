@@ -305,7 +305,7 @@ async function run(fileName){
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
   const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));
+  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.75)));
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
@@ -497,6 +497,9 @@ async function run(fileName){
     eff.setFloat('r1', 2.5 * ss);
     eff.setFloat('r2', 5.0 * ss);
   };
+  // FXAA last: smooths edges the supersampling can't fully resolve. Runs after AO
+  // so it doesn't disturb the depth packed in alpha that AO reads.
+  new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
 }
