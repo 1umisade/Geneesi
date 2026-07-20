@@ -193,19 +193,16 @@ void main(void){
   vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
   vec3 posV = vCenterV + n * radius;
   float dist = length(vCenterV);           // atom-centre distance from the camera
-  if(isShell < 0.5 && dist >= bubbleR) discard;   // inner core only renders inside the bubble
+  if(isShell < 0.5 && dist >= bubbleR) discard;   // core (nuclei) only INSIDE the bubble
+  if(isShell > 0.5 && dist <  bubbleR) discard;   // shell only OUTSIDE the bubble (orbitals take over inside)
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
-  // shell: translucent inside the bubble, fading to fully opaque at its edge
-  float shellOp = mix(0.30, 1.0, smoothstep(bubbleR*0.80, bubbleR, dist));
-  float op = (isShell > 0.5) ? shellOp : 1.0;
-  float solid = step(0.999, op);            // ink rim / self-shade only where opaque
-  col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2) * solid;              // self-shade only on solid spheres
-  col *= mix(1.0, mix(1.0, 0.12, smoothstep(0.9, 1.0, r2)), solid);  // ink rim only on solid spheres
+  col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
+  col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));            // ink rim → Goodsell outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, col, fog), op);
+  gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
 }`;
 
 /* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
@@ -241,8 +238,13 @@ varying vec3 vNrmV;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   if(length(vViewPos) >= bubbleR) discard;   // orbital lobes only inside the camera bubble
-  float ndl = dot(normalize(vNrmV), L) * 0.5 + 0.5;
+  vec3 N = normalize(vNrmV);
+  float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = color * (0.55 + 0.45 * ndl);
+  // Electric-blue Fresnel rim → thin glowing orbital outline at the silhouette
+  vec3 V = normalize(-vViewPos);
+  float fres = pow(1.0 - abs(dot(N, V)), 4.5);
+  c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), opacity);
 }`;
@@ -411,14 +413,13 @@ async function run(fileName){
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
-  const sphBuf = [], cylBuf = [], colBuf = [], elColBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
+  const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
+  const lonePairs = e => LP[EL_LIST[e]] || 0;
+  const sphBuf = [], cylBuf = [], colBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
-    cylBuf[e] = new Float32Array(halfCount[e]*16);
+    cylBuf[e] = new Float32Array((halfCount[e] + atomCount[e]*lonePairs(e))*16);   // bonding + lone-pair lobes
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
-    elColBuf[e] = new Float32Array(atomCount[e]*4); // per-instance CPK element colour (inner ball-and-stick)
-    const ec = info(e).c;
-    for(let j=0;j<atomCount[e];j++){ elColBuf[e][j*4]=ec[0]; elColBuf[e][j*4+1]=ec[1]; elColBuf[e][j*4+2]=ec[2]; elColBuf[e][j*4+3]=1; }
   }
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
@@ -433,6 +434,29 @@ async function run(fileName){
     _s.set(LOBE_W,len,LOBE_W); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
     BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
   }
+  const LP_LEN = 0.75;                  // lone-pair lobe length (Å)
+  const nrm = v => { const l=Math.hypot(v[0],v[1],v[2])||1e-6; return [v[0]/l,v[1]/l,v[2]/l]; };
+  const crs = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const perp = v => { const a = Math.abs(v[0])<0.9 ? [1,0,0] : [0,1,0]; return nrm(crs(v,a)); };
+  const rotAx = (v,k,ang) => { const c=Math.cos(ang), s=Math.sin(ang), kv=crs(k,v), d=k[0]*v[0]+k[1]*v[1]+k[2]*v[2];
+    return [v[0]*c+kv[0]*s+k[0]*d*(1-c), v[1]*c+kv[1]*s+k[1]*d*(1-c), v[2]*c+kv[2]*s+k[2]*d*(1-c)]; };
+  // Lone-pair directions from an atom's bond directions (VSEPR: point away from the bonds).
+  function lonePairDirs(dirs, lp){
+    if(dirs.length===0) return [];
+    const bis = nrm([-(dirs.reduce((s,d)=>s+d[0],0)), -(dirs.reduce((s,d)=>s+d[1],0)), -(dirs.reduce((s,d)=>s+d[2],0))]);
+    if(lp===1) return [bis];
+    if(lp===2){
+      const axis = dirs.length>=2 ? nrm(crs(dirs[0],dirs[1])) : perp(dirs[0]);
+      return [rotAx(bis,axis,0.9553), rotAx(bis,axis,-0.9553)];   // ±54.7° → ~tetrahedral pair
+    }
+    // lp===3 (e.g. Cl): cone of three around the axis opposite the single bond
+    const a = dirs[0], p = perp(a), q = crs(a,p), out=[];
+    for(let i=0;i<3;i++){ const ang=i*2.0944;
+      out.push(nrm([a[0]*(-1/3)+0.9428*(Math.cos(ang)*p[0]+Math.sin(ang)*q[0]),
+                    a[1]*(-1/3)+0.9428*(Math.cos(ang)*p[1]+Math.sin(ang)*q[1]),
+                    a[2]*(-1/3)+0.9428*(Math.cos(ang)*p[2]+Math.sin(ang)*q[2])])); }
+    return out;
+  }
 
   for(const m of mols){
     const ox=m.ox, oy=m.oy, oz=m.oz;
@@ -443,6 +467,8 @@ async function run(fileName){
       const col = CAT_COLORS[m.cat[k]];
       colBuf[e][ci*4]=col[0]; colBuf[e][ci*4+1]=col[1]; colBuf[e][ci*4+2]=col[2]; colBuf[e][ci*4+3]=1;
     }
+    const bd = [];                                   // per-atom bond directions (for lone-pair placement)
+    for(let k=0;k<m.na;k++) bd[k] = [];
     for(let k=0;k<m.nb;k++){
       const a1=m.b1[k], a2=m.b2[k];
       if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
@@ -451,6 +477,14 @@ async function run(fileName){
       const e1=m.el[a1], e2=m.el[a2], f=0.62;   // each lobe reaches past the midpoint → the two orbitals overlap
       cylTo(x1,y1,z1, x1+(x2-x1)*f, y1+(y2-y1)*f, z1+(z2-z1)*f, cylBuf[e1], (cylIdx[e1]++)*16);
       cylTo(x2,y2,z2, x2+(x1-x2)*f, y2+(y1-y2)*f, z2+(z1-z2)*f, cylBuf[e2], (cylIdx[e2]++)*16);
+      bd[a1].push(nrm([x2-x1,y2-y1,z2-z1])); bd[a2].push(nrm([x1-x2,y1-y2,z1-z2]));
+    }
+    for(let k=0;k<m.na;k++){                          // non-bonding (lone-pair) orbitals
+      const e=m.el[k], lp=lonePairs(e);
+      if(lp===0 || bd[k].length===0) continue;
+      const ax=m.x[k]+ox, ay=m.y[k]+oy, az=m.z[k]+oz;
+      for(const d of lonePairDirs(bd[k], lp))
+        cylTo(ax,ay,az, ax+d[0]*LP_LEN, ay+d[1]*LP_LEN, az+d[2]*LP_LEN, cylBuf[e], (cylIdx[e]++)*16);
     }
   }
   await yield_();
@@ -469,7 +503,6 @@ async function run(fileName){
     const s = 1/Math.SQRT2;
     return p.map(q => [q[0]*s, q[1]*s, q[2]*s]);
   })();
-  const PROTON = [0.90,0.28,0.24], NEUTRON = [0.60,0.63,0.68];
   // Every proton & neutron is the SAME size; the nucleus grows as it packs more of
   // them (radius ∝ A^⅓), so hydrogen's single nucleon matches carbon's nucleons.
   const NUCLEON_R = 0.13, SPACING = 2*NUCLEON_R;
@@ -483,6 +516,9 @@ async function run(fileName){
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
     const A = info(e).n, Z = info(e).z, sc = SPACING, nb = nucBuf[e], nc = nucColBuf[e], sb = sphBuf[e];
+    const ec = info(e).c;                              // element colour drives both nucleon types
+    const PC = [ec[0], ec[1], ec[2]];                  // protons  = element colour
+    const NC = [ec[0]*0.45+0.55, ec[1]*0.45+0.55, ec[2]*0.45+0.55];   // neutrons = brighter (toward white)
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
       for(let i=0;i<A;i++){
@@ -490,7 +526,7 @@ async function run(fileName){
         nb[o]=1; nb[o+5]=1; nb[o+10]=1; nb[o+15]=1;              // identity rotation/scale
         nb[o+12] = cx + fcc[i][0]*sc; nb[o+13] = cy + fcc[i][1]*sc; nb[o+14] = cz + fcc[i][2]*sc;
         const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);   // spread Z protons evenly through the A nucleons
-        const col = proton ? PROTON : NEUTRON, co = idx*4;
+        const col = proton ? PC : NC, co = idx*4;
         nc[co]=col[0]; nc[co+1]=col[1]; nc[co+2]=col[2]; nc[co+3]=1;
       }
     }
@@ -547,9 +583,19 @@ async function run(fileName){
       const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:3, diameter:1}, scene);   // very low-poly → ellipsoid lobe
       cyl.material = bondMat; cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
+      cyl.thinInstanceCount = cylIdx[e];   // buffer is over-allocated (lone pairs); render only what was written
       cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
     }
-    // (Van der Waals shell removed — the orbitals are the representation now.)
+
+    /* Van der Waals shell (opaque, component colours). Renders only OUTSIDE the
+       camera bubble (the shader discards it inside) — so distant atoms show the
+       normal surface while near atoms open into orbitals. Always enabled. */
+    const shellMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1
+    const shell = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
+    shell.material = shellMat; shell.isPickable = false;
+    shell.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
+    shell.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
+    shell.alwaysSelectAsActiveMesh = true;
   }
   // Orbitals + nuclei are enabled only when the camera bubble reaches the model.
   let coreOn = false;
@@ -576,7 +622,6 @@ async function run(fileName){
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
   const fitRadius = cam.radius;                    // radius at which the whole model fits
-  cam.radius = Math.min(fitRadius, modelR + BUBBLE_R*0.3);   // start inside the reveal-bubble so orbitals are visible on load
   const zoomEl = document.getElementById('zoomval');
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
