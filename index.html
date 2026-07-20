@@ -367,12 +367,20 @@ async function run(fileName){
   const showTips = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = null; tips.classList.add('show'); };
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
-  // Middle-button vertical drag = smooth zoom (drag up → in, drag down → out; can cross 0).
-  const dragZoom = dz => {
-    const lo = cam.lowerRadiusLimit ?? -1e9, hi = cam.upperRadiusLimit ?? 1e9;
-    const step = dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005);
-    cam.radius = Math.max(lo, Math.min(hi, cam.radius + step));
+  // Zoom that flies THROUGH the model without flipping: once the radius hits a small
+  // floor, the pivot dollies forward along the view instead of the radius going negative.
+  const zoomBy = delta => {                 // delta < 0 = closer
+    const hi = cam.upperRadiusLimit ?? 1e9, minR = fitRadius * 0.02;
+    const r = cam.radius + delta;
+    if(r < minR){
+      const fwd = cam.getForwardRay(1).direction;   // camera → target
+      cam.target.addInPlace(fwd.scale(minR - r));    // slide pivot forward; camera follows (no flip)
+      cam.radius = minR;
+    } else {
+      cam.radius = Math.min(r, hi);
+    }
   };
+  const dragZoom = dz => zoomBy(dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005));  // middle-drag
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){ showTips(); dragging = true; }
     else if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 1) showTips();
@@ -382,14 +390,15 @@ async function run(fileName){
     }
   });
 
-  // Scroll-wheel zoom stays enabled; only the arrow-key camera input is removed.
+  // Custom wheel + buttons route through zoomBy so they dolly through too (no flip).
   cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
-  const zoom = dir => {   // dir: -1 = in, +1 = out — additive step with a floor so it can cross 0 (fly through)
-    const lo = cam.lowerRadiusLimit ?? -1e9, hi = cam.upperRadiusLimit ?? 1e9;
-    const step = Math.max(fitRadius * 0.04, Math.abs(cam.radius) * 0.06);
-    cam.radius = Math.max(lo, Math.min(hi, cam.radius + dir * step));
-  };
-  const btnZoom = dir => { zoom(dir); showTips(); hideTipsSoon(); };   // tap keeps tips visible 2 s more
+  cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    zoomBy(Math.sign(e.deltaY) * Math.max(fitRadius * 0.03, Math.abs(cam.radius) * 0.06));
+    showTips(); hideTipsSoon();
+  }, {passive:false});
+  const btnZoom = dir => { zoomBy(dir * Math.max(fitRadius * 0.04, Math.abs(cam.radius) * 0.06)); showTips(); hideTipsSoon(); };
   document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
   document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
   // Ambient fill + a headlight that follows the camera (direction set each frame),
@@ -508,7 +517,7 @@ async function run(fileName){
        outside. forceDepthWrite → nearest-wins, so overlaps don't stack. */
     const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1
     impMat.alpha = 0.30;                 // transparent render queue (blending enabled)
-    impMat.disableDepthWrite = true;     // see-through: farther shells still render & blend behind nearer ones
+    impMat.forceDepthWrite = true;       // depth-write on → stable ordering (no disappearing atoms while rotating)
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
     fill.thinInstanceEnablePicking = true;
@@ -533,7 +542,7 @@ async function run(fileName){
   const aspect = engine.getRenderWidth()/Math.max(engine.getRenderHeight(),1);
   const tanV = Math.tan(cam.fov/2);
   cam.radius = Math.max(dimY/2/tanV, dimX/2/(tanV*aspect), dimZ)*1.08;
-  cam.lowerRadiusLimit = -Math.hypot(dimX,dimY,dimZ)*1.2;   // negative → zoom through the centre and out the far side
+  cam.lowerRadiusLimit = cam.radius*0.02;   // small positive floor → no camera flip; zoomBy() dollies through instead
   cam.upperRadiusLimit = cam.radius*5;
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
