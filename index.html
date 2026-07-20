@@ -314,6 +314,52 @@ void main(void){
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);
 }`;
+
+/* Electron-orbital lobes: real-shaped ellipsoids, per-instance colour by type (s/p/d/f). */
+BABYLON.Effect.ShadersStore['orbVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec3 ocol;
+attribute vec4 world0;
+attribute vec4 world1;
+attribute vec4 world2;
+attribute vec4 world3;
+uniform mat4 view;
+uniform mat4 projection;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+varying vec3 vCol;
+void main(void){
+  mat4 W = mat4(world0, world1, world2, world3);
+  vec4 vp = view * W * vec4(position, 1.0);
+  vViewPos = vp.xyz;
+  vNrmV = (view * W * vec4(normal, 0.0)).xyz;
+  vCol = ocol;
+  gl_Position = projection * vp;
+}`;
+BABYLON.Effect.ShadersStore['orbFragmentShader'] = `
+precision highp float;
+uniform float bubbleR;
+uniform float opacity;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogEnd;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+varying vec3 vCol;
+const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
+void main(void){
+  if(length(vViewPos) >= bubbleR) discard;   // orbitals only inside the camera sphere
+  vec3 N = normalize(vNrmV);
+  float ndl = dot(N, L) * 0.5 + 0.5;
+  vec3 c = vCol * (0.55 + 0.45 * ndl);
+  vec3 V = normalize(-vViewPos);
+  float fres = pow(1.0 - abs(dot(N, V)), 3.0);
+  c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.2, 0.0, 1.0));   // electric-blue outline
+  float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
+  gl_FragColor = vec4(mix(fogColor, c, fog), opacity);
+}`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
 BABYLON.Effect.ShadersStore['aoFragmentShader'] = `
@@ -419,7 +465,7 @@ async function run(fileName){
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
   const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.4)));   // lighter supersample for the dense orbital scene
+  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.15)));   // lighter supersample for the very dense orbital scene
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
@@ -494,16 +540,20 @@ async function run(fileName){
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
   const LOBE_W = 0.42;                 // hybrid-orbital lobe width (Å)
-  // Build an ellipsoid (lobe) spanning s→e: width LOBE_W across, length = |s→e| along the axis.
-  function cylTo(sx,sy,sz, ex,ey,ez, dstBuf, dstOff){
+  // Build an ellipsoid (lobe) spanning s→e: cross-section `width`, length = |s→e| along the axis.
+  function cylTo(sx,sy,sz, ex,ey,ez, dstBuf, dstOff, width){
     let dx=ex-sx, dy=ey-sy, dz=ez-sz;
     const len=Math.hypot(dx,dy,dz)||1e-6, inv=1/len; dx*=inv; dy*=inv; dz*=inv;
     if(dy>0.999999) _q.set(0,0,0,1);
     else if(dy<-0.999999) _q.set(1,0,0,0);
     else { _ax.set(dz,0,-dx); _ax.normalize(); BABYLON.Quaternion.RotationAxisToRef(_ax, Math.acos(dy), _q); }
-    _s.set(LOBE_W,len,LOBE_W); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
+    _s.set(width||LOBE_W,len,width||LOBE_W); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
     BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
   }
+  const sphereMat = (cx,cy,cz, R, dstBuf, dstOff) => {   // uniform sphere (for s orbitals)
+    _s.set(2*R,2*R,2*R); _q.set(0,0,0,1); _p.set(cx,cy,cz);
+    BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
+  };
   const LP_LEN = 0.75;                  // lone-pair lobe length (Å)
   const nrm = v => { const l=Math.hypot(v[0],v[1],v[2])||1e-6; return [v[0]/l,v[1]/l,v[2]/l]; };
   const crs = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
@@ -616,10 +666,10 @@ async function run(fileName){
     await yield_();
   }
 
-  /* ── Electron orbitals: every occupied subshell per atom, as a cloud of impostor
-     spheres. s = centre sphere, p = 6-lobe dumbbell, d = 8-lobe cloverleaf, f = 14.
-     Shell pushed out by n; colour-coded by orbital type (s/p/d/f). ── */
-  const ORB_R = 0.15, SHELL_STEP = 0.30;
+  /* ── Electron orbitals: real-shaped lobes for every occupied subshell per atom.
+     s = sphere; p = dumbbell (2 lobes/axis); d = 8-lobe cloverleaf; f = 14.
+     Shell radius grows with n; colour-coded by orbital type (s/p/d/f). ── */
+  const SHELL_STEP = 0.34;
   const ECONF = {
     H:[[1,0]], C:[[1,0],[2,0],[2,1]], N:[[1,0],[2,0],[2,1]], O:[[1,0],[2,0],[2,1]], FB:[[1,0],[2,0],[2,1]],
     S:[[1,0],[2,0],[2,1],[3,0],[3,1]], P:[[1,0],[2,0],[2,1],[3,0],[3,1]], CL:[[1,0],[2,0],[2,1],[3,0],[3,1]],
@@ -631,16 +681,16 @@ async function run(fileName){
   };
   const econf = e => ECONF[EL_LIST[e]] || [[1,0]];
   const cube = (() => { const o=[]; for(let a=-1;a<=1;a+=2)for(let b=-1;b<=1;b+=2)for(let c=-1;c<=1;c+=2) o.push([a/1.732,b/1.732,c/1.732]); return o; })();
-  const OTMPL = [ [[0,0,0]],                                                   // s
-                  [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],        // p
-                  cube,                                                        // d (8)
-                  cube.concat([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) ];   // f (14)
+  const OTMPL = [ [],                                                          // s (sphere, handled separately)
+                  [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],        // p — 6 lobes
+                  cube,                                                        // d — 8 lobes
+                  cube.concat([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) ];   // f — 14
   const OTCOL = [ [0.85,0.85,0.92], [0.30,0.65,1.0], [0.35,0.90,0.45], [0.92,0.45,0.92] ];  // s / p / d / f
-  const orbCount = e => econf(e).reduce((s,sh)=>s+OTMPL[sh[1]].length, 0);
+  const orbCount = e => econf(e).reduce((s,sh)=>s + (sh[1]===0 ? 1 : OTMPL[sh[1]].length), 0);
   const orbBuf = [], orbColBuf = [];
   for(let e=0;e<nEl;e++){
     orbBuf[e]    = new Float32Array(atomCount[e]*orbCount(e)*16);
-    orbColBuf[e] = new Float32Array(atomCount[e]*orbCount(e)*4);
+    orbColBuf[e] = new Float32Array(atomCount[e]*orbCount(e)*3);
   }
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
@@ -648,13 +698,16 @@ async function run(fileName){
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
       for(const sh of cfg){
-        const R = sh[0]*SHELL_STEP, tmpl = OTMPL[sh[1]], col = OTCOL[sh[1]];
-        for(const d of tmpl){
-          const o = w*16;
-          ob[o]=1; ob[o+5]=1; ob[o+10]=1; ob[o+15]=1;
-          ob[o+12] = cx + d[0]*R; ob[o+13] = cy + d[1]*R; ob[o+14] = cz + d[2]*R;
-          const co = w*4; oc[co]=col[0]; oc[co+1]=col[1]; oc[co+2]=col[2]; oc[co+3]=0;   // alpha 0 → no proton rim
-          w++;
+        const R = sh[0]*SHELL_STEP, ty = sh[1], col = OTCOL[ty];
+        if(ty === 0){                                     // s → sphere
+          sphereMat(cx,cy,cz, R*0.72, orbBuf[e], w*16);
+          oc[w*3]=col[0]; oc[w*3+1]=col[1]; oc[w*3+2]=col[2]; w++;
+        } else {                                          // p/d/f → elongated lobes (dumbbell / cloverleaf)
+          const Lw = R*0.34;
+          for(const d of OTMPL[ty]){
+            cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);
+            oc[w*3]=col[0]; oc[w*3+1]=col[1]; oc[w*3+2]=col[2]; w++;
+          }
         }
       }
     }
@@ -691,13 +744,22 @@ async function run(fileName){
     nuc.thinInstanceSetBuffer('instanceColor', nucColBuf[e], 4, true);
     nuc.alwaysSelectAsActiveMesh = true; coreMeshes.push(nuc);
 
-    /* Electron orbitals — s/p/d/f impostor-sphere clouds, colour-coded by type. */
+    /* Electron orbitals — real-shaped lobes (s sphere, p dumbbell, d/f cloverleaf). */
     if(orbCount(e) > 0){
-      const orbMat = impostorMat('impOrb'+e, ORB_R, 0.0, 0.0);
-      const orb = BABYLON.MeshBuilder.CreatePlane('o'+e, {size:2}, scene);
+      const orbMat = new BABYLON.ShaderMaterial('orb'+e, scene, 'orb', {
+        attributes: ['position','normal','ocol','world0','world1','world2','world3'],
+        uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd']
+      });
+      orbMat.setFloat('bubbleR', BUBBLE_R); orbMat.setFloat('opacity', 1.0);   // opaque → early-z (fast)
+      orbMat.backFaceCulling = true;
+      orbMat.onBindObservable.add(() => {
+        const eff = orbMat.getEffect(); if(!eff) return;
+        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
+      });
+      const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:2, diameter:1}, scene);   // very low-poly (octahedral) → cheap
       orb.material = orbMat; orb.isPickable = false;
       orb.thinInstanceSetBuffer('matrix', orbBuf[e], 16, true);
-      orb.thinInstanceSetBuffer('instanceColor', orbColBuf[e], 4, true);
+      orb.thinInstanceSetBuffer('ocol', orbColBuf[e], 3, true);
       orb.alwaysSelectAsActiveMesh = true; coreMeshes.push(orb);
     }
 
