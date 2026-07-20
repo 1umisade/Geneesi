@@ -218,10 +218,10 @@ void main(void){
     vec2 dir = vec2(cos(a), sin(a));
     float n1 = texture2D(textureSampler, vUV + dir*texel*2.5).a;
     float n2 = texture2D(textureSampler, vUV + dir*texel*5.0).a;
-    // range check: only occlude across small depth gaps (crevices), not big
-    // silhouette jumps — kills the offset outline-halo artifact
-    occ += step(n1 + 0.004, d) * (1.0 - smoothstep(0.010, 0.028, d - n1));
-    occ += 0.5 * step(n2 + 0.006, d) * (1.0 - smoothstep(0.014, 0.034, d - n2));
+    // range check: occlude ONLY across tight contact crevices; reject any wider
+    // depth gap so no soft occlusion haze forms around silhouette edges
+    occ += step(n1 + 0.004, d) * (1.0 - smoothstep(0.006, 0.014, d - n1));
+    occ += 0.5 * step(n2 + 0.006, d) * (1.0 - smoothstep(0.008, 0.018, d - n2));
   }
   occ = min(occ / 12.0, 1.0);
   gl_FragColor = vec4(c.rgb * (1.0 - strength*occ), 1.0);
