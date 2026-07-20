@@ -54,17 +54,17 @@ const FILL_SCALE = 1.0;  // space-filling sphere size as a fraction of vdW radiu
 
 /* ── Standard CPK-ish colours (c), ball radii (r) + van der Waals radii (vr), Å.
       C dark grey, H light grey.  vr drives the space-filling surface mode.  ── */
-/* n = nucleon count (mass number) → nucleus size; z = proton count (rest are neutrons). */
+/* n = nucleon count (mass number) → nucleus size; z = proton count; en = Pauling electronegativity (bond polarity). */
 const ELEM = {
-  H :{c:[0.88,0.88,0.88], r:0.23, vr:1.10, n:1,  z:1 },   C :{c:[0.24,0.24,0.24], r:0.32, vr:1.70, n:12, z:6 },
-  N :{c:[0.19,0.31,0.97], r:0.31, vr:1.55, n:14, z:7 },   O :{c:[0.94,0.15,0.15], r:0.30, vr:1.52, n:16, z:8 },
-  S :{c:[1.00,0.78,0.16], r:0.38, vr:1.80, n:32, z:16},   P :{c:[1.00,0.50,0.00], r:0.38, vr:1.80, n:31, z:15},
-  MG:{c:[0.33,0.78,0.33], r:0.42, vr:1.73, n:24, z:12},   FE:{c:[0.88,0.40,0.20], r:0.42, vr:1.56, n:56, z:26},
-  MN:{c:[0.61,0.48,0.78], r:0.42, vr:1.61, n:55, z:25},   CA:{c:[0.24,0.80,0.24], r:0.46, vr:1.97, n:40, z:20},
-  ZN:{c:[0.49,0.51,0.69], r:0.40, vr:1.39, n:65, z:30},   CU:{c:[0.78,0.50,0.20], r:0.40, vr:1.40, n:64, z:29},
-  CL:{c:[0.24,0.94,0.24], r:0.36, vr:1.75, n:35, z:17},   NA:{c:[0.67,0.36,0.95], r:0.46, vr:2.27, n:23, z:11},
-  K :{c:[0.56,0.25,0.83], r:0.52, vr:2.75, n:39, z:19},   CO:{c:[0.94,0.56,0.63], r:0.42, vr:1.52, n:59, z:27},
-  FB:{c:[0.55,0.55,0.55], r:0.32, vr:1.60, n:12, z:6 },
+  H :{c:[0.88,0.88,0.88], r:0.23, vr:1.10, n:1,  z:1 , en:2.20},   C :{c:[0.24,0.24,0.24], r:0.32, vr:1.70, n:12, z:6 , en:2.55},
+  N :{c:[0.19,0.31,0.97], r:0.31, vr:1.55, n:14, z:7 , en:3.04},   O :{c:[0.94,0.15,0.15], r:0.30, vr:1.52, n:16, z:8 , en:3.44},
+  S :{c:[1.00,0.78,0.16], r:0.38, vr:1.80, n:32, z:16, en:2.58},   P :{c:[1.00,0.50,0.00], r:0.38, vr:1.80, n:31, z:15, en:2.19},
+  MG:{c:[0.33,0.78,0.33], r:0.42, vr:1.73, n:24, z:12, en:1.31},   FE:{c:[0.88,0.40,0.20], r:0.42, vr:1.56, n:56, z:26, en:1.83},
+  MN:{c:[0.61,0.48,0.78], r:0.42, vr:1.61, n:55, z:25, en:1.55},   CA:{c:[0.24,0.80,0.24], r:0.46, vr:1.97, n:40, z:20, en:1.00},
+  ZN:{c:[0.49,0.51,0.69], r:0.40, vr:1.39, n:65, z:30, en:1.65},   CU:{c:[0.78,0.50,0.20], r:0.40, vr:1.40, n:64, z:29, en:1.90},
+  CL:{c:[0.24,0.94,0.24], r:0.36, vr:1.75, n:35, z:17, en:3.16},   NA:{c:[0.67,0.36,0.95], r:0.46, vr:2.27, n:23, z:11, en:0.93},
+  K :{c:[0.56,0.25,0.83], r:0.52, vr:2.75, n:39, z:19, en:0.82},   CO:{c:[0.94,0.56,0.63], r:0.42, vr:1.52, n:59, z:27, en:1.88},
+  FB:{c:[0.55,0.55,0.55], r:0.32, vr:1.60, n:12, z:6 , en:2.50},
 };
 const info = code => ELEM[EL_LIST[code]] || ELEM.FB;
 
@@ -163,12 +163,14 @@ uniform float radius;
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
+varying float vFlag;     // instance alpha → 1 for protons, 0 for neutrons
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 cV = view * vec4(W[3].xyz, 1.0);
   vCenterV = cV.xyz;
   vUV = position.xy;
   vColor = instanceColor.rgb;
+  vFlag = instanceColor.a;
   vec3 cornerV = cV.xyz + vec3(position.xy * radius, 0.0);
   gl_Position = projection * vec4(cornerV, 1.0);
 }`;
@@ -182,9 +184,11 @@ uniform float fogStart;
 uniform float fogEnd;
 uniform float isShell;   // 1.0 = translucent vdW shell, 0.0 = solid inner atom
 uniform float bubbleR;   // reveal-sphere radius around the camera (view-space distance)
+uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on protons
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
+varying float vFlag;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));  // raking light from the side (right)
 void main(void){
   float r2 = dot(vUV, vUV);
@@ -200,7 +204,11 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
-  col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));            // ink rim → Goodsell outline
+  float rim = smoothstep(0.9, 1.0, r2);
+  if(protonOutline > 0.5 && vFlag > 0.5)
+    col = mix(col, vec3(1.0, 0.12, 0.12), smoothstep(0.72, 1.0, r2));   // red outline on protons
+  else
+    col *= mix(1.0, 0.12, rim);                              // ink rim → Goodsell outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
 }`;
@@ -214,15 +222,20 @@ attribute vec4 world0;
 attribute vec4 world1;
 attribute vec4 world2;
 attribute vec4 world3;
+attribute float taper;     // per-lobe: widen the far end by bond polarity (0 = uniform ellipsoid)
 uniform mat4 view;
 uniform mat4 projection;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 vp = view * W * vec4(position, 1.0);
+  // Local Y (−0.5 near atom … +0.5 far atom); scale the cross-section toward the far end.
+  float wsc = 1.0 + taper * (position.y + 0.5);
+  vec3 pos = vec3(position.x*wsc, position.y, position.z*wsc);
+  vec3 nrm = vec3(normal.x, normal.y*wsc, normal.z);   // rough normal fix for the taper
+  vec4 vp = view * W * vec4(pos, 1.0);
   vViewPos = vp.xyz;
-  vNrmV = (view * W * vec4(normal, 0.0)).xyz;
+  vNrmV = (view * W * vec4(nrm, 0.0)).xyz;
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
@@ -415,10 +428,13 @@ async function run(fileName){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], colBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
+  const sphBuf = [], cylBuf = [], tprBuf = [], lpBuf = [], colBuf = [],
+        sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
-    cylBuf[e] = new Float32Array((halfCount[e] + atomCount[e]*lonePairs(e))*16);   // bonding + lone-pair lobes
+    cylBuf[e] = new Float32Array(halfCount[e]*16);              // bonding lobes (opaque, tapered)
+    tprBuf[e] = new Float32Array(halfCount[e]);                 // per-bonding-lobe taper (polarity)
+    lpBuf[e]  = new Float32Array(atomCount[e]*lonePairs(e)*16); // lone-pair lobes (translucent)
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
   }
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
@@ -475,16 +491,21 @@ async function run(fileName){
       const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
       const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
       const e1=m.el[a1], e2=m.el[a2], f=0.62;   // each lobe reaches past the midpoint → the two orbitals overlap
-      cylTo(x1,y1,z1, x1+(x2-x1)*f, y1+(y2-y1)*f, z1+(z2-z1)*f, cylBuf[e1], (cylIdx[e1]++)*16);
-      cylTo(x2,y2,z2, x2+(x1-x2)*f, y2+(y1-y2)*f, z2+(z1-z2)*f, cylBuf[e2], (cylIdx[e2]++)*16);
+      // Polarity taper: the lobe fattens toward the far atom when that atom is more electronegative.
+      const en1=info(e1).en, en2=info(e2).en;
+      const i1=cylIdx[e1]++, i2=cylIdx[e2]++;
+      cylTo(x1,y1,z1, x1+(x2-x1)*f, y1+(y2-y1)*f, z1+(z2-z1)*f, cylBuf[e1], i1*16);
+      cylTo(x2,y2,z2, x2+(x1-x2)*f, y2+(y1-y2)*f, z2+(z1-z2)*f, cylBuf[e2], i2*16);
+      tprBuf[e1][i1] = Math.min(1.6, Math.max(0, (en2-en1)*0.9));   // atom1's lobe widens toward the more electronegative atom2
+      tprBuf[e2][i2] = Math.min(1.6, Math.max(0, (en1-en2)*0.9));
       bd[a1].push(nrm([x2-x1,y2-y1,z2-z1])); bd[a2].push(nrm([x1-x2,y1-y2,z1-z2]));
     }
-    for(let k=0;k<m.na;k++){                          // non-bonding (lone-pair) orbitals
+    for(let k=0;k<m.na;k++){                          // non-bonding (lone-pair) orbitals → separate translucent buffer
       const e=m.el[k], lp=lonePairs(e);
       if(lp===0 || bd[k].length===0) continue;
       const ax=m.x[k]+ox, ay=m.y[k]+oy, az=m.z[k]+oz;
       for(const d of lonePairDirs(bd[k], lp))
-        cylTo(ax,ay,az, ax+d[0]*LP_LEN, ay+d[1]*LP_LEN, az+d[2]*LP_LEN, cylBuf[e], (cylIdx[e]++)*16);
+        cylTo(ax,ay,az, ax+d[0]*LP_LEN, ay+d[1]*LP_LEN, az+d[2]*LP_LEN, lpBuf[e], (lpIdx[e]++)*16);
     }
   }
   await yield_();
@@ -527,19 +548,20 @@ async function run(fileName){
         nb[o+12] = cx + fcc[i][0]*sc; nb[o+13] = cy + fcc[i][1]*sc; nb[o+14] = cz + fcc[i][2]*sc;
         const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);   // spread Z protons evenly through the A nucleons
         const col = proton ? PC : NC, co = idx*4;
-        nc[co]=col[0]; nc[co+1]=col[1]; nc[co+2]=col[2]; nc[co+3]=1;
+        nc[co]=col[0]; nc[co+1]=col[1]; nc[co+2]=col[2]; nc[co+3]=proton?1:0;   // alpha flags proton for the red rim
       }
     }
     await yield_();
   }
-  const impostorMat = (name, radius, isShell) => {
+  const impostorMat = (name, radius, isShell, protonOutline) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline']
     });
     mat.setFloat('radius', radius);
     mat.setFloat('isShell', isShell);
     mat.setFloat('bubbleR', BUBBLE_R);
+    mat.setFloat('protonOutline', protonOutline || 0);
     mat.backFaceCulling = false;
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
@@ -555,36 +577,47 @@ async function run(fileName){
     if(atomCount[e] === 0) continue;
 
     /* Nucleus — a packed cluster of proton + neutron impostors (opaque core). */
-    const nucMat = impostorMat('impNuc'+e, NUCLEON_R, 0.0);   // isShell = 0 (solid); every nucleon the same size
+    const nucMat = impostorMat('impNuc'+e, NUCLEON_R, 0.0, 1.0);   // isShell=0 solid; protonOutline=1 → red rim on protons
     const nuc = BABYLON.MeshBuilder.CreatePlane('b'+e, {size:2}, scene);
     nuc.material = nucMat; nuc.isPickable = false;
     nuc.thinInstanceSetBuffer('matrix', nucBuf[e], 16, true);
     nuc.thinInstanceSetBuffer('instanceColor', nucColBuf[e], 4, true);
     nuc.alwaysSelectAsActiveMesh = true; coreMeshes.push(nuc);
 
-    /* Hybrid-orbital lobes (translucent, element-coloured ellipsoids). Each half
-       reaches past the bond midpoint so the two atoms' orbitals visibly overlap. */
-    if(halfCount[e] > 0){
-      const bc = info(e).c;
-      const bondMat = new BABYLON.ShaderMaterial('bond'+e, scene, 'bond', {
-        attributes: ['position','normal','world0','world1','world2','world3'],
+    /* Orbital-lobe meshes (element-coloured ellipsoids, blue Fresnel outline). */
+    const bc = info(e).c;
+    const lobeMat = (nm, opac, transp) => {
+      const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
+        attributes: ['position','normal','taper','world0','world1','world2','world3'],
         uniforms: ['view','projection','color','bubbleR','opacity','fogColor','fogStart','fogEnd']
       });
-      bondMat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
-      bondMat.setFloat('bubbleR', BUBBLE_R);
-      bondMat.setFloat('opacity', 1.0);    // opaque → early-z, no overdraw cost (fast)
-      bondMat.backFaceCulling = true;
-      bondMat.onBindObservable.add(() => {
-        const eff = bondMat.getEffect(); if(!eff) return;
-        eff.setColor3('fogColor', scene.fogColor);
-        eff.setFloat('fogStart', scene.fogStart);
-        eff.setFloat('fogEnd', scene.fogEnd);
+      mat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
+      mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', opac);
+      mat.backFaceCulling = !transp;
+      if(transp){ mat.alpha = opac; mat.forceDepthWrite = true; }
+      mat.onBindObservable.add(() => {
+        const eff = mat.getEffect(); if(!eff) return;
+        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       });
-      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:3, diameter:1}, scene);   // very low-poly → ellipsoid lobe
-      cyl.material = bondMat; cyl.isPickable = false;
+      return mat;
+    };
+    // Bonding lobes — opaque, tapered by bond polarity.
+    if(cylIdx[e] > 0){
+      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:3, diameter:1}, scene);
+      cyl.material = lobeMat('bond'+e, 1.0, false); cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
-      cyl.thinInstanceCount = cylIdx[e];   // buffer is over-allocated (lone pairs); render only what was written
+      cyl.thinInstanceSetBuffer('taper', tprBuf[e], 1, true);
+      cyl.thinInstanceCount = cylIdx[e];
       cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
+    }
+    // Non-bonding (lone-pair) lobes — 50% transparent, no taper.
+    if(lpIdx[e] > 0){
+      const lpm = BABYLON.MeshBuilder.CreateSphere('lp'+e, {segments:3, diameter:1}, scene);
+      lpm.material = lobeMat('lobeLP'+e, 0.5, true); lpm.isPickable = false;
+      lpm.thinInstanceSetBuffer('matrix', lpBuf[e], 16, true);
+      lpm.thinInstanceSetBuffer('taper', new Float32Array(lpBuf[e].length/16), 1, true);   // taper = 0 (uniform); length matches matrix
+      lpm.thinInstanceCount = lpIdx[e];   // buffer over-allocated (atoms without bonds); render only what was written
+      lpm.alwaysSelectAsActiveMesh = true; coreMeshes.push(lpm);
     }
 
     /* Van der Waals shell (opaque, component colours). Renders only OUTSIDE the
