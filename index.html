@@ -225,22 +225,17 @@ async function run(fileName){
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
-  // Auto-rotate whenever the left button is NOT held; show the zoom tips while
-  // rotating and keep them for 2 s after the drag is released (or after a tap).
+  // Show the zoom tips while dragging; keep them 2 s after release (or after a tap).
   const tips = document.getElementById('zoomtips');
-  let leftDown = false, hideTimer = null;
+  let hideTimer = null;
   const showTips = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = null; tips.classList.add('show'); };
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){ leftDown = true; showTips(); }
-    else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ leftDown = false; hideTipsSoon(); }
-  });
-  scene.onBeforeRenderObservable.add(() => {
-    if(!leftDown) cam.alpha += 0.003 * (Math.min(engine.getDeltaTime(),50)/16.67);
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0) showTips();
+    else if(p.type === BABYLON.PointerEventTypes.POINTERUP) hideTipsSoon();
   });
 
-  // Zoom via the on-screen +/− buttons only (mouse-wheel + arrow-key inputs removed)
-  cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
+  // Scroll-wheel zoom stays enabled; only the arrow-key camera input is removed.
   cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
   const zoom = dir => {   // dir: -1 = in, +1 = out
     const lo = cam.lowerRadiusLimit ?? 1, hi = cam.upperRadiusLimit ?? 1e9;
@@ -304,15 +299,7 @@ async function run(fileName){
   const fillMat = new BABYLON.StandardMaterial('fillmat', scene);
   fillMat.diffuseColor  = new BABYLON.Color3(1,1,1);   // tinted per-instance (by component)
   fillMat.specularColor = new BABYLON.Color3(0, 0, 0); // matte — no highlights
-  fillMat.alpha = 1.0;
-  fillMat.needDepthPrePass = true;   // single-layer shell so the interior shows through cleanly
-  // Slight dark rim on every sphere (Goodsell ink line) via a diffuse fresnel:
-  // full colour facing the camera, darkening toward each sphere's silhouette.
-  fillMat.diffuseFresnelParameters = new BABYLON.FresnelParameters();
-  fillMat.diffuseFresnelParameters.leftColor  = new BABYLON.Color3(1,1,1);
-  fillMat.diffuseFresnelParameters.rightColor = new BABYLON.Color3(0.10,0.10,0.10);
-  fillMat.diffuseFresnelParameters.bias = 0.0;
-  fillMat.diffuseFresnelParameters.power = 3.2;
+  fillMat.alpha = 1.0;                                 // opaque space-fill (Goodsell)
   for(let e=0;e<nEl;e++){
     const [r,g,b] = info(e).c;
     const mat = new BABYLON.StandardMaterial('m'+e, scene);
@@ -324,16 +311,23 @@ async function run(fileName){
       sph.material = mat; sph.isPickable = false;
       sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
       const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:3}, scene);
-      fill.material = fillMat; fill.isPickable = false;
+      fill.material = fillMat; fill.isPickable = true;
+      fill.thinInstanceEnablePicking = true;                      // double-click centring
+      fill.renderOutline = true;                                  // black per-sphere ink outline
+      fill.outlineColor = new BABYLON.Color3(0.02, 0.02, 0.02);
+      fill.outlineWidth = info(e).vr * 0.045;
       fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
       fill.thinInstanceSetBuffer('color', colBuf[e], 4, true);   // component colours
       fill.freezeWorldMatrix();
+      // opaque surface hides the ball-and-stick — don't render it (perf)
+      const sphM = scene.getMeshByName('a'+e); if(sphM) sphM.setEnabled(false);
     }
     if(halfCount[e] > 0){
       const cyl = BABYLON.MeshBuilder.CreateCylinder('b'+e,
         {diameter:1, height:1, tessellation:4, cap:BABYLON.Mesh.NO_CAP}, scene);
       cyl.material = mat; cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true); cyl.freezeWorldMatrix();
+      cyl.setEnabled(false);   // hidden behind the opaque surface
     }
   }
 
@@ -366,25 +360,21 @@ async function run(fileName){
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
     scene.fogStart = Math.max(0.1, cam.radius - modelR*0.55);   // steeper ramp = more contrast
     scene.fogEnd   = cam.radius + modelR*0.6;
-    // Zoom-dependent opacity: opaque (interior hidden, no overlap darkening) at
-    // whole-model zoom; fade to translucent as you zoom in to reveal the inside.
-    const zoom = fitRadius / cam.radius;
-    const t = Math.max(0, Math.min(1, (zoom - 1.3) / 0.8));    // 0 at ~1.3×, 1 at ~2.1×
-    fillMat.alpha = 1.0 - t*0.5;                               // 1.0 (opaque) → 0.5
-    if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
+    if(zoomEl) zoomEl.textContent = (fitRadius / cam.radius).toFixed(1) + '×';
   });
 
-  // Remember the framed "home" view; double-click resets size + position to it
-  const home = { alpha: cam.alpha, beta: cam.beta, radius: cam.radius, target: cam.target.clone() };
-  const resetView = () => {
-    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
+  // Double-click / double-tap gently centres the camera on the clicked atom.
+  const centerOnAtom = () => {
+    const pick = scene.pick(scene.pointerX, scene.pointerY, m => /^f\d+$/.test(m.name));
+    if(!pick || !pick.hit || !pick.pickedPoint) return;
+    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     cam.inertialPanningX = cam.inertialPanningY = 0;
-    cam.setTarget(home.target.clone());   // first — setTarget recomputes alpha/beta/radius…
-    cam.alpha = home.alpha; cam.beta = home.beta; cam.radius = home.radius;  // …then override
+    BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,
+      cam.target.clone(), pick.pickedPoint.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
-  canvas.addEventListener('dblclick', resetView);                                   // desktop
+  canvas.addEventListener('dblclick', centerOnAtom);                                // desktop
   scene.onPointerObservable.add(p => {                                              // touch double-tap
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP) resetView();
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP) centerOnAtom();
   });
 
   /* Floating per-model labels (multi-molecule files only) */
@@ -411,13 +401,13 @@ async function run(fileName){
 
   // Ambient occlusion — crevice shadows for the David Goodsell painted look
   if(BABYLON.SSAO2RenderingPipeline && BABYLON.SSAO2RenderingPipeline.IsSupported){
-    const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:0.75, blurRatio:0.5}, [cam]);
-    ssao.radius = Math.max(1.5, modelR*0.014);   // tight ~ inter-sphere crevices
-    ssao.totalStrength = 1.8;                     // deeper crevice shadow
-    ssao.base = 0.12;                             // low ambient floor so AO reads
-    ssao.samples = 12;
+    const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:0.75, blurRatio:1.0}, [cam]);
+    ssao.radius = Math.max(2.5, modelR*0.025);   // broader → soft, blended crevice shadow
+    ssao.totalStrength = 1.25;                    // gentler
+    ssao.base = 0.30;                             // higher ambient floor so it's soft
+    ssao.samples = 16;
     ssao.maxZ = cam.upperRadiusLimit + modelR;
-    ssao.expensiveBlur = true;
+    ssao.expensiveBlur = false;                  // gaussian blur → softer, not edge-sharp
   }
 
   engine.runRenderLoop(() => scene.render());
