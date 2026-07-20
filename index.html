@@ -310,12 +310,9 @@ async function run(fileName){
       const sph = BABYLON.MeshBuilder.CreateSphere('a'+e, {diameter:info(e).r*2, segments:3}, scene);
       sph.material = mat; sph.isPickable = false;
       sph.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true); sph.freezeWorldMatrix();
-      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:3}, scene);
+      const fill = BABYLON.MeshBuilder.CreateSphere('f'+e, {diameter:info(e).vr*2*FILL_SCALE, segments:8}, scene);
       fill.material = fillMat; fill.isPickable = true;
       fill.thinInstanceEnablePicking = true;                      // double-click centring
-      fill.renderOutline = true;                                  // black per-sphere ink outline
-      fill.outlineColor = new BABYLON.Color3(0.02, 0.02, 0.02);
-      fill.outlineWidth = info(e).vr * 0.045;
       fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
       fill.thinInstanceSetBuffer('color', colBuf[e], 4, true);   // component colours
       fill.freezeWorldMatrix();
@@ -401,13 +398,13 @@ async function run(fileName){
 
   // Ambient occlusion — crevice shadows for the David Goodsell painted look
   if(BABYLON.SSAO2RenderingPipeline && BABYLON.SSAO2RenderingPipeline.IsSupported){
-    const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:0.75, blurRatio:1.0}, [cam]);
-    ssao.radius = Math.max(2.5, modelR*0.025);   // broader → soft, blended crevice shadow
-    ssao.totalStrength = 1.25;                    // gentler
-    ssao.base = 0.30;                             // higher ambient floor so it's soft
-    ssao.samples = 16;
+    const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {ssaoRatio:1.0, blurRatio:1.0}, [cam]);
+    ssao.radius = Math.max(2.0, modelR*0.02);    // inter-sphere crevices
+    ssao.totalStrength = 1.05;                    // gentle
+    ssao.base = 0.38;                             // high ambient floor → soft, not black
+    ssao.samples = 24;                            // many samples → smooth, not noisy/crude
     ssao.maxZ = cam.upperRadiusLimit + modelR;
-    ssao.expensiveBlur = false;                  // gaussian blur → softer, not edge-sharp
+    ssao.expensiveBlur = false;                  // gaussian blur → soft, blended crevices
   }
 
   engine.runRenderLoop(() => scene.render());
