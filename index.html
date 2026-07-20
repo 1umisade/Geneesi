@@ -194,6 +194,8 @@ async function run(fileName){
   engine = new BABYLON.Engine(canvas, true, {stencil:false});
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
+  scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
+  scene.fogColor = new BABYLON.Color3(0.05,0.07,0.05);
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
@@ -223,13 +225,12 @@ async function run(fileName){
   const btnZoom = dir => { zoom(dir); showTips(); hideTipsSoon(); };   // tap keeps tips visible 2 s more
   document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
   document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
-  // Bright, full lighting so no camera-facing side falls into shadow.
+  // Ambient fill + a headlight that follows the camera (direction set each frame),
+  // so shading stays consistent as the model rotates instead of sweeping around.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
-  hemi.intensity = 0.9; hemi.groundColor = new BABYLON.Color3(0.55,0.55,0.55);
-  const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(-0.4,-1,-0.5), scene);
-  dir.intensity = 0.6;
-  const dir2 = new BABYLON.DirectionalLight('d2', new BABYLON.Vector3(0.6,-0.2,0.5), scene);
-  dir2.intensity = 0.45;
+  hemi.intensity = 0.55; hemi.groundColor = new BABYLON.Color3(0.30,0.34,0.30);
+  const dir = new BABYLON.DirectionalLight('d', new BABYLON.Vector3(0,-0.4,1), scene);
+  dir.intensity = 0.95;
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
@@ -318,6 +319,17 @@ async function run(fileName){
   cam.upperRadiusLimit = cam.radius*4;
   cam.wheelPrecision   = 60/Math.max(dimX,1);
   cam.panningSensibility = 6000/Math.max(dimX,1);
+
+  // Headlight follows the camera; fog darkens fragments by distance (front→back)
+  const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
+  scene.onBeforeRenderObservable.add(() => {
+    const f = cam.getDirection(BABYLON.Axis.Z);   // view forward
+    const u = cam.getDirection(BABYLON.Axis.Y);   // view up
+    const r = cam.getDirection(BABYLON.Axis.X);   // view right
+    dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
+    scene.fogStart = Math.max(0.1, cam.radius - modelR*0.85);
+    scene.fogEnd   = cam.radius + modelR*0.85;
+  });
 
   // Remember the framed "home" view; double-click resets size + position to it
   const home = { alpha: cam.alpha, beta: cam.beta, radius: cam.radius, target: cam.target.clone() };
