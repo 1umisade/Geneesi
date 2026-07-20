@@ -17,6 +17,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
   background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
   padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
   white-space:nowrap;display:none}
+#zoomval{position:absolute;top:12px;right:16px;z-index:10;color:#4c5a48;
+  font-family:'Courier New',monospace;font-size:14px;pointer-events:none}
 #zoomtips{position:absolute;right:18px;bottom:18px;z-index:10;
   display:flex;flex-direction:column;align-items:center;gap:6px;
   opacity:0;transition:opacity .5s;pointer-events:none;
@@ -35,6 +37,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 <div id="overlay">
   <div class="ptr"><div class="pfil" id="load-bar"></div></div>
 </div>
+<div id="zoomval">1.0×</div>
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
   <button class="zt" id="zoom-out" aria-label="Zoom out">−</button>
@@ -322,6 +325,8 @@ async function run(fileName){
 
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
+  const fitRadius = cam.radius;                    // radius at which the whole model fits
+  const zoomEl = document.getElementById('zoomval');
   scene.onBeforeRenderObservable.add(() => {
     const f = cam.getDirection(BABYLON.Axis.Z);   // view forward
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
@@ -329,6 +334,12 @@ async function run(fileName){
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
     scene.fogStart = Math.max(0.1, cam.radius - modelR*0.55);   // steeper ramp = more contrast
     scene.fogEnd   = cam.radius + modelR*0.6;
+    // Zoom-dependent opacity: opaque (interior hidden, no overlap darkening) at
+    // whole-model zoom; fade to translucent as you zoom in to reveal the inside.
+    const zoom = fitRadius / cam.radius;
+    const t = Math.max(0, Math.min(1, (zoom - 1.3) / 0.8));    // 0 at ~1.3×, 1 at ~2.1×
+    fillMat.alpha = 1.0 - t*0.5;                               // 1.0 (opaque) → 0.5
+    if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
   });
 
   // Remember the framed "home" view; double-click resets size + position to it
