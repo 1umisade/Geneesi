@@ -350,7 +350,7 @@ async function run(fileName){
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
   const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.75)));
+  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.4)));   // lighter supersample for the dense orbital scene
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
@@ -536,36 +536,22 @@ async function run(fileName){
       });
       bondMat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
       bondMat.setFloat('bubbleR', BUBBLE_R);
-      bondMat.setFloat('opacity', 0.6);
-      bondMat.alpha = 0.6;                 // transparent queue
-      bondMat.forceDepthWrite = true;      // stable ordering (no popping while rotating)
-      bondMat.backFaceCulling = false;
+      bondMat.setFloat('opacity', 1.0);    // opaque → early-z, no overdraw cost (fast)
+      bondMat.backFaceCulling = true;
       bondMat.onBindObservable.add(() => {
         const eff = bondMat.getEffect(); if(!eff) return;
         eff.setColor3('fogColor', scene.fogColor);
         eff.setFloat('fogStart', scene.fogStart);
         eff.setFloat('fogEnd', scene.fogEnd);
       });
-      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:4, diameter:1}, scene);   // low-poly → ellipsoid lobe
+      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:3, diameter:1}, scene);   // very low-poly → ellipsoid lobe
       cyl.material = bondMat; cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
       cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
     }
-
-    /* Van der Waals shell — GPU sphere impostors. Per-fragment opacity comes from the
-       atom's distance to the camera: translucent inside the reveal-bubble, opaque
-       outside. forceDepthWrite → nearest-wins, so overlaps don't stack. */
-    const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1
-    impMat.alpha = 0.30;                 // transparent render queue (blending enabled)
-    impMat.forceDepthWrite = true;       // depth-write on → stable ordering (no disappearing atoms while rotating)
-    const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
-    fill.material = impMat; fill.isPickable = true;
-    fill.thinInstanceEnablePicking = true;
-    fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
-    fill.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
-    fill.alwaysSelectAsActiveMesh = true;   // instances span the model; skip base-plane culling
+    // (Van der Waals shell removed — the orbitals are the representation now.)
   }
-  // Core (inner atoms + bonds) is enabled only when the camera bubble reaches the model.
+  // Orbitals + nuclei are enabled only when the camera bubble reaches the model.
   let coreOn = false;
   for(const m of coreMeshes) m.setEnabled(false);
 
@@ -590,6 +576,7 @@ async function run(fileName){
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
   const fitRadius = cam.radius;                    // radius at which the whole model fits
+  cam.radius = Math.min(fitRadius, modelR + BUBBLE_R*0.3);   // start inside the reveal-bubble so orbitals are visible on load
   const zoomEl = document.getElementById('zoomval');
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
