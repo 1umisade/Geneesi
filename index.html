@@ -181,7 +181,7 @@ uniform float fogStart;
 uniform float fogEnd;
 uniform float aoNear;
 uniform float aoFar;
-uniform float opacity;   // 1.0 = opaque inner atoms; <1 = translucent vdW shell
+uniform float opacity;   // 1.0 is opaque inner atoms, lower is the translucent vdW shell
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -315,7 +315,7 @@ async function run(fileName){
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
-  cam.fov = 0.8; cam.minZ = 0.05; cam.inertia = 0.85; cam.panningSensibility = 20;
+  cam.fov = 0.8; cam.minZ = 0.02; cam.inertia = 0.85; cam.panningSensibility = 20;
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
   // Show the zoom tips while dragging; keep them 2 s after release (or after a tap).
   const tips = document.getElementById('zoomtips');
@@ -329,9 +329,10 @@ async function run(fileName){
 
   // Scroll-wheel zoom stays enabled; only the arrow-key camera input is removed.
   cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
-  const zoom = dir => {   // dir: -1 = in, +1 = out
-    const lo = cam.lowerRadiusLimit ?? 1, hi = cam.upperRadiusLimit ?? 1e9;
-    cam.radius = Math.max(lo, Math.min(hi, cam.radius + dir * cam.radius * 0.05));
+  const zoom = dir => {   // dir: -1 = in, +1 = out — additive step with a floor so it can cross 0 (fly through)
+    const lo = cam.lowerRadiusLimit ?? -1e9, hi = cam.upperRadiusLimit ?? 1e9;
+    const step = Math.max(fitRadius * 0.04, Math.abs(cam.radius) * 0.06);
+    cam.radius = Math.max(lo, Math.min(hi, cam.radius + dir * step));
   };
   const btnZoom = dir => { zoom(dir); showTips(); hideTipsSoon(); };   // tap keeps tips visible 2 s more
   document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
@@ -462,9 +463,9 @@ async function run(fileName){
   const aspect = engine.getRenderWidth()/Math.max(engine.getRenderHeight(),1);
   const tanV = Math.tan(cam.fov/2);
   cam.radius = Math.max(dimY/2/tanV, dimX/2/(tanV*aspect), dimZ)*1.08;
-  cam.lowerRadiusLimit = Math.max(dimY,dimZ)*0.03;
-  cam.upperRadiusLimit = cam.radius*4;
-  cam.wheelPrecision   = 60/Math.max(dimX,1);
+  cam.lowerRadiusLimit = -Math.hypot(dimX,dimY,dimZ)*1.2;   // negative → zoom through the centre and out the far side
+  cam.upperRadiusLimit = cam.radius*5;
+  cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
 
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
@@ -477,9 +478,10 @@ async function run(fileName){
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
     const r = cam.getDirection(BABYLON.Axis.X);   // view right
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
-    scene.fogStart = Math.max(0.1, cam.radius - modelR*0.55);   // steeper ramp = more contrast
-    scene.fogEnd   = cam.radius + modelR*0.6;
-    if(zoomEl) zoomEl.textContent = (fitRadius / cam.radius).toFixed(1) + '×';
+    const ar = Math.abs(cam.radius);                            // abs → fog still works inside / on the far side
+    scene.fogStart = Math.max(0.1, ar - modelR*0.55);           // steeper ramp = more contrast
+    scene.fogEnd   = ar + modelR*0.6;
+    if(zoomEl) zoomEl.textContent = (fitRadius / Math.max(0.01, ar)).toFixed(1) + '×';
     if(engine.getFps() < 30){
       if(++lowFrames > 60){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
@@ -488,18 +490,59 @@ async function run(fileName){
     } else lowFrames = 0;
   });
 
-  // Double-click / double-tap gently centres the camera on the clicked atom.
+  /* ── Hover highlight + double-click flash/focus ──────────────────────────
+     A single emissive sphere follows the atom under the cursor; double-click
+     pulses it and eases the camera onto that atom. */
+  const hlMat = new BABYLON.StandardMaterial('hlMat', scene);
+  hlMat.emissiveColor = new BABYLON.Color3(1.0, 0.92, 0.45);   // warm highlight glow
+  hlMat.diffuseColor  = new BABYLON.Color3(0,0,0);
+  hlMat.specularColor = new BABYLON.Color3(0,0,0);
+  hlMat.disableLighting = true; hlMat.alpha = 0.45;
+  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:16}, scene);
+  hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
+  hl.renderingGroupId = 1;                                     // draw on top of the translucent shell
+
+  // Resolve the atom under the cursor → its world centre + vdW radius.
+  const pickAtom = () => {
+    const p = scene.pick(scene.pointerX, scene.pointerY, m => /^f\d+$/.test(m.name));
+    if(!p || !p.hit || !p.pickedMesh || p.thinInstanceIndex == null || p.thinInstanceIndex < 0) return null;
+    const e = parseInt(p.pickedMesh.name.slice(1), 10);
+    const b = sphBuf[e], o = p.thinInstanceIndex * 16;
+    return { center: new BABYLON.Vector3(b[o+12], b[o+13], b[o+14]), vr: info(e).vr };
+  };
+
+  let hoverT = 0, flashUntil = 0, flashC = null, flashVr = 0;
+  const setHL = (c, vr, scale, alpha) => {
+    hl.position.copyFrom(c); const s = 2*vr*scale; hl.scaling.set(s,s,s);
+    hlMat.alpha = alpha; hl.setEnabled(true);
+  };
+  // Per-frame: run the flash pulse, else keep the hover glow parked on the atom.
+  scene.onBeforeRenderObservable.add(() => {
+    const now = performance.now();
+    if(now < flashUntil && flashC){
+      const t = (flashUntil - now) / 600;                     // 1 → 0
+      setHL(flashC, flashVr, 1.05 * (1.0 + 0.7*t), 0.30 + 0.55*t);   // bright pop that shrinks in
+    }
+  });
+
   const centerOnAtom = () => {
-    const pick = scene.pick(scene.pointerX, scene.pointerY, m => /^f\d+$/.test(m.name));
-    if(!pick || !pick.hit || !pick.pickedPoint) return;
+    const a = pickAtom(); if(!a) return;
+    flashC = a.center; flashVr = a.vr; flashUntil = performance.now() + 600;   // flash
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     cam.inertialPanningX = cam.inertialPanningY = 0;
-    BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,
-      cam.target.clone(), pick.pickedPoint.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,        // focus
+      cam.target.clone(), a.center.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
   canvas.addEventListener('dblclick', centerOnAtom);                                // desktop
-  scene.onPointerObservable.add(p => {                                              // touch double-tap
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP) centerOnAtom();
+  scene.onPointerObservable.add(p => {
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ centerOnAtom(); return; }   // touch double-tap
+    if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
+      const now = performance.now();
+      if(now - hoverT < 45 || now < flashUntil) return;       // throttle; don't fight the flash
+      hoverT = now;
+      const a = pickAtom();
+      if(a) setHL(a.center, a.vr, 1.04, 0.45); else hl.setEnabled(false);
+    }
   });
 
   /* Floating per-model labels (multi-molecule files only) */
