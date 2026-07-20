@@ -360,6 +360,31 @@ void main(void){
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), opacity);
 }`;
+
+/* Hover/flash highlight: a bright white Fresnel rim (transparent centre) around the nucleus. */
+BABYLON.Effect.ShadersStore['hloVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec3 normal;
+uniform mat4 worldView;
+uniform mat4 worldViewProjection;
+varying vec3 vVP;
+varying vec3 vN;
+void main(void){
+  vVP = (worldView * vec4(position, 1.0)).xyz;
+  vN  = (worldView * vec4(normal, 0.0)).xyz;
+  gl_Position = worldViewProjection * vec4(position, 1.0);
+}`;
+BABYLON.Effect.ShadersStore['hloFragmentShader'] = `
+precision highp float;
+varying vec3 vVP;
+varying vec3 vN;
+void main(void){
+  vec3 N = normalize(vN), V = normalize(-vVP);
+  float f = pow(1.0 - abs(dot(N, V)), 1.8);   // silhouette rim
+  if(f < 0.25) discard;                        // transparent centre → outline only
+  gl_FragColor = vec4(1.0, 1.0, 1.0, f);
+}`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
 BABYLON.Effect.ShadersStore['aoFragmentShader'] = `
@@ -685,7 +710,7 @@ async function run(fileName){
                   [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],        // p — 6 lobes
                   cube,                                                        // d — 8 lobes
                   cube.concat([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) ];   // f — 14
-  const OTCOL = [ [0.85,0.85,0.92], [0.30,0.65,1.0], [0.35,0.90,0.45], [0.92,0.45,0.92] ];  // s / p / d / f
+  const TMUL = [0.60, 1.0, 1.45, 1.9];   // per-type brightness of the element colour (s dim … f bright) → tells s/p/d/f apart
   const orbCount = e => econf(e).reduce((s,sh)=>s + (sh[1]===0 ? 1 : OTMPL[sh[1]].length), 0);
   const orbBuf = [], orbColBuf = [];
   for(let e=0;e<nEl;e++){
@@ -694,19 +719,20 @@ async function run(fileName){
   }
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const cfg = econf(e), sb = sphBuf[e], ob = orbBuf[e], oc = orbColBuf[e]; let w = 0;
+    const cfg = econf(e), sb = sphBuf[e], ob = orbBuf[e], oc = orbColBuf[e], ec = info(e).c; let w = 0;
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
       for(const sh of cfg){
-        const R = sh[0]*SHELL_STEP, ty = sh[1], col = OTCOL[ty];
+        const R = sh[0]*SHELL_STEP, ty = sh[1], m = TMUL[ty];   // element colour, brightened by orbital type
+        const cr=Math.min(1,ec[0]*m), cg=Math.min(1,ec[1]*m), cb=Math.min(1,ec[2]*m);
         if(ty === 0){                                     // s → sphere
           sphereMat(cx,cy,cz, R*0.72, orbBuf[e], w*16);
-          oc[w*3]=col[0]; oc[w*3+1]=col[1]; oc[w*3+2]=col[2]; w++;
+          oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; w++;
         } else {                                          // p/d/f → elongated lobes (dumbbell / cloverleaf)
           const Lw = R*0.34;
           for(const d of OTMPL[ty]){
             cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);
-            oc[w*3]=col[0]; oc[w*3+1]=col[1]; oc[w*3+2]=col[2]; w++;
+            oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; w++;
           }
         }
       }
@@ -863,14 +889,14 @@ async function run(fileName){
   /* ── Hover highlight + double-click flash/focus ──────────────────────────
      A single emissive sphere follows the atom under the cursor; double-click
      pulses it and eases the camera onto that atom. */
-  const hlMat = new BABYLON.StandardMaterial('hlMat', scene);
-  hlMat.emissiveColor = new BABYLON.Color3(1.0, 0.92, 0.45);   // warm highlight glow
-  hlMat.diffuseColor  = new BABYLON.Color3(0,0,0);
-  hlMat.specularColor = new BABYLON.Color3(0,0,0);
-  hlMat.disableLighting = true; hlMat.alpha = 0.45;
-  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:16}, scene);
+  // Bright white outline (a Fresnel rim, not a filled ball) around the hovered/clicked nucleus.
+  const hlMat = new BABYLON.ShaderMaterial('hlMat', scene, 'hlo', {
+    attributes: ['position','normal'], uniforms: ['worldView','worldViewProjection']
+  });
+  hlMat.alpha = 0.5; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;
+  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:24}, scene);
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
-  hl.renderingGroupId = 1;                                     // draw on top of the translucent shell
+  hl.renderingGroupId = 1;                                     // draw on top
 
   // Exact ray-vs-sphere pick: nearest atom (by true vdW sphere) in front of the camera.
   // The impostor quads don't match the visible spheres, so scene.pick was unreliable
@@ -898,16 +924,16 @@ async function run(fileName){
   };
 
   let hoverT = 0, flashUntil = 0, flashC = null, flashVr = 0;
-  const setHL = (c, vr, scale, alpha) => {
+  const setHL = (c, vr, scale) => {
     hl.position.copyFrom(c); const s = 2*vr*scale; hl.scaling.set(s,s,s);
-    hlMat.alpha = alpha; hl.setEnabled(true);
+    hl.setEnabled(true);   // rim shader drives its own opacity
   };
   // Per-frame: run the flash pulse, else keep the hover glow parked on the atom.
   scene.onBeforeRenderObservable.add(() => {
     const now = performance.now();
     if(now < flashUntil && flashC){
       const t = (flashUntil - now) / 600;                     // 1 → 0
-      setHL(flashC, flashVr, 1.05 * (1.0 + 0.7*t), 0.30 + 0.55*t);   // bright pop that shrinks in
+      setHL(flashC, flashVr, 1.05 * (1.0 + 0.7*t));   // bright pop that shrinks in
     }
   });
 
@@ -927,7 +953,7 @@ async function run(fileName){
       if(dragging || p.event.buttons || now - hoverT < 80 || now < flashUntil) return;   // skip while any button held; throttle; don't fight the flash
       hoverT = now;
       const a = pickAtom();
-      if(a) setHL(a.center, a.nr, 1.25, 0.5); else hl.setEnabled(false);   // tight halo on the nucleus
+      if(a) setHL(a.center, a.nr, 1.3); else hl.setEnabled(false);   // bright white outline around the nucleus
     }
   });
 
