@@ -181,6 +181,7 @@ uniform float fogStart;
 uniform float fogEnd;
 uniform float aoNear;
 uniform float aoFar;
+uniform float opacity;   // 1.0 = opaque inner atoms; <1 = translucent vdW shell
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -195,11 +196,12 @@ void main(void){
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
-  col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);     // subtle sphere self-shade
-  col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));   // crisp thin dark rim → Goodsell ink outline
+  float solid = step(0.999, opacity);       // 1 = opaque inner atoms, 0 = translucent shell
+  col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2) * solid;              // self-shade only on solid spheres
+  col *= mix(1.0, mix(1.0, 0.12, smoothstep(0.9, 1.0, r2)), solid);  // ink rim only on solid spheres → shell stays a clean surface
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   float da = clamp((posV.z - aoNear) / max(aoFar - aoNear, 1.0), 0.0, 1.0);  // depth for AO pass (wide range so near surfaces aren't clipped flat)
-  gl_FragColor = vec4(mix(fogColor, col, fog), da);
+  gl_FragColor = vec4(mix(fogColor, col, fog), opacity < 0.999 ? opacity : da);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -343,11 +345,14 @@ async function run(fileName){
 
   /* Allocate instance buffers + build geometry */
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
-  const sphBuf = [], cylBuf = [], colBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
+  const sphBuf = [], cylBuf = [], colBuf = [], elColBuf = [], sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
     cylBuf[e] = new Float32Array(halfCount[e]*16);
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
+    elColBuf[e] = new Float32Array(atomCount[e]*4); // per-instance CPK element colour (inner ball-and-stick)
+    const ec = info(e).c;
+    for(let j=0;j<atomCount[e];j++){ elColBuf[e][j*4]=ec[0]; elColBuf[e][j*4+1]=ec[1]; elColBuf[e][j*4+2]=ec[2]; elColBuf[e][j*4+3]=1; }
   }
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
@@ -384,26 +389,58 @@ async function run(fileName){
   }
   await yield_();
 
-  /* Van der Waals surface as GPU sphere impostors — one camera-facing quad per
-     atom, ray-traced to a perfect sphere in the fragment shader (smooth at any zoom). */
-  setLbl('Uploading to GPU…'); await yield_();
-  for(let e=0;e<nEl;e++){
-    if(atomCount[e] === 0) continue;
-    const impMat = new BABYLON.ShaderMaterial('imp'+e, scene, 'imp', {
+  const INNER_SCALE = 0.30;   // inner ball radius as a fraction of vdW → ball-and-stick core
+  const impostorMat = (name, radius, opacity) => {
+    const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar','opacity']
     });
-    impMat.setFloat('radius', info(e).vr*FILL_SCALE);
-    impMat.backFaceCulling = false;
-    impMat.onBindObservable.add(() => {
-      const eff = impMat.getEffect(); if(!eff) return;
-      // AO depth range spans the full model so near-camera surfaces keep their occlusion (no flat/bright patches)
+    mat.setFloat('radius', radius);
+    mat.setFloat('opacity', opacity);
+    mat.backFaceCulling = false;
+    mat.onBindObservable.add(() => {
+      const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('aoNear', cam.radius - modelR*1.05);
       eff.setFloat('aoFar',  cam.radius + modelR*1.05);
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
     });
+    return mat;
+  };
+
+  setLbl('Uploading to GPU…'); await yield_();
+  for(let e=0;e<nEl;e++){
+    if(atomCount[e] === 0) continue;
+
+    /* Inner ball-and-stick core (opaque, CPK element colours), drawn under the shell.
+       Reuses the atom-centre matrix buffer, just with a small radius. */
+    const ballMat = impostorMat('impBall'+e, info(e).vr*INNER_SCALE, 1.0);
+    const ball = BABYLON.MeshBuilder.CreatePlane('b'+e, {size:2}, scene);
+    ball.material = ballMat; ball.isPickable = false;
+    ball.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
+    ball.thinInstanceSetBuffer('instanceColor', elColBuf[e], 4, true);
+    ball.alwaysSelectAsActiveMesh = true;
+
+    /* Bond sticks (opaque, split at the midpoint so each half takes its atom's colour). */
+    if(halfCount[e] > 0){
+      const bc = info(e).c;
+      const bondMat = new BABYLON.StandardMaterial('bond'+e, scene);
+      bondMat.diffuseColor  = new BABYLON.Color3(bc[0], bc[1], bc[2]);
+      bondMat.emissiveColor = new BABYLON.Color3(bc[0]*0.18, bc[1]*0.18, bc[2]*0.18);
+      bondMat.specularColor = new BABYLON.Color3(0,0,0);
+      const cyl = BABYLON.MeshBuilder.CreateCylinder('c'+e,
+        {height:1, diameter:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
+      cyl.material = bondMat; cyl.isPickable = false;
+      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
+      cyl.alwaysSelectAsActiveMesh = true;
+    }
+
+    /* Van der Waals shell — GPU sphere impostors at 30% opacity (70% transparent),
+       alpha-blended over the core, depth-write off so the interior shows through. */
+    const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 0.30);
+    impMat.alpha = 0.30;                 // put the mesh in the transparent render queue
+    impMat.disableDepthWrite = true;     // don't occlude the core / other shell spheres
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
     fill.thinInstanceEnablePicking = true;
@@ -487,18 +524,9 @@ async function run(fileName){
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
 
-  // Ambient occlusion (tunnels darker than the surface), reading impostor depth
-  const aoPP = new BABYLON.PostProcess('ao', 'ao', ['texel','strength','r1','r2'], [], 1.0, cam);
-  aoPP.onApply = (eff) => {
-    eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('strength', 0.75);
-    // scale AO radius by the supersample factor so crevices keep constant screen size
-    const ss = Math.max(1, engine.getRenderHeight() / Math.max(1, canvas.clientHeight));
-    eff.setFloat('r1', 2.5 * ss);
-    eff.setFloat('r2', 5.0 * ss);
-  };
-  // FXAA last: smooths edges the supersampling can't fully resolve. Runs after AO
-  // so it doesn't disturb the depth packed in alpha that AO reads.
+  // AO is disabled in the translucent "inside" view — it packs depth into the alpha
+  // channel, which the transparent shell now uses for blending (the two can't coexist).
+  // FXAA + supersampling still smooth the edges.
   new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
