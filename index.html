@@ -391,6 +391,7 @@ async function run(fileName){
   await yield_();
 
   const INNER_SCALE = 0.30;   // inner ball radius as a fraction of vdW → ball-and-stick core
+  const shellMats = [], coreMeshes = [];   // shell materials + inner core meshes, toggled by zoom
   const impostorMat = (name, radius, opacity) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
@@ -421,7 +422,7 @@ async function run(fileName){
     ball.material = ballMat; ball.isPickable = false;
     ball.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     ball.thinInstanceSetBuffer('instanceColor', elColBuf[e], 4, true);
-    ball.alwaysSelectAsActiveMesh = true;
+    ball.alwaysSelectAsActiveMesh = true; coreMeshes.push(ball);
 
     /* Bond sticks (opaque, split at the midpoint so each half takes its atom's colour). */
     if(halfCount[e] > 0){
@@ -434,21 +435,26 @@ async function run(fileName){
         {height:1, diameter:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
       cyl.material = bondMat; cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
-      cyl.alwaysSelectAsActiveMesh = true;
+      cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
     }
 
-    /* Van der Waals shell — GPU sphere impostors at 30% opacity (70% transparent),
-       alpha-blended over the core, depth-write off so the interior shows through. */
-    const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 0.30);
-    impMat.alpha = 0.30;                 // put the mesh in the transparent render queue
-    impMat.disableDepthWrite = true;     // don't occlude the core / other shell spheres
+    /* Van der Waals shell — GPU sphere impostors. Opacity is switched by zoom:
+       opaque below 6× (hides the core), 30% at/above 6× (reveals it).
+       needDepthPrePass → only the frontmost shell layer is shaded, so overlapping
+       spheres don't stack into darker blobs. */
+    const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);
+    impMat.needDepthPrePass = true;
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
     fill.thinInstanceEnablePicking = true;
     fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     fill.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
     fill.alwaysSelectAsActiveMesh = true;   // instances span the model; skip base-plane culling
+    shellMats.push(impMat);
   }
+  // Start opaque (whole-model zoom < 6×): shell solid, inner core hidden.
+  let shellOpaque = true;
+  for(const m of coreMeshes) m.setEnabled(false);
 
   /* Frame camera on the whole row (fit both axes for any viewport aspect) */
   let gMiX=Infinity,gMiY=Infinity,gMaX=-Infinity,gMaY=-Infinity,gMiZ=Infinity,gMaZ=-Infinity;
@@ -481,7 +487,15 @@ async function run(fileName){
     const ar = Math.abs(cam.radius);                            // abs → fog still works inside / on the far side
     scene.fogStart = Math.max(0.1, ar - modelR*0.55);           // steeper ramp = more contrast
     scene.fogEnd   = ar + modelR*0.6;
-    if(zoomEl) zoomEl.textContent = (fitRadius / Math.max(0.01, ar)).toFixed(1) + '×';
+    const zoom = fitRadius / Math.max(0.01, ar);
+    if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
+    const wantOpaque = zoom < 6.0;                              // reveal the core only past 6×
+    if(wantOpaque !== shellOpaque){
+      shellOpaque = wantOpaque;
+      const op = wantOpaque ? 1.0 : 0.30;
+      for(const m of shellMats){ m.setFloat('opacity', op); m.alpha = op; }
+      for(const m of coreMeshes) m.setEnabled(!wantOpaque);
+    }
     if(engine.getFps() < 30){
       if(++lowFrames > 60){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
