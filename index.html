@@ -209,6 +209,8 @@ varying vec2 vUV;
 uniform sampler2D textureSampler;
 uniform vec2 texel;
 uniform float strength;
+uniform float r1;    // AO sample radii in texels — scaled by supersample factor so
+uniform float r2;    // the on-screen crevice size stays constant at any internal res
 void main(void){
   vec4 c = texture2D(textureSampler, vUV);
   if(c.a >= 0.985){ gl_FragColor = vec4(c.rgb, 1.0); return; }   // background — no AO
@@ -216,8 +218,8 @@ void main(void){
   for(int i=0;i<12;i++){
     float a = float(i) * 0.5235988;
     vec2 dir = vec2(cos(a), sin(a));
-    float n1 = texture2D(textureSampler, vUV + dir*texel*2.5).a;
-    float n2 = texture2D(textureSampler, vUV + dir*texel*5.0).a;
+    float n1 = texture2D(textureSampler, vUV + dir*texel*r1).a;
+    float n2 = texture2D(textureSampler, vUV + dir*texel*r2).a;
     // range check: occlude ONLY across tight contact crevices; reject any wider
     // depth gap so no soft occlusion haze forms around silhouette edges
     occ += step(n1 + 0.004, d) * (1.0 - smoothstep(0.006, 0.014, d - n1));
@@ -298,6 +300,12 @@ async function run(fileName){
   /* Engine/scene */
   const canvas = document.getElementById('c');
   engine = new BABYLON.Engine(canvas, true, {stencil:false});
+  // Supersample: render at higher internal res so the shader-drawn sphere edges /
+  // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
+  // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
+  const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
@@ -426,6 +434,7 @@ async function run(fileName){
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
   const fitRadius = cam.radius;                    // radius at which the whole model fits
   const zoomEl = document.getElementById('zoomval');
+  let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
     const f = cam.getDirection(BABYLON.Axis.Z);   // view forward
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
@@ -434,6 +443,12 @@ async function run(fileName){
     scene.fogStart = Math.max(0.1, cam.radius - modelR*0.55);   // steeper ramp = more contrast
     scene.fogEnd   = cam.radius + modelR*0.6;
     if(zoomEl) zoomEl.textContent = (fitRadius / cam.radius).toFixed(1) + '×';
+    if(engine.getFps() < 30){
+      if(++lowFrames > 60){ lowFrames = 0;
+        const cur = engine.getHardwareScalingLevel();
+        if(cur < 1.0) engine.setHardwareScalingLevel(Math.min(cur + 0.15, 1.0));  // lower res until smooth
+      }
+    } else lowFrames = 0;
   });
 
   // Double-click / double-tap gently centres the camera on the clicked atom.
@@ -473,10 +488,14 @@ async function run(fileName){
   document.getElementById('overlay').classList.add('gone');
 
   // Ambient occlusion (tunnels darker than the surface), reading impostor depth
-  const aoPP = new BABYLON.PostProcess('ao', 'ao', ['texel','strength'], [], 1.0, cam);
+  const aoPP = new BABYLON.PostProcess('ao', 'ao', ['texel','strength','r1','r2'], [], 1.0, cam);
   aoPP.onApply = (eff) => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     eff.setFloat('strength', 0.75);
+    // scale AO radius by the supersample factor so crevices keep constant screen size
+    const ss = Math.max(1, engine.getRenderHeight() / Math.max(1, canvas.clientHeight));
+    eff.setFloat('r1', 2.5 * ss);
+    eff.setFloat('r2', 5.0 * ss);
   };
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
