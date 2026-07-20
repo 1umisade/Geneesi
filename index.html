@@ -179,10 +179,8 @@ uniform float radius;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
-uniform float aoNear;
-uniform float aoFar;
-uniform float opacity;   // 1.0 is opaque inner atoms, lower is the translucent vdW shell
-uniform float shellCut;  // translucent shell renders only where view-depth is below this (near atoms)
+uniform float isShell;   // 1.0 = translucent vdW shell, 0.0 = solid inner atom
+uniform float bubbleR;   // reveal-sphere radius around the camera (view-space distance)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -193,17 +191,58 @@ void main(void){
   float zc = sqrt(1.0 - r2);
   vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
   vec3 posV = vCenterV + n * radius;
-  if(opacity < 0.999 && posV.z > shellCut) discard;   // translucent shell only on near atoms
+  float dist = length(vCenterV);           // atom-centre distance from the camera
+  if(isShell < 0.5 && dist >= bubbleR) discard;   // inner core only renders inside the bubble
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
-  float solid = step(0.999, opacity);       // 1 = opaque inner atoms, 0 = translucent shell
+  // shell: translucent inside the bubble, fading to fully opaque at its edge
+  float shellOp = mix(0.30, 1.0, smoothstep(bubbleR*0.80, bubbleR, dist));
+  float op = (isShell > 0.5) ? shellOp : 1.0;
+  float solid = step(0.999, op);            // ink rim / self-shade only where opaque
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2) * solid;              // self-shade only on solid spheres
-  col *= mix(1.0, mix(1.0, 0.12, smoothstep(0.9, 1.0, r2)), solid);  // ink rim only on solid spheres → shell stays a clean surface
+  col *= mix(1.0, mix(1.0, 0.12, smoothstep(0.9, 1.0, r2)), solid);  // ink rim only on solid spheres
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float da = clamp((posV.z - aoNear) / max(aoFar - aoNear, 1.0), 0.0, 1.0);  // depth for AO pass (wide range so near surfaces aren't clipped flat)
-  gl_FragColor = vec4(mix(fogColor, col, fog), opacity < 0.999 ? opacity : da);
+  gl_FragColor = vec4(mix(fogColor, col, fog), op);
+}`;
+
+/* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
+BABYLON.Effect.ShadersStore['bondVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec4 world0;
+attribute vec4 world1;
+attribute vec4 world2;
+attribute vec4 world3;
+uniform mat4 view;
+uniform mat4 projection;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+void main(void){
+  mat4 W = mat4(world0, world1, world2, world3);
+  vec4 vp = view * W * vec4(position, 1.0);
+  vViewPos = vp.xyz;
+  vNrmV = (view * W * vec4(normal, 0.0)).xyz;
+  gl_Position = projection * vp;
+}`;
+BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
+precision highp float;
+uniform vec3 color;
+uniform float bubbleR;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogEnd;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
+void main(void){
+  if(length(vViewPos) >= bubbleR) discard;   // bonds only inside the camera bubble
+  float ndl = dot(normalize(vNrmV), L) * 0.5 + 0.5;
+  vec3 c = color * (0.55 + 0.45 * ndl);
+  float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
+  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -394,23 +433,22 @@ async function run(fileName){
   await yield_();
 
   const INNER_SCALE = 0.30;   // inner ball radius as a fraction of vdW → ball-and-stick core
-  const shellMats = [], coreMeshes = [];   // shell materials + inner core meshes, toggled by zoom
-  const impostorMat = (name, radius, opacity) => {
+  const BUBBLE_R = 22.0;      // camera reveal-sphere radius (Å) — atoms within it go translucent
+  const coreMeshes = [];      // inner atoms + bonds, enabled only when the bubble reaches the model
+  const impostorMat = (name, radius, isShell) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar','opacity','shellCut']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR']
     });
     mat.setFloat('radius', radius);
-    mat.setFloat('opacity', opacity);
+    mat.setFloat('isShell', isShell);
+    mat.setFloat('bubbleR', BUBBLE_R);
     mat.backFaceCulling = false;
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
-      eff.setFloat('aoNear', cam.radius - modelR*1.05);
-      eff.setFloat('aoFar',  cam.radius + modelR*1.05);
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      eff.setFloat('shellCut', Math.abs(cam.radius) * 1.02);   // shell only on atoms in front of the focal point
     });
     return mat;
   };
@@ -421,20 +459,29 @@ async function run(fileName){
 
     /* Inner ball-and-stick core (opaque, CPK element colours), drawn under the shell.
        Reuses the atom-centre matrix buffer, just with a small radius. */
-    const ballMat = impostorMat('impBall'+e, info(e).vr*INNER_SCALE, 1.0);
+    const ballMat = impostorMat('impBall'+e, info(e).vr*INNER_SCALE, 0.0);   // isShell = 0 (solid core)
     const ball = BABYLON.MeshBuilder.CreatePlane('b'+e, {size:2}, scene);
     ball.material = ballMat; ball.isPickable = false;
     ball.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     ball.thinInstanceSetBuffer('instanceColor', elColBuf[e], 4, true);
     ball.alwaysSelectAsActiveMesh = true; coreMeshes.push(ball);
 
-    /* Bond sticks (opaque, split at the midpoint so each half takes its atom's colour). */
+    /* Bond sticks (split at the midpoint so each half takes its atom's colour).
+       Custom shader so they can be clipped to the camera reveal-bubble. */
     if(halfCount[e] > 0){
       const bc = info(e).c;
-      const bondMat = new BABYLON.StandardMaterial('bond'+e, scene);
-      bondMat.diffuseColor  = new BABYLON.Color3(bc[0], bc[1], bc[2]);
-      bondMat.emissiveColor = new BABYLON.Color3(bc[0]*0.18, bc[1]*0.18, bc[2]*0.18);
-      bondMat.specularColor = new BABYLON.Color3(0,0,0);
+      const bondMat = new BABYLON.ShaderMaterial('bond'+e, scene, 'bond', {
+        attributes: ['position','normal','world0','world1','world2','world3'],
+        uniforms: ['view','projection','color','bubbleR','fogColor','fogStart','fogEnd']
+      });
+      bondMat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
+      bondMat.setFloat('bubbleR', BUBBLE_R);
+      bondMat.onBindObservable.add(() => {
+        const eff = bondMat.getEffect(); if(!eff) return;
+        eff.setColor3('fogColor', scene.fogColor);
+        eff.setFloat('fogStart', scene.fogStart);
+        eff.setFloat('fogEnd', scene.fogEnd);
+      });
       const cyl = BABYLON.MeshBuilder.CreateCylinder('c'+e,
         {height:1, diameter:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
       cyl.material = bondMat; cyl.isPickable = false;
@@ -442,11 +489,11 @@ async function run(fileName){
       cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
     }
 
-    /* Van der Waals shell — GPU sphere impostors. Opacity is switched by zoom:
-       opaque below 6× (hides the core), 30% at/above 6× (reveals it). Above 6× the
-       shell only draws on near atoms (shellCut) so it stays a thin front slab, and
-       forceDepthWrite keeps nearest-wins so it doesn't stack into darker blobs. */
-    const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);
+    /* Van der Waals shell — GPU sphere impostors. Per-fragment opacity comes from the
+       atom's distance to the camera: translucent inside the reveal-bubble, opaque
+       outside. forceDepthWrite → nearest-wins, so overlaps don't stack. */
+    const impMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1
+    impMat.alpha = 0.30;                 // transparent render queue (blending enabled)
     impMat.forceDepthWrite = true;
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
@@ -454,10 +501,9 @@ async function run(fileName){
     fill.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     fill.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
     fill.alwaysSelectAsActiveMesh = true;   // instances span the model; skip base-plane culling
-    shellMats.push(impMat);
   }
-  // Start opaque (whole-model zoom < 6×): shell solid, inner core hidden.
-  let shellOpaque = true;
+  // Core (inner atoms + bonds) is enabled only when the camera bubble reaches the model.
+  let coreOn = false;
   for(const m of coreMeshes) m.setEnabled(false);
 
   /* Frame camera on the whole row (fit both axes for any viewport aspect) */
@@ -493,13 +539,10 @@ async function run(fileName){
     scene.fogEnd   = ar + modelR*0.6;
     const zoom = fitRadius / Math.max(0.01, ar);
     if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
-    const wantOpaque = zoom < 6.0;                              // reveal the core only past 6×
-    if(wantOpaque !== shellOpaque){
-      shellOpaque = wantOpaque;
-      const op = wantOpaque ? 1.0 : 0.30;
-      for(const m of shellMats){ m.setFloat('opacity', op); m.alpha = op; }
-      for(const m of coreMeshes) m.setEnabled(!wantOpaque);
-    }
+    // Enable the inner core only when the camera bubble can actually reach the model
+    // (nearest atom ≈ |radius| − modelR). Keeps the far overview cheap.
+    const coreWanted = (ar - modelR) < BUBBLE_R;
+    if(coreWanted !== coreOn){ coreOn = coreWanted; for(const m of coreMeshes) m.setEnabled(coreWanted); }
     if(engine.getFps() < 30){
       if(++lowFrames > 60){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
