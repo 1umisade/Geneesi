@@ -179,8 +179,6 @@ uniform float radius;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
-uniform float aoNear;
-uniform float aoFar;
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -198,7 +196,7 @@ void main(void){
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);     // subtle sphere self-shade
   col *= mix(1.0, 0.12, smoothstep(0.9, 1.0, r2));   // crisp thin dark rim → Goodsell ink outline
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float da = clamp((posV.z - aoNear) / max(aoFar - aoNear, 1.0), 0.0, 1.0);  // depth for AO pass (wide range, near not clipped)
+  float da = clamp((posV.z - fogStart) / max(fogEnd - fogStart, 1.0), 0.0, 1.0);  // depth for AO pass
   gl_FragColor = vec4(mix(fogColor, col, fog), da);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
@@ -216,9 +214,8 @@ void main(void){
   for(int i=0;i<12;i++){
     float a = float(i) * 0.5235988;
     vec2 dir = vec2(cos(a), sin(a));
-    occ += step(texture2D(textureSampler, vUV + dir*texel*3.0).a  + 0.004, d);
-    occ += 0.7 * step(texture2D(textureSampler, vUV + dir*texel*7.0).a  + 0.006, d);
-    occ += 0.5 * step(texture2D(textureSampler, vUV + dir*texel*12.0).a + 0.008, d);  // deep-tunnel ring
+    occ += step(texture2D(textureSampler, vUV + dir*texel*3.0).a + 0.004, d);
+    occ += 0.5 * step(texture2D(textureSampler, vUV + dir*texel*7.0).a + 0.006, d);
   }
   occ = min(occ / 12.0, 1.0);
   gl_FragColor = vec4(c.rgb * (1.0 - strength*occ), 1.0);
@@ -380,7 +377,7 @@ async function run(fileName){
     if(atomCount[e] === 0) continue;
     const impMat = new BABYLON.ShaderMaterial('imp'+e, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','aoNear','aoFar']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd']
     });
     impMat.setFloat('radius', info(e).vr*FILL_SCALE);
     impMat.backFaceCulling = false;
@@ -389,9 +386,6 @@ async function run(fileName){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      // AO depth range spans the full model so near-camera surfaces aren't clipped flat
-      eff.setFloat('aoNear', cam.radius - modelR*1.05);
-      eff.setFloat('aoFar',  cam.radius + modelR*1.05);
     });
     const fill = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     fill.material = impMat; fill.isPickable = true;
@@ -473,7 +467,7 @@ async function run(fileName){
   const aoPP = new BABYLON.PostProcess('ao', 'ao', ['texel','strength'], [], 1.0, cam);
   aoPP.onApply = (eff) => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('strength', 1.05);
+    eff.setFloat('strength', 0.75);
   };
   new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);   // anti-alias impostor silhouettes
 
