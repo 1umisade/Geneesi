@@ -232,6 +232,7 @@ BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
 precision highp float;
 uniform vec3 color;
 uniform float bubbleR;
+uniform float opacity;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -239,11 +240,11 @@ varying vec3 vViewPos;
 varying vec3 vNrmV;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
-  if(length(vViewPos) >= bubbleR) discard;   // bonds only inside the camera bubble
+  if(length(vViewPos) >= bubbleR) discard;   // orbital lobes only inside the camera bubble
   float ndl = dot(normalize(vNrmV), L) * 0.5 + 0.5;
   vec3 c = color * (0.55 + 0.45 * ndl);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);
+  gl_FragColor = vec4(mix(fogColor, c, fog), opacity);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -421,14 +422,15 @@ async function run(fileName){
   }
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
-  const bondD = BOND_R*2;
+  const LOBE_W = 0.42;                 // hybrid-orbital lobe width (Å)
+  // Build an ellipsoid (lobe) spanning s→e: width LOBE_W across, length = |s→e| along the axis.
   function cylTo(sx,sy,sz, ex,ey,ez, dstBuf, dstOff){
     let dx=ex-sx, dy=ey-sy, dz=ez-sz;
     const len=Math.hypot(dx,dy,dz)||1e-6, inv=1/len; dx*=inv; dy*=inv; dz*=inv;
     if(dy>0.999999) _q.set(0,0,0,1);
     else if(dy<-0.999999) _q.set(1,0,0,0);
     else { _ax.set(dz,0,-dx); _ax.normalize(); BABYLON.Quaternion.RotationAxisToRef(_ax, Math.acos(dy), _q); }
-    _s.set(bondD,len,bondD); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
+    _s.set(LOBE_W,len,LOBE_W); _p.set((sx+ex)*0.5,(sy+ey)*0.5,(sz+ez)*0.5);
     BABYLON.Matrix.ComposeToRef(_s,_q,_p,_m); _m.copyToArray(dstBuf,dstOff);
   }
 
@@ -446,17 +448,14 @@ async function run(fileName){
       if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
       const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
       const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
-      const mx=(x1+x2)*0.5, my=(y1+y2)*0.5, mz=(z1+z2)*0.5;
-      const e1=m.el[a1], e2=m.el[a2];
-      cylTo(x1,y1,z1, mx,my,mz, cylBuf[e1], (cylIdx[e1]++)*16);
-      cylTo(mx,my,mz, x2,y2,z2, cylBuf[e2], (cylIdx[e2]++)*16);
+      const e1=m.el[a1], e2=m.el[a2], f=0.62;   // each lobe reaches past the midpoint → the two orbitals overlap
+      cylTo(x1,y1,z1, x1+(x2-x1)*f, y1+(y2-y1)*f, z1+(z2-z1)*f, cylBuf[e1], (cylIdx[e1]++)*16);
+      cylTo(x2,y2,z2, x2+(x1-x2)*f, y2+(y1-y2)*f, z2+(z1-z2)*f, cylBuf[e2], (cylIdx[e2]++)*16);
     }
   }
   await yield_();
 
-  const NUC_SCALE = 0.042;    // nucleus radius per nucleon (Å) → H(1) is 1/12 of C(12), etc.
-  const nucRadius = e => Math.min(info(e).n * NUC_SCALE, info(e).vr * 0.9);   // cap so it stays inside the vdW shell
-  const BUBBLE_R = 198.0;     // camera reveal-sphere radius (Å) — atoms within it go translucent
+  const BUBBLE_R = 99.0;      // camera reveal-sphere radius (Å) — atoms within it go translucent
   const coreMeshes = [];      // inner atoms + bonds, enabled only when the bubble reaches the model
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
@@ -471,17 +470,19 @@ async function run(fileName){
     return p.map(q => [q[0]*s, q[1]*s, q[2]*s]);
   })();
   const PROTON = [0.90,0.28,0.24], NEUTRON = [0.60,0.63,0.68];
-  const nucBuf = [], nucColBuf = [], nucRad = new Float32Array(nEl), nucSc = new Float32Array(nEl);
+  // Every proton & neutron is the SAME size; the nucleus grows as it packs more of
+  // them (radius ∝ A^⅓), so hydrogen's single nucleon matches carbon's nucleons.
+  const NUCLEON_R = 0.13, SPACING = 2*NUCLEON_R;
+  const nucClusterR = e => { const A = info(e).n; const dm = A>1 ? Math.hypot(fcc[A-1][0],fcc[A-1][1],fcc[A-1][2]) : 0; return dm*SPACING + NUCLEON_R; };
+  const nucBuf = [], nucColBuf = [];
   for(let e=0;e<nEl;e++){
-    const A = info(e).n, Rn = nucRadius(e);
-    const dmax = A>1 ? Math.hypot(fcc[A-1][0], fcc[A-1][1], fcc[A-1][2]) : 0;
-    const sc = Rn/(dmax+0.5); nucSc[e] = sc; nucRad[e] = sc*0.5;   // nucleon radius = half the packing spacing
+    const A = info(e).n;
     nucBuf[e]    = new Float32Array(atomCount[e]*A*16);
     nucColBuf[e] = new Float32Array(atomCount[e]*A*4);
   }
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const A = info(e).n, Z = info(e).z, sc = nucSc[e], nb = nucBuf[e], nc = nucColBuf[e], sb = sphBuf[e];
+    const A = info(e).n, Z = info(e).z, sc = SPACING, nb = nucBuf[e], nc = nucColBuf[e], sb = sphBuf[e];
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
       for(let i=0;i<A;i++){
@@ -518,31 +519,34 @@ async function run(fileName){
     if(atomCount[e] === 0) continue;
 
     /* Nucleus — a packed cluster of proton + neutron impostors (opaque core). */
-    const nucMat = impostorMat('impNuc'+e, nucRad[e], 0.0);   // isShell = 0 (solid), one impostor per nucleon
+    const nucMat = impostorMat('impNuc'+e, NUCLEON_R, 0.0);   // isShell = 0 (solid); every nucleon the same size
     const nuc = BABYLON.MeshBuilder.CreatePlane('b'+e, {size:2}, scene);
     nuc.material = nucMat; nuc.isPickable = false;
     nuc.thinInstanceSetBuffer('matrix', nucBuf[e], 16, true);
     nuc.thinInstanceSetBuffer('instanceColor', nucColBuf[e], 4, true);
     nuc.alwaysSelectAsActiveMesh = true; coreMeshes.push(nuc);
 
-    /* Bond sticks (split at the midpoint so each half takes its atom's colour).
-       Custom shader so they can be clipped to the camera reveal-bubble. */
+    /* Hybrid-orbital lobes (translucent, element-coloured ellipsoids). Each half
+       reaches past the bond midpoint so the two atoms' orbitals visibly overlap. */
     if(halfCount[e] > 0){
       const bc = info(e).c;
       const bondMat = new BABYLON.ShaderMaterial('bond'+e, scene, 'bond', {
         attributes: ['position','normal','world0','world1','world2','world3'],
-        uniforms: ['view','projection','color','bubbleR','fogColor','fogStart','fogEnd']
+        uniforms: ['view','projection','color','bubbleR','opacity','fogColor','fogStart','fogEnd']
       });
       bondMat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
       bondMat.setFloat('bubbleR', BUBBLE_R);
+      bondMat.setFloat('opacity', 0.6);
+      bondMat.alpha = 0.6;                 // transparent queue
+      bondMat.forceDepthWrite = true;      // stable ordering (no popping while rotating)
+      bondMat.backFaceCulling = false;
       bondMat.onBindObservable.add(() => {
         const eff = bondMat.getEffect(); if(!eff) return;
         eff.setColor3('fogColor', scene.fogColor);
         eff.setFloat('fogStart', scene.fogStart);
         eff.setFloat('fogEnd', scene.fogEnd);
       });
-      const cyl = BABYLON.MeshBuilder.CreateCylinder('c'+e,
-        {height:1, diameter:1, tessellation:6, cap:BABYLON.Mesh.NO_CAP}, scene);
+      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:4, diameter:1}, scene);   // low-poly → ellipsoid lobe
       cyl.material = bondMat; cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
       cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
@@ -622,13 +626,29 @@ async function run(fileName){
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top of the translucent shell
 
-  // Resolve the atom under the cursor → its world centre + vdW radius.
+  // Exact ray-vs-sphere pick: nearest atom (by true vdW sphere) in front of the camera.
+  // The impostor quads don't match the visible spheres, so scene.pick was unreliable
+  // and made double-click jump to the wrong / a behind-camera atom.
   const pickAtom = () => {
-    const p = scene.pick(scene.pointerX, scene.pointerY, m => /^f\d+$/.test(m.name));
-    if(!p || !p.hit || !p.pickedMesh || p.thinInstanceIndex == null || p.thinInstanceIndex < 0) return null;
-    const e = parseInt(p.pickedMesh.name.slice(1), 10);
-    const b = sphBuf[e], o = p.thinInstanceIndex * 16;
-    return { center: new BABYLON.Vector3(b[o+12], b[o+13], b[o+14]), nr: nucRadius(e) };   // highlight the nucleus, not the shell
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
+    const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
+    let bestT = Infinity, bE = -1, bA = -1;
+    for(let e=0;e<nEl;e++){
+      const vr2 = info(e).vr*info(e).vr, sb = sphBuf[e], cnt = atomCount[e];
+      for(let a=0;a<cnt;a++){
+        const px = sb[a*16+12]-ox, py = sb[a*16+13]-oy, pz = sb[a*16+14]-oz;
+        const tca = px*dx + py*dy + pz*dz;
+        if(tca <= 0) continue;                                   // behind the camera
+        const d2 = px*px+py*py+pz*pz - tca*tca;
+        if(d2 > vr2) continue;                                   // ray misses this sphere
+        const t = tca - Math.sqrt(vr2 - d2);
+        if(t < bestT){ bestT = t; bE = e; bA = a; }
+      }
+    }
+    if(bE < 0) return null;
+    const sb = sphBuf[bE], o = bA*16;
+    return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), nr: nucClusterR(bE) };
   };
 
   let hoverT = 0, flashUntil = 0, flashC = null, flashVr = 0;
