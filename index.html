@@ -173,6 +173,20 @@ function extractChlorophyll(m){
   return nm;
 }
 
+/* Pull one lipid molecule (category 4) out of the model → just atoms (positions + elements). */
+function extractLipid(m){
+  if(!m.sid) return null;
+  const groups = new Map();
+  for(let k=0;k<m.na;k++) if(m.cat[k]===4){ const g=groups.get(m.sid[k]); if(g) g.push(k); else groups.set(m.sid[k],[k]); }
+  let best=null;
+  for(const g of groups.values()) if(!best || g.length>best.length) best=g;   // largest = a complete lipid
+  if(!best || best.length < 30) return null;
+  const na=best.length;
+  const out={ na, x:new Float32Array(na), y:new Float32Array(na), z:new Float32Array(na), el:new Uint16Array(na) };
+  for(let li=0;li<na;li++){ const gi=best[li]; out.x[li]=m.x[gi]; out.y[li]=m.y[gi]; out.z[li]=m.z[gi]; out.el[li]=m.el[gi]; }
+  return out;
+}
+
 /* GPU sphere impostors: a camera-facing quad per atom; the fragment shader
    ray-traces a perfect sphere and writes real depth, so spheres are smooth at
    any zoom and cost 2 triangles each. */
@@ -499,6 +513,7 @@ async function run(fileName){
   const mols = parseMol2(new TextDecoder().decode(buf));
   if(mols.length === 0) throw new Error('No molecules found in file');
   const chl = extractChlorophyll(mols[0]);       // showcase one chlorophyll beside the protein
+  const lipid = extractLipid(mols[0]);           // one lipid → tiled into a bilayer showcase
   if(chl) mols.push(chl);
 
   // Rotate 90° about Z so the long axis lies horizontal (PSII lands on its side)
@@ -1154,6 +1169,59 @@ async function run(fileName){
     });
   }
 
+  /* ── Lipid bilayer showcase: tile one extracted lipid into a two-leaflet membrane
+     (~2000 lipids) as space-filling vdW spheres, placed below the protein. ─────── */
+  const bilayerCen = new BABYLON.Vector3(0, -320, 0);
+  if(lipid){
+    const LN = lipid.na;
+    let cx=0,cy=0,cz=0; for(let k=0;k<LN;k++){ cx+=lipid.x[k]; cy+=lipid.y[k]; cz+=lipid.z[k]; } cx/=LN;cy/=LN;cz/=LN;
+    // head (O/P/N) → tail (C) centroid gives the head-up axis
+    let hx=0,hy=0,hz=0,hn=0, tx=0,ty=0,tz=0,tn=0;
+    for(let k=0;k<LN;k++){ const s=EL_LIST[lipid.el[k]], px=lipid.x[k]-cx,py=lipid.y[k]-cy,pz=lipid.z[k]-cz;
+      if(s==='O'||s==='P'||s==='N'){ hx+=px;hy+=py;hz+=pz;hn++; } else if(s==='C'){ tx+=px;ty+=py;tz+=pz;tn++; } }
+    let ax=(hn?hx/hn:0)-(tn?tx/tn:0), ay=(hn?hy/hn:1)-(tn?ty/tn:0), az=(hn?hz/hn:0)-(tn?tz/tn:0);
+    const al=Math.hypot(ax,ay,az)||1; ax/=al;ay/=al;az/=al;
+    // rotate so `axis` → +Y (Rodrigues; rotation axis k = axis × Y)
+    const kx=az, ky=0, kz=-ax, kl=Math.hypot(kx,ky,kz);
+    const rot = p => { if(kl<1e-6) return ay>=0 ? p : [p[0],-p[1],-p[2]];
+      const ux=kx/kl,uy=ky/kl,uz=kz/kl, c=ay, s=kl, dt=ux*p[0]+uy*p[1]+uz*p[2];
+      const crx=uy*p[2]-uz*p[1], cry=uz*p[0]-ux*p[2], crz=ux*p[1]-uy*p[0];
+      return [p[0]*c+crx*s+ux*dt*(1-c), p[1]*c+cry*s+uy*dt*(1-c), p[2]*c+crz*s+uz*dt*(1-c)]; };
+    const lp=new Float32Array(LN*3); let yMin=1e9,yMax=-1e9,xr=0,zr=0;
+    for(let k=0;k<LN;k++){ const q=rot([lipid.x[k]-cx,lipid.y[k]-cy,lipid.z[k]-cz]);
+      lp[k*3]=q[0];lp[k*3+1]=q[1];lp[k*3+2]=q[2]; yMin=Math.min(yMin,q[1]);yMax=Math.max(yMax,q[1]); xr=Math.max(xr,Math.abs(q[0]));zr=Math.max(zr,Math.abs(q[2])); }
+    const S=Math.max(8, Math.max(xr,zr)*0.9), G=32, half=(G-1)*S*0.5, copies=G*G*2;   // 32×32 × 2 leaflets = 2048 lipids
+    const elCount=new Int32Array(nEl); for(let k=0;k<LN;k++) elCount[lipid.el[k]]++;
+    const lipM=[], lipC=[], lipIx=new Int32Array(nEl);
+    for(let e=0;e<nEl;e++) if(elCount[e]){ lipM[e]=new Float32Array(elCount[e]*copies*16); lipC[e]=new Float32Array(elCount[e]*copies*4); }
+    for(let gi=0;gi<G;gi++) for(let gj=0;gj<G;gj++){
+      const ox=bilayerCen.x+gi*S-half, oz=bilayerCen.z+gj*S-half;
+      for(let leaf=0;leaf<2;leaf++) for(let k=0;k<LN;k++){ const e=lipid.el[k];
+        let px=lp[k*3], py=lp[k*3+1], pz=lp[k*3+2];
+        if(leaf===0){ py=py-yMin; } else { py=-py+yMin; pz=-pz; }      // top: heads up; bottom: flipped, tails meet at Y=0
+        const i=lipIx[e]++, o=i*16;
+        lipM[e][o]=1;lipM[e][o+5]=1;lipM[e][o+10]=1;lipM[e][o+15]=1;
+        lipM[e][o+12]=ox+px; lipM[e][o+13]=bilayerCen.y+py; lipM[e][o+14]=oz+pz;
+        const col=info(e).c; lipC[e][i*4]=col[0];lipC[e][i*4+1]=col[1];lipC[e][i*4+2]=col[2];lipC[e][i*4+3]=1;
+      }
+    }
+    const lipMeshes=[];
+    for(let e=0;e<nEl;e++){ if(!elCount[e]) continue;
+      const mat=new BABYLON.ShaderMaterial('lipMat'+e, scene, 'imp', {
+        attributes:['position','instanceColor','world0','world1','world2','world3'],
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT'] });
+      mat.setFloat('radius', info(e).vr*FILL_SCALE); mat.setFloat('isShell',0); mat.setFloat('bubbleR',1e9); mat.setFloat('protonOutline',0); mat.backFaceCulling=false;
+      mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+      const mesh=BABYLON.MeshBuilder.CreatePlane('lip'+e,{size:2},scene); mesh.material=mat; mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+      mesh.thinInstanceSetBuffer('matrix', lipM[e],16,true); mesh.thinInstanceSetBuffer('instanceColor', lipC[e],4,true);
+      lipMeshes.push(mesh);
+    }
+    let lipOn=true; const lipReach2=(G*S*2)*(G*S*2);   // render from a comfortable distance (it's a big patch)
+    scene.onBeforeRenderObservable.add(()=>{ const cp=cam.position, dx=cp.x-bilayerCen.x, dy=cp.y-bilayerCen.y, dz=cp.z-bilayerCen.z;
+      const near=(dx*dx+dy*dy+dz*dz) < lipReach2;
+      if(near!==lipOn){ lipOn=near; for(const m of lipMeshes) m.setEnabled(near); } });
+  }
+
   // Cell meshes start disabled; the frame loop enables only the ones the bubble touches.
   const cellReach2 = (BUBBLE_R + cellHalfDiag) * (BUBBLE_R + cellHalfDiag);
 
@@ -1370,6 +1438,8 @@ async function run(fileName){
     el.pos = new BABYLON.Vector3((b.miX+b.maX)/2+m.ox, b.maY+m.oy+dimY*0.02, (b.miZ+b.maZ)/2+m.oz);
     return el;
   });
+  if(lipid){ const el=document.createElement('div'); el.className='mlbl'; el.textContent='Lipid bilayer';
+    document.body.appendChild(el); el.pos=new BABYLON.Vector3(bilayerCen.x, bilayerCen.y+40, bilayerCen.z); labels.push(el); }
   scene.registerAfterRender(() => {
     const vp = cam.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
     const tm = scene.getTransformMatrix();
