@@ -522,6 +522,7 @@ async function run(fileName){
   const nEl = EL_LIST.length;
   const atomCount = new Uint32Array(nEl), halfCount = new Uint32Array(nEl);
   for(const m of mols){
+    if(m===chl) continue;   // chlorophyll is rendered separately (animated), not in the static build
     for(let k=0;k<m.na;k++) atomCount[m.el[k]]++;
     for(let k=0;k<m.nb;k++){
       const a1=m.b1[k], a2=m.b2[k];
@@ -671,6 +672,7 @@ async function run(fileName){
   const bondDirEA = [];   // bondDirEA[element][atomIdx] = list of bond directions → used to drop doubled atomic p/d/f lobes
   for(let e=0;e<nEl;e++) bondDirEA[e] = [];
   for(const m of mols){
+    if(m===chl) continue;   // chlorophyll built separately (animated)
     const ox=m.ox, oy=m.oy, oz=m.oz;
     const kel = new Int32Array(m.na), kci = new Int32Array(m.na);   // molecule atom k → (element, element-atom index)
     for(let k=0;k<m.na;k++){
@@ -1011,6 +1013,56 @@ async function run(fileName){
     shell.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     shell.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
     shell.alwaysSelectAsActiveMesh = true;
+  }
+
+  /* ── Chlorophyll showcase: a jiggling ball-and-stick whose bonds stretch like
+     springs. Rendered separately from the static protein so its atoms can move
+     every frame. Atoms = orb-shader spheres, bonds = bond-shader ellipsoids,
+     both forced always-visible (bubbleR huge). ─────────────────────────────── */
+  if(chl){
+    const N = chl.na, NB = chl.nb;
+    const rest = new Float32Array(N*3);
+    for(let k=0;k<N;k++){ rest[k*3]=chl.x[k]+chl.ox; rest[k*3+1]=chl.y[k]+chl.oy; rest[k*3+2]=chl.z[k]+chl.oz; }
+    const rnd = x => { const v = Math.sin(x*127.1)*43758.5453; return v - Math.floor(v); };   // deterministic pseudo-random (no Math.random)
+    const phase = new Float32Array(N*3), freq = new Float32Array(N*3);
+    for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.1 + rnd((i+1)*2.7)*1.8; }
+    const AMP = 0.18;   // Å of jiggle
+    const mkMat = (nm, shader, attrs, extra) => {
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd'].concat(extra||[]) });
+      mat.setFloat('bubbleR', 1e9); mat.backFaceCulling = true;
+      mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
+        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
+      return mat;
+    };
+    // Atoms
+    const chlAtoms = BABYLON.MeshBuilder.CreateSphere('chlAtoms',{segments:10,diameter:1},scene);
+    chlAtoms.material = mkMat('chlAtomMat','orb',['position','normal','ocol','ocen','world0','world1','world2','world3']);
+    chlAtoms.isPickable=false; chlAtoms.alwaysSelectAsActiveMesh=true;
+    const aMat=new Float32Array(N*16), aCol=new Float32Array(N*3), aCen=new Float32Array(N*3), aRad=new Float32Array(N);
+    for(let k=0;k<N;k++){ const c=info(chl.el[k]).c; aCol[k*3]=c[0];aCol[k*3+1]=c[1];aCol[k*3+2]=c[2]; aRad[k]=info(chl.el[k]).r*0.85; }
+    chlAtoms.thinInstanceSetBuffer('ocol', aCol,3,true); chlAtoms.thinInstanceSetBuffer('ocen', aCen,3,true);
+    chlAtoms.thinInstanceSetBuffer('matrix', aMat,16,false); chlAtoms.thinInstanceCount=N;
+    // Bonds (springs)
+    const chlBonds = BABYLON.MeshBuilder.CreateSphere('chlBonds',{segments:6,diameter:1},scene);
+    chlBonds.material = mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],['opacity']);
+    chlBonds.isPickable=false; chlBonds.alwaysSelectAsActiveMesh=true;
+    const bMat=new Float32Array(NB*16), bTap=new Float32Array(NB).fill(1), bCol=new Float32Array(NB*3), bCen=new Float32Array(NB*3);
+    for(let b=0;b<NB;b++){ const c=info(chl.el[chl.b1[b]]).c; bCol[b*3]=c[0];bCol[b*3+1]=c[1];bCol[b*3+2]=c[2]; }
+    chlBonds.thinInstanceSetBuffer('taper', bTap,1,true); chlBonds.thinInstanceSetBuffer('bcol', bCol,3,true); chlBonds.thinInstanceSetBuffer('ocen', bCen,3,true);
+    chlBonds.thinInstanceSetBuffer('matrix', bMat,16,false); chlBonds.thinInstanceCount=NB;
+    const cpos = new Float32Array(N*3);
+    let chlT = 0;
+    scene.onBeforeRenderObservable.add(() => {
+      chlT += Math.min(engine.getDeltaTime(), 50) * 0.001;
+      for(let i=0;i<N*3;i++) cpos[i] = rest[i] + AMP*Math.sin(chlT*freq[i] + phase[i]);
+      for(let k=0;k<N;k++){ const R=aRad[k]*2, o=k*16;
+        aMat[o]=R; aMat[o+5]=R; aMat[o+10]=R; aMat[o+15]=1;
+        aMat[o+12]=cpos[k*3]; aMat[o+13]=cpos[k*3+1]; aMat[o+14]=cpos[k*3+2]; }
+      chlAtoms.thinInstanceBufferUpdated('matrix');
+      for(let b=0;b<NB;b++){ const i=chl.b1[b], j=chl.b2[b];
+        cylTo(cpos[i*3],cpos[i*3+1],cpos[i*3+2], cpos[j*3],cpos[j*3+1],cpos[j*3+2], bMat, b*16, 0.14); }
+      chlBonds.thinInstanceBufferUpdated('matrix');
+    });
   }
 
   // Cell meshes start disabled; the frame loop enables only the ones the bubble touches.
