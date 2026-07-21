@@ -420,14 +420,17 @@ void main(void){
 }`;
 BABYLON.Effect.ShadersStore['hloFragmentShader'] = `
 precision highp float;
+uniform vec3 oc;      // outline colour
+uniform float rimLo;  // rim band start (higher = thinner)
+uniform float rimHi;  // rim band end
 varying vec3 vVP;
 varying vec3 vN;
 void main(void){
   vec3 N = normalize(vN), V = normalize(-vVP);
   float f = pow(1.0 - abs(dot(N, V)), 1.7);        // silhouette factor (1 at the rim of EACH lobe)
-  float a = smoothstep(0.30, 0.58, f);             // crisp opaque white stroke on every lobe
+  float a = smoothstep(rimLo, rimHi, f);           // crisp stroke on every lobe
   if(a < 0.03) discard;                            // transparent centre → glowing stroke only
-  gl_FragColor = vec4(1.0, 1.0, 1.0, a);
+  gl_FragColor = vec4(oc, a);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -665,10 +668,14 @@ async function run(fileName){
     return out;
   }
 
+  const bondDirEA = [];   // bondDirEA[element][atomIdx] = list of bond directions → used to drop doubled atomic p/d/f lobes
+  for(let e=0;e<nEl;e++) bondDirEA[e] = [];
   for(const m of mols){
     const ox=m.ox, oy=m.oy, oz=m.oz;
+    const kel = new Int32Array(m.na), kci = new Int32Array(m.na);   // molecule atom k → (element, element-atom index)
     for(let k=0;k<m.na;k++){
       const e=m.el[k], ci=sphIdx[e]++;
+      kel[k]=e; kci[k]=ci;
       BABYLON.Matrix.TranslationToRef(m.x[k]+ox, m.y[k]+oy, m.z[k]+oz, _m);
       _m.copyToArray(sphBuf[e], ci*16);
       const col = CAT_COLORS[m.cat[k]];
@@ -683,6 +690,7 @@ async function run(fileName){
       const dx=m.x[a2]-m.x[a1], dy=m.y[a2]-m.y[a1], dz=m.z[a2]-m.z[a1];
       bd[a1].push(nrm([dx,dy,dz])); bd[a2].push(nrm([-dx,-dy,-dz]));
     }
+    for(let k=0;k<m.na;k++) bondDirEA[kel[k]][kci[k]] = bd[k];   // expose bond dirs to the orbital builder
     // Per-atom bond-plane normal (cross of two non-parallel bonds) → π points out of this plane.
     const pn = [];
     for(let k=0;k<m.na;k++){
@@ -821,6 +829,8 @@ async function run(fileName){
     let cx0, cy0, cz0;
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14]; cx0=cx; cy0=cy; cz0=cz;
+      const bds = bondDirEA[e][a] || [];   // bond directions of this atom → skip the p/d/f lobes that double a bonding orbital
+      const bonded = d => { for(const b of bds) if(d[0]*b[0]+d[1]*b[1]+d[2]*b[2] > 0.7) return true; return false; };
       for(const sh of cfg){
         const R = sh[0]*SHELL_STEP, ty = sh[1], m = TMUL[ty];   // element colour, brightened by orbital type
         const cr=Math.min(1,ec[0]*m), cg=Math.min(1,ec[1]*m), cb=Math.min(1,ec[2]*m);
@@ -830,7 +840,7 @@ async function run(fileName){
         } else {                                          // p/d/f → elongated lobes (dumbbell / cloverleaf)
           const Lw = R*0.34;
           for(const d of OTMPL[ty]){
-            cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);
+            if(!bonded(d)) cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);   // aligned with a bond → leave zero (invisible), the bonding orbital represents it
             oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; put(); w++;
           }
         }
@@ -838,6 +848,7 @@ async function run(fileName){
     }
     await yield_();
   }
+  bondDirEA.length = 0;   // done with bond directions
   const impostorMat = (name, radius, isShell, protonOutline) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
@@ -926,8 +937,10 @@ async function run(fileName){
     // Orbitals — bin by orbCenBuf (each lobe's atom centre).
     const oc=orbCount(e);
     if(oc>0){ const ob=orbBuf[e], ocol=orbColBuf[e], ocen=orbCenBuf[e], tot=atomCount[e]*oc;
-      for(let i=0;i<tot;i++){ const c=getCell(cellIx(ocen[i*3],ocen[i*3+1],ocen[i*3+2]));
-        pushN(c.orbM, ob, i*16, 16); pushN(c.orbCol, ocol, i*3, 3); pushN(c.orbCen, ocen, i*3, 3);
+      for(let i=0;i<tot;i++){ const o=i*16;
+        if(ob[o]*ob[o]+ob[o+1]*ob[o+1]+ob[o+2]*ob[o+2] < 1e-9) continue;   // skipped (bond-doubled) lobe → don't upload it
+        const c=getCell(cellIx(ocen[i*3],ocen[i*3+1],ocen[i*3+2]));
+        pushN(c.orbM, ob, o, 16); pushN(c.orbCol, ocol, i*3, 3); pushN(c.orbCen, ocen, i*3, 3);
       }
     }
     // Bonding lobes.
@@ -979,7 +992,7 @@ async function run(fileName){
   cells.clear();
   const cellHalfDiag = 0.5*Math.hypot(CELL,CELL,CELL);
   // Free the per-element core buffers now baked into cells. Keep orbBuf (hover outline) and sphBuf/colBuf (shells + picking).
-  for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=cylBuf[e]=wBuf[e]=cenBuf[e]=lpBuf[e]=lpCenBuf[e]=null; }   // keep orbBuf + orbColBuf for the hover outline & selected-atom overlay
+  for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=wBuf[e]=lpBuf[e]=lpCenBuf[e]=null; }   // keep orbBuf/orbColBuf (orbital outline) + cylBuf/cenBuf (bonding-lobe outline)
 
   /* Van der Waals shells stay per-element — they self-gate in the shader (visible
      only OUTSIDE the bubble), so distant atoms show the normal surface. Always on. */
@@ -1050,11 +1063,17 @@ async function run(fileName){
      A single emissive sphere follows the atom under the cursor; double-click
      pulses it and eases the camera onto that atom. */
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
-  const hlMat = new BABYLON.ShaderMaterial('hlMat', scene, 'hlo', {
-    attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection']
-  });
-  hlMat.alpha = 0.999; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;   // blended but full-strength (not halved) → crisp white
-  hlMat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows, not just the outer clump
+  const mkOutlineMat = (nm, col, rimLo, rimHi) => {
+    const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi']
+    });
+    mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi);
+    mat.alpha = 0.999; mat.backFaceCulling = false; mat.needDepthPrePass = false;   // blended, full-strength
+    mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
+    return mat;
+  };
+  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.30, 0.58);                 // hover = white, normal thickness
+  const selMat = mkOutlineMat('selMat', new BABYLON.Color3(0.25,0.65,1.0), 0.52, 0.66);         // selection = electric blue, thin
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
@@ -1062,19 +1081,29 @@ async function run(fileName){
   const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
-  /* Persistent selection outline: orbitals stay opaque, but the selected atom gets
-     a white outline tracing EVERY one of its orbital lobes (inner ones included),
+  /* Persistent selection outline: orbitals stay opaque, but the selected atom gets a
+     thin BLUE outline tracing every one of its orbital lobes AND its bonding lobes,
      drawn topmost (group 1, depth pre-cleared, no self-occlusion). */
   const selOut = BABYLON.MeshBuilder.CreateSphere('selOut', {diameter:1, segments:8}, scene);
-  selOut.material = hlMat; selOut.isPickable = false; selOut.setEnabled(false);
+  selOut.material = selMat; selOut.isPickable = false; selOut.setEnabled(false);
   selOut.renderingGroupId = 1;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
-  const selOutBuf = new Float32Array(80*16);
+  const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
   const setSelOut = atom => {
     const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
-    for(let i=0;i<cnt*16;i++) selOutBuf[i] = ob[base+i];   // raw lobe matrices → outline sits exactly on each lobe
+    let n = 0;
+    for(let i=0;i<cnt;i++){ const s=base+i*16, o=n*16;   // atomic orbital lobes
+      for(let j=0;j<16;j++) selOutBuf[o+j] = ob[s+j]; n++;
+    }
+    // Bonding lobes belonging to this atom (matched by their stored atom centre).
+    const cb = cylBuf[e], ce = cenBuf[e], cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    if(cb) for(let i=0;i<cylIdx[e] && n<160;i++){
+      const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
+      if(dx*dx+dy*dy+dz*dz > 1e-4) continue;              // this bonding lobe is on a different atom
+      const s=i*16, o=n*16; for(let j=0;j<16;j++) selOutBuf[o+j] = cb[s+j]; n++;
+    }
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
-    selOut.thinInstanceCount = cnt;
+    selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
   };
 
@@ -1104,7 +1133,9 @@ async function run(fileName){
         // narrow phase: intersect each orbital lobe (unit sphere r=0.5 in lobe space)
         const base = a*oc*16;
         for(let i=0;i<oc;i++){
-          BABYLON.Matrix.FromArrayToRef(ob, base + i*16, _pkM);
+          const bo = base + i*16;
+          if(ob[bo]*ob[bo] + ob[bo+1]*ob[bo+1] + ob[bo+2]*ob[bo+2] < 1e-9) continue;   // skipped (bond-doubled) lobe → zero matrix
+          BABYLON.Matrix.FromArrayToRef(ob, bo, _pkM);
           _pkM.invertToRef(_pkInv);
           BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(ox, oy, oz, _pkInv, _pkLo);
           BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, _pkLd);
