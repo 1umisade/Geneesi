@@ -294,7 +294,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float op = mix(1.0, opacity, vSel);   // opaque unless it belongs to the selected atom
+  float op = opacity;                   // all bonding / lone-pair lobes transparent
   gl_FragColor = vec4(mix(fogColor, c, fog), op);
 }`;
 
@@ -396,7 +396,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 3.0);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.2, 0.0, 1.0));   // electric-blue outline
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float op = mix(1.0, 0.35, vSel);            // only the selected atom's orbitals are transparent
+  float op = 0.42;                            // all orbitals transparent
   gl_FragColor = vec4(mix(fogColor, c, fog), op);
 }`;
 
@@ -559,12 +559,9 @@ async function run(fileName){
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
   // floor, the pivot dollies forward along the view instead of the radius going negative.
   const zoomBy = delta => {                 // delta < 0 = closer
-    const hi = cam.upperRadiusLimit ?? 1e9, minR = fitRadius * 0.02;
+    const hi = cam.upperRadiusLimit ?? 1e9, minR = Math.max(0.3, fitRadius * 0.0006);
     const r = cam.radius + delta;
-    if(selCenter.x < 1e5){                  // an atom is selected → orbit it: radius zoom, pivot stays fixed
-      cam.radius = Math.max(minR, Math.min(hi, r));
-      return;
-    }
+    // Always dolly THROUGH (even after a double-click) → infinite zoom in and out the far side.
     if(r < minR){
       const fwd = cam.getForwardRay(1).direction;   // camera → target
       cam.target.addInPlace(fwd.scale(minR - r));    // slide pivot forward; camera follows (no flip)
@@ -867,7 +864,7 @@ async function run(fileName){
     uniforms: ['view','projection','bubbleR','selCenter','fogColor','fogStart','fogEnd']
   });
   orbMatG.setFloat('bubbleR', BUBBLE_R);
-  orbMatG.alpha = 0.999; orbMatG.forceDepthWrite = true; orbMatG.backFaceCulling = true;   // opaque; selected atom → transparent
+  orbMatG.alpha = 0.42; orbMatG.disableDepthWrite = true; orbMatG.backFaceCulling = true;   // all transparent; no depth write → orbitals behind show through
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
     eff.setVector3('selCenter', selCenter);
@@ -879,7 +876,7 @@ async function run(fileName){
       uniforms: ['view','projection','bubbleR','opacity','selCenter','fogColor','fogStart','fogEnd']
     });
     mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', selOpac);
-    mat.alpha = 0.999; mat.forceDepthWrite = true; mat.backFaceCulling = true;
+    mat.alpha = selOpac; mat.disableDepthWrite = true; mat.backFaceCulling = true;   // all transparent; no depth write → lobes behind show through
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setVector3('selCenter', selCenter);
@@ -1005,7 +1002,7 @@ async function run(fileName){
   const aspect = engine.getRenderWidth()/Math.max(engine.getRenderHeight(),1);
   const tanV = Math.tan(cam.fov/2);
   cam.radius = Math.max(dimY/2/tanV, dimX/2/(tanV*aspect), dimZ)*1.08;
-  cam.lowerRadiusLimit = cam.radius*0.02;   // small positive floor → no camera flip; zoomBy() dollies through instead
+  cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
@@ -1113,8 +1110,13 @@ async function run(fileName){
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
+    // Recentre WITHOUT changing zoom: end radius = current camera→atom distance, so the atom
+    // keeps its exact on-screen size (the camera swivels to centre it, never dollies in/out).
+    const keepR = Math.max(cam.lowerRadiusLimit, BABYLON.Vector3.Distance(cam.position, a.center));
     BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,        // focus
       cam.target.clone(), a.center.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('centerR', cam, 'radius', 60, 22,       // keep scale
+      cam.radius, keepR, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
   canvas.addEventListener('dblclick', centerOnAtom);                                // desktop
   scene.onPointerObservable.add(p => {
