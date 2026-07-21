@@ -126,6 +126,7 @@ function parseMol2(text){
         cur.x  = new Float32Array(cur.na); cur.y = new Float32Array(cur.na);
         cur.z  = new Float32Array(cur.na); cur.el = new Uint16Array(cur.na); cur.ai = 0;
         cur.cat = new Uint8Array(cur.na);
+        cur.sid = new Int32Array(cur.na);  // subst_id (residue instance) → to extract one chlorophyll
         cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
         cur.bo = new Uint8Array(cur.nb);   // bond order (1 single, 2 double, 3 triple)
       }
@@ -136,7 +137,7 @@ function parseMol2(text){
       if(p.length < 6 || cur.ai >= cur.na) continue;
       const k = cur.ai++;
       cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
-      cur.cat[k] = catOf(p[7] || '');
+      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0;
     } else if(section === 'BOND'){
       const p = ln.trim().split(/\s+/);
       if(p.length < 4 || cur.bi >= cur.nb) continue;
@@ -146,6 +147,30 @@ function parseMol2(text){
     }
   }
   return mols.filter(m => m.na > 0);
+}
+
+/* Pull one complete chlorophyll (CLA/CHL/PHO residue) out of the model as its own molecule. */
+function extractChlorophyll(m){
+  if(!m.sid) return null;
+  const groups = new Map();                      // group chlorophyll atoms by residue id
+  for(let k=0;k<m.na;k++) if(m.cat[k]===1){
+    const g = groups.get(m.sid[k]); if(g) g.push(k); else groups.set(m.sid[k], [k]);
+  }
+  let best = null;
+  for(const g of groups.values()) if(!best || g.length > best.length) best = g;   // the largest = a full chlorophyll
+  if(!best || best.length < 20) return null;
+  const na = best.length, map = new Map();
+  best.forEach((gi,li) => map.set(gi, li));
+  const nm = { name:'Chlorophyll', na, ai:na, nb:0,
+    x:new Float32Array(na), y:new Float32Array(na), z:new Float32Array(na),
+    el:new Uint16Array(na), cat:new Uint8Array(na), sid:new Int32Array(na) };
+  for(let li=0;li<na;li++){ const gi=best[li];
+    nm.x[li]=m.x[gi]; nm.y[li]=m.y[gi]; nm.z[li]=m.z[gi]; nm.el[li]=m.el[gi]; nm.cat[li]=m.cat[gi]; }
+  const b1=[], b2=[], bo=[];                      // keep only bonds internal to this residue (remapped)
+  for(let k=0;k<m.nb;k++){ const a=m.b1[k], b=m.b2[k];
+    if(map.has(a) && map.has(b)){ b1.push(map.get(a)); b2.push(map.get(b)); bo.push(m.bo[k]); } }
+  nm.nb=b1.length; nm.b1=Int32Array.from(b1); nm.b2=Int32Array.from(b2); nm.bo=Uint8Array.from(bo);
+  return nm;
 }
 
 /* GPU sphere impostors: a camera-facing quad per atom; the fragment shader
@@ -398,9 +423,9 @@ varying vec3 vVP;
 varying vec3 vN;
 void main(void){
   vec3 N = normalize(vN), V = normalize(-vVP);
-  float f = pow(1.0 - abs(dot(N, V)), 1.8);   // silhouette rim
-  if(f < 0.25) discard;                        // transparent centre → outline only
-  gl_FragColor = vec4(1.0, 1.0, 1.0, f);
+  float f = pow(1.0 - abs(dot(N, V)), 2.6);   // thin silhouette stroke (matches the blue outline profile)
+  if(f < 0.28) discard;                        // transparent centre → glowing stroke only
+  gl_FragColor = vec4(1.0, 1.0, 1.0, min(1.0, f*1.6));
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -457,6 +482,8 @@ async function run(fileName){
   await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(r)); setTimeout(r, 120); });  // commit (rAF), with timeout fallback for hidden tabs
   const mols = parseMol2(new TextDecoder().decode(buf));
   if(mols.length === 0) throw new Error('No molecules found in file');
+  const chl = extractChlorophyll(mols[0]);       // showcase one chlorophyll beside the protein
+  if(chl) mols.push(chl);
 
   // Rotate 90° about Z so the long axis lies horizontal (PSII lands on its side)
   for(const m of mols){
@@ -961,9 +988,10 @@ async function run(fileName){
     attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection']
   });
   hlMat.alpha = 0.5; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;
-  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:16}, scene);
+  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:3}, scene);   // seg3 to match the orbital lobes exactly
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
+  scene.setRenderingAutoClearDepthStencil(1, true, false, false);   // clear depth before group 1 → outline never hidden
   const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
@@ -1010,7 +1038,7 @@ async function run(fileName){
     const now = performance.now();
     if(now < flashUntil && flashAtom){
       const t = (flashUntil - now) / 600;                     // 1 → 0
-      setHL(flashAtom, 1.08 + 0.35*t);   // bright pop that shrinks in
+      setHL(flashAtom, 1.0 + 0.3*t);   // bright pop that shrinks onto the orbital surface
     }
   });
 
@@ -1019,7 +1047,9 @@ async function run(fileName){
     selCenter.copyFrom(a.center);   // this atom's orbitals become transparent
     flashAtom = a; flashUntil = performance.now() + 600;   // flash the nucleons
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+    // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
     BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,        // focus
       cam.target.clone(), a.center.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
@@ -1031,7 +1061,7 @@ async function run(fileName){
       if(dragging || p.event.buttons || now - hoverT < 80 || now < flashUntil) return;   // skip while any button held; throttle; don't fight the flash
       hoverT = now;
       const a = pickAtom();
-      if(a) setHL(a, 1.08); else hl.setEnabled(false);   // white outline around each orbital lobe
+      if(a) setHL(a, 1.0); else hl.setEnabled(false);   // white stroke exactly on each orbital lobe
     }
   });
 
