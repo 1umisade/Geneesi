@@ -1001,7 +1001,7 @@ async function run(fileName){
   cells.clear();
   const cellHalfDiag = 0.5*Math.hypot(CELL,CELL,CELL);
   // Free the per-element core buffers now baked into cells. Keep orbBuf (hover outline) and sphBuf/colBuf (shells + picking).
-  for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=wBuf[e]=lpBuf[e]=lpCenBuf[e]=null; }   // keep orbBuf/orbColBuf (orbital outline) + cylBuf/cenBuf (bonding-lobe outline)
+  for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=null; }   // keep orbBuf/orbColBuf + cylBuf/cenBuf/wBuf + lpBuf/lpCenBuf → the outline can match every fill lobe exactly
 
   /* Van der Waals shells stay per-element — they self-gate in the shader (visible
      only OUTSIDE the bubble), so distant atoms show the normal surface. Always on. */
@@ -1206,11 +1206,24 @@ async function run(fileName){
     const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
     let n = 0;
     for(let i=0;i<cnt;i++){ const s=base+i*16, o=n*16; for(let j=0;j<16;j++) buf[o+j]=ob[s+j]; n++; }
-    const cb = cylBuf[e], ce = cenBuf[e], cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    const cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    // Copy a lobe's matrix, widening it by `tap` (the fill shader scales the lobe's x/z by taper → the outline must too).
+    const copyLobe = (src, s, tap) => { const o=n*16;
+      for(let j=0;j<16;j++) buf[o+j]=src[s+j];
+      buf[o]*=tap; buf[o+1]*=tap; buf[o+2]*=tap; buf[o+8]*=tap; buf[o+9]*=tap; buf[o+10]*=tap;   // scale local x & z axes
+      n++;
+    };
+    const cb=cylBuf[e], ce=cenBuf[e], wb=wBuf[e];        // bonding lobes (σ/knob/π) with per-lobe taper
     if(cb) for(let i=0;i<cylIdx[e] && n<OUT_MAX;i++){
       const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
-      if(dx*dx+dy*dy+dz*dz > 1e-4) continue;              // bonding lobe on a different atom
-      const s=i*16, o=n*16; for(let j=0;j<16;j++) buf[o+j]=cb[s+j]; n++;
+      if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
+      copyLobe(cb, i*16, wb[i]);
+    }
+    const lb=lpBuf[e], le=lpCenBuf[e];                   // lone pairs (taper = 1)
+    if(lb) for(let i=0;i<lpIdx[e] && n<OUT_MAX;i++){
+      const dx=le[i*3]-cx, dy=le[i*3+1]-cy, dz=le[i*3+2]-cz;
+      if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
+      copyLobe(lb, i*16, 1.0);
     }
     return n;
   };
