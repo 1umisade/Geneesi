@@ -294,8 +294,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float op = mix(1.0, opacity, vSel);   // opaque, except the selected atom's lobes
-  gl_FragColor = vec4(mix(fogColor, c, fog), op);
+  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
 }`;
 
 /* Bonding orbital = one CONE per bond: wide (base) at the more electronegative atom,
@@ -379,7 +378,6 @@ void main(void){
 BABYLON.Effect.ShadersStore['orbFragmentShader'] = `
 precision highp float;
 uniform float bubbleR;
-uniform float selMode;   // 0 = opaque cell pass (cut out the selected atom), 1 = transparent overlay (selected atom only)
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -390,7 +388,6 @@ varying float vSel;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   if(length(vViewPos) >= bubbleR) discard;   // orbitals only inside the camera sphere
-  if(selMode < 0.5 && vSel > 0.5) discard;    // opaque pass skips the selected atom → the overlay draws it transparent, no self-occlusion
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
@@ -398,8 +395,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 3.0);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.2, 0.0, 1.0));   // electric-blue outline
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float op = selMode > 0.5 ? 0.34 : 1.0;      // overlay transparent, opaque pass solid
-  gl_FragColor = vec4(mix(fogColor, c, fog), op);
+  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
 }`;
 
 /* Hover/flash highlight: a bright white Fresnel rim (transparent centre) around the nucleus. */
@@ -866,31 +862,28 @@ async function run(fileName){
   const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0);   // isShell=0; protons are coloured light red directly (no extra red rim)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','selMode','selCenter','fogColor','fogStart','fogEnd']
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd']
   });
-  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('selMode', 0);   // opaque pass; cuts out the selected atom
+  orbMatG.setFloat('bubbleR', BUBBLE_R);
   orbMatG.backFaceCulling = true;   // fully opaque → default depth write, correct occlusion
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
-    eff.setVector3('selCenter', selCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
   });
-  const bondMatG = (nm, selOpac) => {   // element colour per instance (bcol); transparent only on the selected atom
+  const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','selCenter','fogColor','fogStart','fogEnd']
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd']
     });
-    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', selOpac);
-    mat.alpha = 0.999; mat.forceDepthWrite = true; mat.backFaceCulling = true;   // opaque; only the selected atom's lobes turn transparent
+    mat.setFloat('bubbleR', BUBBLE_R); mat.backFaceCulling = true;   // opaque → default depth write
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
-      eff.setVector3('selCenter', selCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     });
     return mat;
   };
-  const bondBondingMat = bondMatG('bondG', 0.4);    // bonding lobes
-  const bondLPMat      = bondMatG('lobeLPG', 0.25); // lone-pair lobes
+  const bondBondingMat = bondMatG('bondG');    // bonding lobes
+  const bondLPMat      = bondMatG('lobeLPG');  // lone-pair lobes
 
   // Global atom bounds → grid dimensions.
   let bMiX=Infinity,bMiY=Infinity,bMiZ=Infinity,bMaX=-Infinity,bMaY=-Infinity,bMaZ=-Infinity;
@@ -1060,34 +1053,20 @@ async function run(fileName){
   const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
-  /* Selected-atom orbital overlay: the opaque cell pass cuts the selected atom out;
-     this mesh re-draws its lobes transparent WITHOUT depth-writing, so the inner
-     orbitals (and their blue outlines) show through the outer ones. */
-  const selOrbMat = new BABYLON.ShaderMaterial('selOrb', scene, 'orb', {
-    attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','selMode','selCenter','fogColor','fogStart','fogEnd']
-  });
-  selOrbMat.setFloat('bubbleR', BUBBLE_R); selOrbMat.setFloat('selMode', 1);
-  selOrbMat.alpha = 0.34; selOrbMat.disableDepthWrite = true; selOrbMat.backFaceCulling = true;   // transparent, no self-occlusion; still depth-tested vs opaque atoms
-  selOrbMat.onBindObservable.add(() => {
-    const eff = selOrbMat.getEffect(); if(!eff) return;
-    eff.setVector3('selCenter', selCenter);
-    eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-  });
-  const selFill = BABYLON.MeshBuilder.CreateSphere('selFill', {segments:3, diameter:1}, scene);
-  selFill.material = selOrbMat; selFill.isPickable = false; selFill.setEnabled(false);
-  selFill.alwaysSelectAsActiveMesh = true;
-  const selMatBuf = new Float32Array(80*16), selColBuf = new Float32Array(80*3), selCenBuf = new Float32Array(80*3);
-  // Populate the overlay with the selected atom's orbital lobes.
-  const setSelFill = atom => {
-    const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], oc = orbColBuf[e], base = atom.idx*cnt*16, cbase = atom.idx*cnt*3;
-    for(let i=0;i<cnt*16;i++) selMatBuf[i] = ob[base+i];
-    for(let i=0;i<cnt*3;i++){ selColBuf[i] = oc[cbase+i]; selCenBuf[i] = atom.center.asArray()[i%3]; }
-    selFill.thinInstanceSetBuffer('matrix', selMatBuf, 16, true);
-    selFill.thinInstanceSetBuffer('ocol', selColBuf, 3, true);
-    selFill.thinInstanceSetBuffer('ocen', selCenBuf, 3, true);
-    selFill.thinInstanceCount = cnt;
-    selFill.setEnabled(true);
+  /* Persistent selection outline: orbitals stay opaque, but the selected atom gets
+     a white outline tracing EVERY one of its orbital lobes (inner ones included),
+     drawn topmost (group 1, depth pre-cleared, no self-occlusion). */
+  const selOut = BABYLON.MeshBuilder.CreateSphere('selOut', {diameter:1, segments:8}, scene);
+  selOut.material = hlMat; selOut.isPickable = false; selOut.setEnabled(false);
+  selOut.renderingGroupId = 1;                                 // same topmost group as the hover outline
+  selOut.alwaysSelectAsActiveMesh = true;
+  const selOutBuf = new Float32Array(80*16);
+  const setSelOut = atom => {
+    const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
+    for(let i=0;i<cnt*16;i++) selOutBuf[i] = ob[base+i];   // raw lobe matrices → outline sits exactly on each lobe
+    selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
+    selOut.thinInstanceCount = cnt;
+    selOut.setEnabled(true);
   };
 
   // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
@@ -1163,8 +1142,8 @@ async function run(fileName){
 
   const centerOnAtom = () => {
     const a = pickAtom(); if(!a) return;
-    selCenter.copyFrom(a.center);   // this atom's orbitals become transparent
-    setSelFill(a);                  // draw its lobes as a see-through overlay (inner orbitals + outlines visible)
+    selCenter.copyFrom(a.center);   // marks the selected atom
+    setSelOut(a);                   // persistent white outline tracing all its orbital lobes (inner included), topmost
     flashAtom = a; flashUntil = performance.now() + 600;   // flash the nucleons
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
