@@ -825,22 +825,25 @@ async function run(fileName){
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
     const cfg = econf(e), sb = sphBuf[e], oc = orbColBuf[e], oce = orbCenBuf[e], ec = info(e).c; let w = 0;
+    const maxNe = cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);   // valence shell = highest n
     const put = () => { oce[w*3]=cx0; oce[w*3+1]=cy0; oce[w*3+2]=cz0; };
     let cx0, cy0, cz0;
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14]; cx0=cx; cy0=cy; cz0=cz;
-      const bds = bondDirEA[e][a] || [];   // bond directions of this atom → skip the p/d/f lobes that double a bonding orbital
-      const bonded = d => { for(const b of bds) if(d[0]*b[0]+d[1]*b[1]+d[2]*b[2] > 0.7) return true; return false; };
+      const isBonded = (bondDirEA[e][a] || []).length > 0;   // a bonded atom is hybridised
       for(const sh of cfg){
         const R = sh[0]*SHELL_STEP, ty = sh[1], m = TMUL[ty];   // element colour, brightened by orbital type
         const cr=Math.min(1,ec[0]*m), cg=Math.min(1,ec[1]*m), cb=Math.min(1,ec[2]*m);
+        // Valence s + p of a bonded atom are consumed into the sp/sp2/sp3 hybrids → shown as the bonding
+        // orbitals + lone pairs, so drop the pure atomic versions (leave a zero, i.e. invisible, matrix).
+        const hybridised = isBonded && maxNe > 1 && sh[0] === maxNe && ty <= 1;   // keep H's sole 1s (no inner core to fall back on)
         if(ty === 0){                                     // s → sphere
-          sphereMat(cx,cy,cz, R*0.72, orbBuf[e], w*16);
+          if(!hybridised) sphereMat(cx,cy,cz, R*0.72, orbBuf[e], w*16);
           oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; put(); w++;
         } else {                                          // p/d/f → elongated lobes (dumbbell / cloverleaf)
           const Lw = R*0.34;
           for(const d of OTMPL[ty]){
-            if(!bonded(d)) cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);   // aligned with a bond → leave zero (invisible), the bonding orbital represents it
+            if(!hybridised) cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);
             oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; put(); w++;
           }
         }
