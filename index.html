@@ -811,7 +811,7 @@ async function run(fileName){
         eff.setVector3('selCenter', selCenter);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       });
-      const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:6, diameter:1}, scene);   // smooth orbital lobes (FPS not a concern)
+      const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:3, diameter:1}, scene);   // low-poly: 686k lobes are vertex-bound when the core switches on
       orb.material = orbMat; orb.isPickable = false;
       orb.thinInstanceSetBuffer('matrix', orbBuf[e], 16, true);
       orb.thinInstanceSetBuffer('ocol', orbColBuf[e], 3, true);
@@ -838,7 +838,7 @@ async function run(fileName){
     };
     // Bonding orbitals — opaque; transparent only on the selected atom.
     if(cylIdx[e] > 0){
-      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:4, diameter:1}, scene);
+      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:3, diameter:1}, scene);
       cyl.material = lobeMat('bond'+e, 0.4); cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
       cyl.thinInstanceSetBuffer('taper', wBuf[e], 1, true);   // per-lobe width multiplier
