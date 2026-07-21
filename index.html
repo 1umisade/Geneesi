@@ -226,10 +226,13 @@ attribute vec4 world1;
 attribute vec4 world2;
 attribute vec4 world3;
 attribute float taper;     // per-lobe: widen the far end by bond polarity (0 = uniform ellipsoid)
+attribute vec3 ocen;       // this lobe's atom centre → compare to the selected atom
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec3 selCenter;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
+varying float vSel;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   float wsc = taper;   // per-lobe overall width multiplier (electronegative atom's lobe is wider → pair forms a cone)
@@ -238,6 +241,7 @@ void main(void){
   vec4 vp = view * W * vec4(pos, 1.0);
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(nrm, 0.0)).xyz;
+  vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
@@ -250,6 +254,7 @@ uniform float fogStart;
 uniform float fogEnd;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
+varying float vSel;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   if(length(vViewPos) >= bubbleR) discard;   // orbital lobes only inside the camera bubble
@@ -261,7 +266,8 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), opacity);
+  float op = mix(1.0, opacity, vSel);   // opaque unless it belongs to the selected atom
+  gl_FragColor = vec4(mix(fogColor, c, fog), op);
 }`;
 
 /* Bonding orbital = one CONE per bond: wide (base) at the more electronegative atom,
@@ -564,13 +570,15 @@ async function run(fileName){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], wBuf = [], lpBuf = [], colBuf = [],
+  const sphBuf = [], cylBuf = [], wBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], colBuf = [],
         sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
     cylBuf[e] = new Float32Array(halfCount[e]*16);             // bonding half-lobes (one per bond half)
     wBuf[e]   = new Float32Array(halfCount[e]);                // per-lobe width (electronegativity)
+    cenBuf[e] = new Float32Array(halfCount[e]*3);              // bonding lobe's atom centre (selection test)
     lpBuf[e]  = new Float32Array(atomCount[e]*lonePairs(e)*16); // lone-pair lobes (translucent)
+    lpCenBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)*3);
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
   }
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
@@ -645,6 +653,8 @@ async function run(fileName){
         cylTo(x1+px,y1+py,z1+pz, x1+bx*f+px, y1+by*f+py, z1+bz*f+pz, cylBuf[e1], i1*16);
         cylTo(x2+px,y2+py,z2+pz, x2-bx*f+px, y2-by*f+py, z2-bz*f+pz, cylBuf[e2], i2*16);
         wBuf[e1][i1] = w1; wBuf[e2][i2] = w2;
+        cenBuf[e1][i1*3]=x1; cenBuf[e1][i1*3+1]=y1; cenBuf[e1][i1*3+2]=z1;
+        cenBuf[e2][i2*3]=x2; cenBuf[e2][i2*3+1]=y2; cenBuf[e2][i2*3+2]=z2;
       }
       bd[a1].push(nrm([bx,by,bz])); bd[a2].push(nrm([-bx,-by,-bz]));
     }
@@ -652,8 +662,11 @@ async function run(fileName){
       const e=m.el[k], lp=lonePairs(e);
       if(lp===0 || bd[k].length===0) continue;
       const ax=m.x[k]+ox, ay=m.y[k]+oy, az=m.z[k]+oz;
-      for(const d of lonePairDirs(bd[k], lp))
-        cylTo(ax,ay,az, ax+d[0]*LP_LEN, ay+d[1]*LP_LEN, az+d[2]*LP_LEN, lpBuf[e], (lpIdx[e]++)*16);
+      for(const d of lonePairDirs(bd[k], lp)){
+        const li=lpIdx[e]++;
+        cylTo(ax,ay,az, ax+d[0]*LP_LEN, ay+d[1]*LP_LEN, az+d[2]*LP_LEN, lpBuf[e], li*16);
+        lpCenBuf[e][li*3]=ax; lpCenBuf[e][li*3+1]=ay; lpCenBuf[e][li*3+2]=az;
+      }
     }
   }
   await yield_();
@@ -808,36 +821,38 @@ async function run(fileName){
 
     /* Orbital-lobe meshes (element-coloured ellipsoids, blue Fresnel outline). */
     const bc = info(e).c;
-    const lobeMat = (nm, opac, transp) => {
+    const lobeMat = (nm, selOpac) => {   // opaque by default; selOpac = opacity on the selected atom
       const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
-        attributes: ['position','normal','taper','world0','world1','world2','world3'],
-        uniforms: ['view','projection','color','bubbleR','opacity','fogColor','fogStart','fogEnd']
+        attributes: ['position','normal','taper','ocen','world0','world1','world2','world3'],
+        uniforms: ['view','projection','color','bubbleR','opacity','selCenter','fogColor','fogStart','fogEnd']
       });
       mat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
-      mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', opac);
-      mat.backFaceCulling = !transp;
-      if(transp){ mat.alpha = opac; mat.forceDepthWrite = true; }
+      mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', selOpac);
+      mat.alpha = 0.999; mat.forceDepthWrite = true; mat.backFaceCulling = true;   // opaque unless selected atom
       mat.onBindObservable.add(() => {
         const eff = mat.getEffect(); if(!eff) return;
+        eff.setVector3('selCenter', selCenter);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       });
       return mat;
     };
-    // Bonding orbitals — two overlapping opaque lobes per bond; width = polarity share.
+    // Bonding orbitals — opaque; transparent only on the selected atom.
     if(cylIdx[e] > 0){
       const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:4, diameter:1}, scene);
-      cyl.material = lobeMat('bond'+e, 0.75, true); cyl.isPickable = false;   // 25% transparent
+      cyl.material = lobeMat('bond'+e, 0.4); cyl.isPickable = false;
       cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
       cyl.thinInstanceSetBuffer('taper', wBuf[e], 1, true);   // per-lobe width multiplier
+      cyl.thinInstanceSetBuffer('ocen', cenBuf[e], 3, true);
       cyl.thinInstanceCount = cylIdx[e];
       cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
     }
-    // Non-bonding (lone-pair) lobes — 50% transparent, uniform width.
+    // Non-bonding (lone-pair) lobes — opaque; transparent only on the selected atom.
     if(lpIdx[e] > 0){
       const lpm = BABYLON.MeshBuilder.CreateSphere('lp'+e, {segments:3, diameter:1}, scene);
-      lpm.material = lobeMat('lobeLP'+e, 0.25, true); lpm.isPickable = false;   // 75% transparent
+      lpm.material = lobeMat('lobeLP'+e, 0.25); lpm.isPickable = false;
       lpm.thinInstanceSetBuffer('matrix', lpBuf[e], 16, true);
       lpm.thinInstanceSetBuffer('taper', new Float32Array(lpBuf[e].length/16).fill(1.0), 1, true);   // width = 1 (uniform)
+      lpm.thinInstanceSetBuffer('ocen', lpCenBuf[e], 3, true);
       lpm.thinInstanceCount = lpIdx[e];   // buffer over-allocated (atoms without bonds); render only what was written
       lpm.alwaysSelectAsActiveMesh = true; coreMeshes.push(lpm);
     }
