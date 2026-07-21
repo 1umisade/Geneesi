@@ -294,7 +294,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float op = opacity;                   // all bonding / lone-pair lobes transparent
+  float op = mix(1.0, opacity, vSel);   // opaque, except the selected atom's lobes
   gl_FragColor = vec4(mix(fogColor, c, fog), op);
 }`;
 
@@ -396,7 +396,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 3.0);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.2, 0.0, 1.0));   // electric-blue outline
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  float op = 0.42;                            // all orbitals transparent
+  float op = mix(1.0, 0.32, vSel);            // opaque, except the selected atom's orbitals
   gl_FragColor = vec4(mix(fogColor, c, fog), op);
 }`;
 
@@ -572,7 +572,11 @@ async function run(fileName){
   };
   const dragZoom = dz => zoomBy(dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005));  // middle-drag
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){ showTips(); dragging = true; }
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){
+      showTips(); dragging = true;
+      // Re-pivot on the selected atom so rotation orbits it, even if zooming moved the pivot.
+      if(selCenter.x < 1e5) cam.setTarget(selCenter.clone());
+    }
     else if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 1) showTips();
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false; }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE && (p.event.buttons & 4)){   // middle held
@@ -760,9 +764,8 @@ async function run(fileName){
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
     const A = info(e).n, Z = info(e).z, sc = SPACING, nb = nucBuf[e], nc = nucColBuf[e], sb = sphBuf[e];
-    const ec = info(e).c;                              // element colour drives both nucleon types
-    const PC = [ec[0], ec[1], ec[2]];                  // protons  = element colour
-    const NC = [ec[0]*0.45+0.55, ec[1]*0.45+0.55, ec[2]*0.45+0.55];   // neutrons = brighter (toward white)
+    const PC = [1.0, 0.5, 0.5];    // protons  = light red
+    const NC = [0.62, 0.62, 0.62]; // neutrons = grey
     for(let a=0;a<atomCount[e];a++){
       const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
       for(let i=0;i<A;i++){
@@ -858,13 +861,13 @@ async function run(fileName){
      every cell (nucleon colour, orbital ocol, bond bcol). */
 
   // Shared materials (one of each kind for all cells).
-  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 1.0);   // isShell=0; protonOutline=1 → red rim on protons
+  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0);   // isShell=0; protons are coloured light red directly (no extra red rim)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
     uniforms: ['view','projection','bubbleR','selCenter','fogColor','fogStart','fogEnd']
   });
   orbMatG.setFloat('bubbleR', BUBBLE_R);
-  orbMatG.alpha = 0.42; orbMatG.disableDepthWrite = true; orbMatG.backFaceCulling = true;   // all transparent; no depth write → orbitals behind show through
+  orbMatG.alpha = 0.999; orbMatG.forceDepthWrite = true; orbMatG.backFaceCulling = true;   // opaque; only the selected atom's orbitals turn transparent
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
     eff.setVector3('selCenter', selCenter);
@@ -876,7 +879,7 @@ async function run(fileName){
       uniforms: ['view','projection','bubbleR','opacity','selCenter','fogColor','fogStart','fogEnd']
     });
     mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', selOpac);
-    mat.alpha = selOpac; mat.disableDepthWrite = true; mat.backFaceCulling = true;   // all transparent; no depth write → lobes behind show through
+    mat.alpha = 0.999; mat.forceDepthWrite = true; mat.backFaceCulling = true;   // opaque; only the selected atom's lobes turn transparent
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setVector3('selCenter', selCenter);
@@ -1055,22 +1058,46 @@ async function run(fileName){
   const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
-  // Exact ray-vs-sphere pick: nearest atom (hitbox = its orbital cloud) in front of the camera.
+  // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
+  // ray-vs-ellipsoid against its actual orbital lobes → the hitbox traces the lobes exactly.
+  const _pkInv = new BABYLON.Matrix(), _pkM = new BABYLON.Matrix();
+  const _pkLo = new BABYLON.Vector3(), _pkLd = new BABYLON.Vector3();
   const pickAtom = () => {
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
     const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
+    const cp = cam.position;                                     // only atoms whose orbitals actually render (inside the bubble) are pickable
     let bestT = Infinity, bE = -1, bA = -1;
     for(let e=0;e<nEl;e++){
-      const hr = orbExtent(e), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];   // hitbox = the orbital cloud
+      const hr = orbExtent(e), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];
+      const oc = orbCount(e), ob = orbBuf[e];
+      const bub2 = (BUBBLE_R + hr) * (BUBBLE_R + hr);
       for(let a=0;a<cnt;a++){
+        const cxp = sb[a*16+12]-cp.x, cyp = sb[a*16+13]-cp.y, czp = sb[a*16+14]-cp.z;
+        if(cxp*cxp + cyp*cyp + czp*czp > bub2) continue;         // atom outside the reveal bubble → its orbitals aren't drawn
         const px = sb[a*16+12]-ox, py = sb[a*16+13]-oy, pz = sb[a*16+14]-oz;
         const tca = px*dx + py*dy + pz*dz;
-        if(tca <= 0) continue;                                   // behind the camera
+        if(tca <= 0) continue;                                   // atom behind the camera
         const d2 = px*px+py*py+pz*pz - tca*tca;
-        if(d2 > vr2) continue;                                   // ray misses this sphere
-        const t = tca - Math.sqrt(vr2 - d2);
-        if(t < bestT){ bestT = t; bE = e; bA = a; }
+        if(d2 > vr2) continue;                                   // ray misses the atom's bounding sphere
+        if(tca - Math.sqrt(vr2 - d2) >= bestT) continue;         // can't beat the current nearest hit
+        // narrow phase: intersect each orbital lobe (unit sphere r=0.5 in lobe space)
+        const base = a*oc*16;
+        for(let i=0;i<oc;i++){
+          BABYLON.Matrix.FromArrayToRef(ob, base + i*16, _pkM);
+          _pkM.invertToRef(_pkInv);
+          BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(ox, oy, oz, _pkInv, _pkLo);
+          BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, _pkLd);
+          const A2 = _pkLd.x*_pkLd.x + _pkLd.y*_pkLd.y + _pkLd.z*_pkLd.z;
+          const B2 = 2*(_pkLo.x*_pkLd.x + _pkLo.y*_pkLd.y + _pkLo.z*_pkLd.z);
+          const C2 = _pkLo.x*_pkLo.x + _pkLo.y*_pkLo.y + _pkLo.z*_pkLo.z - 0.25;
+          const disc = B2*B2 - 4*A2*C2;
+          if(disc < 0) continue;                                 // ray misses this lobe
+          const sq = Math.sqrt(disc);
+          let t = (-B2 - sq)/(2*A2);
+          if(t < 0) t = (-B2 + sq)/(2*A2);                       // camera inside the lobe → use the exit
+          if(t > 0 && t < bestT){ bestT = t; bE = e; bA = a; }   // t is the world-space ray distance
+        }
       }
     }
     if(bE < 0) return null;
