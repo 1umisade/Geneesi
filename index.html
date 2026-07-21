@@ -252,12 +252,14 @@ attribute vec4 world2;
 attribute vec4 world3;
 attribute float taper;     // per-lobe: widen the far end by bond polarity (0 = uniform ellipsoid)
 attribute vec3 ocen;       // this lobe's atom centre → compare to the selected atom
+attribute vec3 bcol;       // per-instance element colour (so bonds combine across elements per cell)
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying float vSel;
+varying vec3 vBcol;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   float wsc = taper;   // per-lobe overall width multiplier (electronegative atom's lobe is wider → pair forms a cone)
@@ -267,11 +269,11 @@ void main(void){
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(nrm, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
+  vBcol = bcol;
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
 precision highp float;
-uniform vec3 color;
 uniform float bubbleR;
 uniform float opacity;
 uniform vec3 fogColor;
@@ -280,12 +282,13 @@ uniform float fogEnd;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying float vSel;
+varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   if(length(vViewPos) >= bubbleR) discard;   // orbital lobes only inside the camera bubble
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = color * (0.55 + 0.45 * ndl);
+  vec3 c = vBcol * (0.55 + 0.45 * ndl);
   // Electric-blue Fresnel rim → thin glowing orbital outline at the silhouette
   vec3 V = normalize(-vViewPos);
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
@@ -734,7 +737,6 @@ async function run(fileName){
   await yield_();
 
   const BUBBLE_R = 49.5;      // camera reveal-sphere radius (Å) — atoms within it go translucent
-  const coreMeshes = [];      // inner atoms + bonds, enabled only when the bubble reaches the model
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
@@ -849,79 +851,135 @@ async function run(fileName){
 
   const selCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);   // focused atom centre (far = none) → its orbitals go transparent
   setLbl('Uploading to GPU…'); await yield_();
+  /* ── Spatial culling ──────────────────────────────────────────────────────
+     Bin every inner-core instance (nucleons, orbitals, bonds, lone pairs) into a
+     3-D grid of cells. Each frame only the handful of cells the camera bubble
+     actually overlaps are enabled — so we vertex-process a few thousand nearby
+     instances instead of the whole protein's 2M+ the moment the core switches on.
+     All geometry is per-instance coloured, so ONE material of each kind serves
+     every cell (nucleon colour, orbital ocol, bond bcol). */
+
+  // Shared materials (one of each kind for all cells).
+  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 1.0);   // isShell=0; protonOutline=1 → red rim on protons
+  const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
+    attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
+    uniforms: ['view','projection','bubbleR','selCenter','fogColor','fogStart','fogEnd']
+  });
+  orbMatG.setFloat('bubbleR', BUBBLE_R);
+  orbMatG.alpha = 0.999; orbMatG.forceDepthWrite = true; orbMatG.backFaceCulling = true;   // opaque; selected atom → transparent
+  orbMatG.onBindObservable.add(() => {
+    const eff = orbMatG.getEffect(); if(!eff) return;
+    eff.setVector3('selCenter', selCenter);
+    eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
+  });
+  const bondMatG = (nm, selOpac) => {   // element colour per instance (bcol); transparent only on the selected atom
+    const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
+      attributes: ['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],
+      uniforms: ['view','projection','bubbleR','opacity','selCenter','fogColor','fogStart','fogEnd']
+    });
+    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', selOpac);
+    mat.alpha = 0.999; mat.forceDepthWrite = true; mat.backFaceCulling = true;
+    mat.onBindObservable.add(() => {
+      const eff = mat.getEffect(); if(!eff) return;
+      eff.setVector3('selCenter', selCenter);
+      eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
+    });
+    return mat;
+  };
+  const bondBondingMat = bondMatG('bondG', 0.4);    // bonding lobes
+  const bondLPMat      = bondMatG('lobeLPG', 0.25); // lone-pair lobes
+
+  // Global atom bounds → grid dimensions.
+  let bMiX=Infinity,bMiY=Infinity,bMiZ=Infinity,bMaX=-Infinity,bMaY=-Infinity,bMaZ=-Infinity;
+  for(let e=0;e<nEl;e++){ const sb=sphBuf[e]; for(let a=0;a<atomCount[e];a++){
+    const x=sb[a*16+12], y=sb[a*16+13], z=sb[a*16+14];
+    if(x<bMiX)bMiX=x; if(y<bMiY)bMiY=y; if(z<bMiZ)bMiZ=z;
+    if(x>bMaX)bMaX=x; if(y>bMaY)bMaY=y; if(z>bMaZ)bMaZ=z;
+  }}
+  const CELL = 60;                                              // ≈ BUBBLE_R → only a few cells lit at once
+  const gnx = Math.max(1, Math.ceil((bMaX-bMiX)/CELL)+1);
+  const gny = Math.max(1, Math.ceil((bMaY-bMiY)/CELL)+1);
+  const gnz = Math.max(1, Math.ceil((bMaZ-bMiZ)/CELL)+1);
+  const cellIx = (x,y,z) => {
+    let ix=Math.floor((x-bMiX)/CELL), iy=Math.floor((y-bMiY)/CELL), iz=Math.floor((z-bMiZ)/CELL);
+    ix=Math.min(Math.max(ix,0),gnx-1); iy=Math.min(Math.max(iy,0),gny-1); iz=Math.min(Math.max(iz,0),gnz-1);
+    return (ix*gny+iy)*gnz+iz;
+  };
+  const cells = new Map();
+  const getCell = k => { let c=cells.get(k); if(!c){ c={ nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[], boM:[],boT:[],boCen:[],boCol:[], lpM:[],lpT:[],lpCen:[],lpCol:[] }; cells.set(k,c);} return c; };
+  const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
+
   for(let e=0;e<nEl;e++){
-    if(atomCount[e] === 0) continue;
-
-    /* Nucleus — a packed cluster of proton + neutron impostors (opaque core). */
-    const nucMat = impostorMat('impNuc'+e, NUCLEON_R, 0.0, 1.0);   // isShell=0 solid; protonOutline=1 → red rim on protons
-    const nuc = BABYLON.MeshBuilder.CreatePlane('b'+e, {size:2}, scene);
-    nuc.material = nucMat; nuc.isPickable = false;
-    nuc.thinInstanceSetBuffer('matrix', nucBuf[e], 16, true);
-    nuc.thinInstanceSetBuffer('instanceColor', nucColBuf[e], 4, true);
-    nuc.alwaysSelectAsActiveMesh = true; coreMeshes.push(nuc);
-
-    /* Electron orbitals — real-shaped lobes (s sphere, p dumbbell, d/f cloverleaf). */
-    if(orbCount(e) > 0){
-      const orbMat = new BABYLON.ShaderMaterial('orb'+e, scene, 'orb', {
-        attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
-        uniforms: ['view','projection','bubbleR','selCenter','fogColor','fogStart','fogEnd']
-      });
-      orbMat.setFloat('bubbleR', BUBBLE_R);
-      orbMat.alpha = 0.999; orbMat.forceDepthWrite = true; orbMat.backFaceCulling = true;   // opaque by default; selected atom → transparent
-      orbMat.onBindObservable.add(() => {
-        const eff = orbMat.getEffect(); if(!eff) return;
-        eff.setVector3('selCenter', selCenter);
-        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-      });
-      const orb = BABYLON.MeshBuilder.CreateSphere('o'+e, {segments:3, diameter:1}, scene);   // low-poly: 686k lobes are vertex-bound when the core switches on
-      orb.material = orbMat; orb.isPickable = false;
-      orb.thinInstanceSetBuffer('matrix', orbBuf[e], 16, true);
-      orb.thinInstanceSetBuffer('ocol', orbColBuf[e], 3, true);
-      orb.thinInstanceSetBuffer('ocen', orbCenBuf[e], 3, true);
-      orb.alwaysSelectAsActiveMesh = true; coreMeshes.push(orb);
+    if(atomCount[e]===0) continue;
+    const sb=sphBuf[e], A=info(e).n, ec=info(e).c;
+    // Nucleons — A per atom, contiguous → bin by the atom centre.
+    const nb=nucBuf[e], nc=nucColBuf[e];
+    for(let a=0;a<atomCount[e];a++){
+      const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
+      for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
     }
-
-    /* Orbital-lobe meshes (element-coloured ellipsoids, blue Fresnel outline). */
-    const bc = info(e).c;
-    const lobeMat = (nm, selOpac) => {   // opaque by default; selOpac = opacity on the selected atom
-      const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
-        attributes: ['position','normal','taper','ocen','world0','world1','world2','world3'],
-        uniforms: ['view','projection','color','bubbleR','opacity','selCenter','fogColor','fogStart','fogEnd']
-      });
-      mat.setColor3('color', new BABYLON.Color3(bc[0], bc[1], bc[2]));
-      mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('opacity', selOpac);
-      mat.alpha = 0.999; mat.forceDepthWrite = true; mat.backFaceCulling = true;   // opaque unless selected atom
-      mat.onBindObservable.add(() => {
-        const eff = mat.getEffect(); if(!eff) return;
-        eff.setVector3('selCenter', selCenter);
-        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-      });
-      return mat;
-    };
-    // Bonding orbitals — opaque; transparent only on the selected atom.
-    if(cylIdx[e] > 0){
-      const cyl = BABYLON.MeshBuilder.CreateSphere('c'+e, {segments:3, diameter:1}, scene);
-      cyl.material = lobeMat('bond'+e, 0.4); cyl.isPickable = false;
-      cyl.thinInstanceSetBuffer('matrix', cylBuf[e], 16, true);
-      cyl.thinInstanceSetBuffer('taper', wBuf[e], 1, true);   // per-lobe width multiplier
-      cyl.thinInstanceSetBuffer('ocen', cenBuf[e], 3, true);
-      cyl.thinInstanceCount = cylIdx[e];
-      cyl.alwaysSelectAsActiveMesh = true; coreMeshes.push(cyl);
+    // Orbitals — bin by orbCenBuf (each lobe's atom centre).
+    const oc=orbCount(e);
+    if(oc>0){ const ob=orbBuf[e], ocol=orbColBuf[e], ocen=orbCenBuf[e], tot=atomCount[e]*oc;
+      for(let i=0;i<tot;i++){ const c=getCell(cellIx(ocen[i*3],ocen[i*3+1],ocen[i*3+2]));
+        pushN(c.orbM, ob, i*16, 16); pushN(c.orbCol, ocol, i*3, 3); pushN(c.orbCen, ocen, i*3, 3);
+      }
     }
-    // Non-bonding (lone-pair) lobes — opaque; transparent only on the selected atom.
-    if(lpIdx[e] > 0){
-      const lpm = BABYLON.MeshBuilder.CreateSphere('lp'+e, {segments:3, diameter:1}, scene);
-      lpm.material = lobeMat('lobeLP'+e, 0.25); lpm.isPickable = false;
-      lpm.thinInstanceSetBuffer('matrix', lpBuf[e], 16, true);
-      lpm.thinInstanceSetBuffer('taper', new Float32Array(lpBuf[e].length/16).fill(1.0), 1, true);   // width = 1 (uniform)
-      lpm.thinInstanceSetBuffer('ocen', lpCenBuf[e], 3, true);
-      lpm.thinInstanceCount = lpIdx[e];   // buffer over-allocated (atoms without bonds); render only what was written
-      lpm.alwaysSelectAsActiveMesh = true; coreMeshes.push(lpm);
-    }
+    // Bonding lobes.
+    { const cen=cenBuf[e];
+      for(let i=0;i<cylIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
+        pushN(c.boM, cylBuf[e], i*16, 16); c.boT.push(wBuf[e][i]); pushN(c.boCen, cen, i*3, 3);
+        c.boCol.push(ec[0],ec[1],ec[2]);
+      } }
+    // Lone-pair lobes.
+    { const cen=lpCenBuf[e];
+      for(let i=0;i<lpIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
+        pushN(c.lpM, lpBuf[e], i*16, 16); c.lpT.push(1.0); pushN(c.lpCen, cen, i*3, 3);
+        c.lpCol.push(ec[0],ec[1],ec[2]);
+      } }
+    await yield_();
+  }
 
-    /* Van der Waals shell (opaque, component colours). Renders only OUTSIDE the
-       camera bubble (the shader discards it inside) — so distant atoms show the
-       normal surface while near atoms open into orbitals. Always enabled. */
+  // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
+  const cellList = [];
+  for(const [k,c] of cells){
+    const ix=Math.floor(k/(gny*gnz)), iy=Math.floor((k%(gny*gnz))/gnz), iz=k%gnz;
+    const cx=bMiX+(ix+0.5)*CELL, cy=bMiY+(iy+0.5)*CELL, cz=bMiZ+(iz+0.5)*CELL;
+    const meshes=[];
+    if(c.nucM.length){ const m=BABYLON.MeshBuilder.CreatePlane('cn'+k,{size:2},scene); m.material=nucMatG; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', new Float32Array(c.nucM),16,true);
+      m.thinInstanceSetBuffer('instanceColor', new Float32Array(c.nucC),4,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    if(c.orbM.length){ const m=BABYLON.MeshBuilder.CreateSphere('co'+k,{segments:3,diameter:1},scene); m.material=orbMatG; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', new Float32Array(c.orbM),16,true);
+      m.thinInstanceSetBuffer('ocol', new Float32Array(c.orbCol),3,true);
+      m.thinInstanceSetBuffer('ocen', new Float32Array(c.orbCen),3,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    if(c.boM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cb'+k,{segments:3,diameter:1},scene); m.material=bondBondingMat; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', new Float32Array(c.boM),16,true);
+      m.thinInstanceSetBuffer('taper', new Float32Array(c.boT),1,true);
+      m.thinInstanceSetBuffer('ocen', new Float32Array(c.boCen),3,true);
+      m.thinInstanceSetBuffer('bcol', new Float32Array(c.boCol),3,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    if(c.lpM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cl'+k,{segments:3,diameter:1},scene); m.material=bondLPMat; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true);
+      m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
+      m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true);
+      m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    for(const m of meshes) m.setEnabled(false);
+    cellList.push({ cx,cy,cz, meshes, on:false });
+    await yield_();
+  }
+  cells.clear();
+  const cellHalfDiag = 0.5*Math.hypot(CELL,CELL,CELL);
+  // Free the per-element core buffers now baked into cells. Keep orbBuf (hover outline) and sphBuf/colBuf (shells + picking).
+  for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbColBuf[e]=orbCenBuf[e]=cylBuf[e]=wBuf[e]=cenBuf[e]=lpBuf[e]=lpCenBuf[e]=null; }
+
+  /* Van der Waals shells stay per-element — they self-gate in the shader (visible
+     only OUTSIDE the bubble), so distant atoms show the normal surface. Always on. */
+  for(let e=0;e<nEl;e++){
+    if(atomCount[e]===0) continue;
     const shellMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1
     const shell = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
     shell.material = shellMat; shell.isPickable = false;
@@ -930,9 +988,8 @@ async function run(fileName){
     shell.alwaysSelectAsActiveMesh = true;
   }
 
-  // Orbitals + nuclei are enabled only when the camera bubble reaches the model.
-  let coreOn = false;
-  for(const m of coreMeshes) m.setEnabled(false);
+  // Cell meshes start disabled; the frame loop enables only the ones the bubble touches.
+  const cellReach2 = (BUBBLE_R + cellHalfDiag) * (BUBBLE_R + cellHalfDiag);
 
   /* Frame camera on the whole row (fit both axes for any viewport aspect) */
   let gMiX=Infinity,gMiY=Infinity,gMaX=-Infinity,gMaY=-Infinity,gMiZ=Infinity,gMaZ=-Infinity;
@@ -968,10 +1025,14 @@ async function run(fileName){
     scene.fogEnd   = ar + modelR*0.6;
     const zoom = fitRadius / Math.max(0.01, ar);
     if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
-    // Enable the inner core only when the camera bubble can actually reach the model
-    // (nearest atom ≈ |radius| − modelR). Keeps the far overview cheap.
-    const coreWanted = (ar - modelR) < BUBBLE_R;
-    if(coreWanted !== coreOn){ coreOn = coreWanted; for(const m of coreMeshes) m.setEnabled(coreWanted); }
+    // Spatial culling: enable only the grid cells the camera bubble overlaps.
+    // (bubble is centred on the camera → a distant overview lights no cells at all.)
+    const cp = cam.position;
+    for(const cell of cellList){
+      const dx=cp.x-cell.cx, dy=cp.y-cell.cy, dz=cp.z-cell.cz;
+      const want = (dx*dx+dy*dy+dz*dz) < cellReach2;
+      if(want !== cell.on){ cell.on = want; for(const m of cell.meshes) m.setEnabled(want); }
+    }
     if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
       if(++lowFrames > 90){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
