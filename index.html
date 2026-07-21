@@ -43,6 +43,10 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
   <button class="zt" id="zoom-out" aria-label="Zoom out">−</button>
   <span class="ztlabel">suurenna</span>
 </div>
+<div id="speedbox" style="position:fixed; left:16px; bottom:14px; z-index:10; font:11px ui-monospace,monospace; color:#6a6a5a; user-select:none;">
+  <div style="margin-bottom:4px; letter-spacing:.5px;">speed <span id="speedval">1.0×</span></div>
+  <input id="speed" type="range" min="0" max="30" value="10" style="width:130px; accent-color:#4aa3ff; cursor:pointer;">
+</div>
 
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
 <script>
@@ -50,7 +54,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 
 const BOND_R    = 0.10;  // stick radius (Å) — thinner than the smallest ball
 const GAP_FRAC  = 0.15;  // side-by-side gap as a fraction of mean model width
-const FILL_SCALE = 1.0;  // space-filling sphere size as a fraction of vdW radius
+const FILL_SCALE = 0.72; // space-filling sphere size as a fraction of vdW radius (tightened so the surface ≈ the orbital cloud, not much bigger)
 
 /* ── Standard CPK-ish colours (c), ball radii (r) + van der Waals radii (vr), Å.
       C dark grey, H light grey.  vr drives the space-filling surface mode.  ── */
@@ -633,10 +637,10 @@ async function run(fileName){
   cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
-    zoomBy(Math.sign(e.deltaY) * Math.max(fitRadius * 0.03, Math.abs(cam.radius) * 0.06));
+    zoomBy(Math.sign(e.deltaY) * Math.max(fitRadius * 0.03, Math.abs(cam.radius) * 0.06) * Math.max(0.2, gSpeed));
     showTips(); hideTipsSoon();
   }, {passive:false});
-  const btnZoom = dir => { zoomBy(dir * Math.max(fitRadius * 0.04, Math.abs(cam.radius) * 0.06)); showTips(); hideTipsSoon(); };
+  const btnZoom = dir => { zoomBy(dir * Math.max(fitRadius * 0.04, Math.abs(cam.radius) * 0.06) * Math.max(0.2, gSpeed)); showTips(); hideTipsSoon(); };
   document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
   document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
   // Ambient fill + a headlight that follows the camera (direction set each frame),
@@ -756,10 +760,11 @@ async function run(fileName){
       // σ bond: two overlapping hybrid lobes along the axis (width = polarity share).
       halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1);
       halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2);
-      // …each hybrid gets a small back lobe (the textbook sp knob) on the opposite side of the atom.
+      // …each hybrid gets a small back lobe (the textbook sp knob). Hydrogen uses a pure 1s
+      // (it doesn't hybridise), so it gets no knob.
       const kL=0.24, kW=LOBE_W*0.5;
-      halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1);
-      halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2);
+      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1);
+      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2);
       // π direction = the bond-plane normal (from either atom), projected ⊥ to the bond axis.
       let pnrm = pn[a1] || pn[a2];
       if(pn[a1] && pn[a2]){ const s = (pn[a1][0]*pn[a2][0]+pn[a1][1]*pn[a2][1]+pn[a1][2]*pn[a2][2])<0?-1:1;
@@ -794,6 +799,7 @@ async function run(fileName){
 
   const BUBBLE_R = 49.5;      // camera reveal-sphere radius (Å) — atoms within it go translucent
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
+  let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
@@ -1122,7 +1128,7 @@ async function run(fileName){
       const near = (ddx*ddx+ddy*ddy+ddz*ddz) < (BUBBLE_R*2.2)*(BUBBLE_R*2.2);   // only render/animate when the camera is near it
       if(near !== chlOn){ chlOn = near; for(const m of chlMeshes) m.setEnabled(near); }
       if(!near) return;
-      chlT += Math.min(engine.getDeltaTime(),50)*0.001;
+      chlT += Math.min(engine.getDeltaTime(),50)*0.001*gSpeed;
       for(let i=0;i<N*3;i++) cpos[i]=rest[i]+AMP*Math.sin(chlT*freq[i]+phase[i]);
       // nucleons
       for(let ni=0;ni<nucN;ni++){ const k=nucK[ni], o=ni*16;
@@ -1150,8 +1156,8 @@ async function run(fileName){
         const c1=info(chl.el[i]).c, c2=info(chl.el[j]).c, w1=bw[b][0], w2=bw[b][1], kL=0.24, kW=LOBE_W*0.5;
         put(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, LOBE_W,w1,c1, x1,y1,z1);        // σ
         put(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, LOBE_W,w2,c2, x2,y2,z2);
-        put(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, kW,1.0,c1, x1,y1,z1);        // back knob
-        put(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, kW,1.0,c2, x2,y2,z2);
+        if(EL_LIST[chl.el[i]]!=='H') put(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, kW,1.0,c1, x1,y1,z1);   // back knob (not H)
+        if(EL_LIST[chl.el[j]]!=='H') put(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, kW,1.0,c2, x2,y2,z2);
         if(bo>1){ let pnrm=pn[i]||pn[j];
           if(pn[i]&&pn[j]){ const s=(pn[i][0]*pn[j][0]+pn[i][1]*pn[j][1]+pn[i][2]*pn[j][2])<0?-1:1; pnrm=nrm([pn[i][0]+pn[j][0]*s,pn[i][1]+pn[j][1]*s,pn[i][2]+pn[j][2]*s]); }
           let per1; if(pnrm){ const dt=pnrm[0]*bdir[0]+pnrm[1]*bdir[1]+pnrm[2]*bdir[2]; per1=nrm([pnrm[0]-dt*bdir[0],pnrm[1]-dt*bdir[1],pnrm[2]-dt*bdir[2]]); }
@@ -1172,6 +1178,7 @@ async function run(fileName){
   /* ── Lipid bilayer showcase: tile one extracted lipid into a two-leaflet membrane
      (~2000 lipids) as space-filling vdW spheres, placed below the protein. ─────── */
   const bilayerCen = new BABYLON.Vector3(0, -320, 0);
+  let bilayerHalf = 0;
   if(lipid){
     const LN = lipid.na;
     let cx=0,cy=0,cz=0; for(let k=0;k<LN;k++){ cx+=lipid.x[k]; cy+=lipid.y[k]; cz+=lipid.z[k]; } cx/=LN;cy/=LN;cz/=LN;
@@ -1191,6 +1198,7 @@ async function run(fileName){
     for(let k=0;k<LN;k++){ const q=rot([lipid.x[k]-cx,lipid.y[k]-cy,lipid.z[k]-cz]);
       lp[k*3]=q[0];lp[k*3+1]=q[1];lp[k*3+2]=q[2]; yMin=Math.min(yMin,q[1]);yMax=Math.max(yMax,q[1]); xr=Math.max(xr,Math.abs(q[0]));zr=Math.max(zr,Math.abs(q[2])); }
     const S=Math.max(8, Math.max(xr,zr)*0.9), G=32, half=(G-1)*S*0.5, copies=G*G*2;   // 32×32 × 2 leaflets = 2048 lipids
+    bilayerHalf = half + Math.max(xr,zr);
     const elCount=new Int32Array(nEl); for(let k=0;k<LN;k++) elCount[lipid.el[k]]++;
     const lipM=[], lipC=[], lipIx=new Int32Array(nEl);
     for(let e=0;e<nEl;e++) if(elCount[e]){ lipM[e]=new Float32Array(elCount[e]*copies*16); lipC[e]=new Float32Array(elCount[e]*copies*4); }
@@ -1242,6 +1250,68 @@ async function run(fileName){
   cam.upperRadiusLimit = cam.radius*5;
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
+  // Speed slider (bottom-left) → scales the wiggle AND all camera movement (rotate/pan/zoom).
+  { const baseAng = cam.angularSensibilityX, basePan = cam.panningSensibility;
+    const sEl = document.getElementById('speed'), sVal = document.getElementById('speedval');
+    const apply = () => { gSpeed = (+sEl.value)/10; sVal.textContent = gSpeed.toFixed(1)+'×';
+      const cs = Math.max(0.2, gSpeed);
+      cam.angularSensibilityX = cam.angularSensibilityY = baseAng/cs; cam.panningSensibility = basePan/cs; };
+    sEl.addEventListener('input', apply); apply();
+  }
+
+  /* ── Container box enclosing every model, with water molecules flying inside and
+     bouncing off the walls (kinematic — constant velocity, reflect at the faces). */
+  {
+    let x0=gMiX,x1=gMaX,y0=gMiY,y1=gMaY,z0=gMiZ,z1=gMaZ;
+    if(lipid){ x0=Math.min(x0,bilayerCen.x-bilayerHalf); x1=Math.max(x1,bilayerCen.x+bilayerHalf);
+      z0=Math.min(z0,bilayerCen.z-bilayerHalf); z1=Math.max(z1,bilayerCen.z+bilayerHalf);
+      y0=Math.min(y0,bilayerCen.y-30); y1=Math.max(y1,bilayerCen.y+30); }
+    const pad=25; x0-=pad;x1+=pad;y0-=pad;y1+=pad;z0-=pad;z1+=pad;
+    const bw=x1-x0, bh=y1-y0, bd=z1-z0;
+    // clean 12-edge wireframe box (no face diagonals)
+    const V=[[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1],[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]];
+    const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+    const box=BABYLON.MeshBuilder.CreateLineSystem('cbox',{lines:E.map(e=>[new BABYLON.Vector3(...V[e[0]]), new BABYLON.Vector3(...V[e[1]])])},scene);
+    box.color=new BABYLON.Color3(0.42,0.5,0.6); box.alpha=0.5; box.isPickable=false;
+
+    const NW=260, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };
+    const wc=new Float32Array(NW*3), wv=new Float32Array(NW*3), wh1=new Float32Array(NW*3), wh2=new Float32Array(NW*3);
+    for(let i=0;i<NW;i++){
+      wc[i*3]=x0+rnd(i+1)*bw; wc[i*3+1]=y0+rnd(i+2)*bh; wc[i*3+2]=z0+rnd(i+3)*bd;
+      const sp=28+rnd(i+7)*40, th=rnd(i+4)*6.283, ph=Math.acos(2*rnd(i+5)-1);
+      wv[i*3]=sp*Math.sin(ph)*Math.cos(th); wv[i*3+1]=sp*Math.cos(ph); wv[i*3+2]=sp*Math.sin(ph)*Math.sin(th);
+      // two O–H bonds (0.96 Å, 104.5°) in a random orientation
+      let ux=rnd(i*7+1)*2-1, uy=rnd(i*7+2)*2-1, uz=rnd(i*7+3)*2-1; const ul=Math.hypot(ux,uy,uz)||1; ux/=ul;uy/=ul;uz/=ul;
+      let qx=uy*0-uz*(Math.abs(ux)<0.9?0:1), qy=uz*(Math.abs(ux)<0.9?1:0)-ux*0, qz=ux*(Math.abs(ux)<0.9?0:1)-uy*(Math.abs(ux)<0.9?1:0);
+      const qm=Math.hypot(qx,qy,qz)||1; qx/=qm;qy/=qm;qz/=qm;
+      const ca=Math.cos(0.912), sa=Math.sin(0.912), oh=0.96;
+      wh1[i*3]=oh*(ux*ca+qx*sa); wh1[i*3+1]=oh*(uy*ca+qy*sa); wh1[i*3+2]=oh*(uz*ca+qz*sa);
+      wh2[i*3]=oh*(ux*ca-qx*sa); wh2[i*3+1]=oh*(uy*ca-qy*sa); wh2[i*3+2]=oh*(uz*ca-qz*sa);
+    }
+    const codeO=codeOf('O'), codeH=codeOf('H');
+    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{attributes:['position','instanceColor','world0','world1','world2','world3'],uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT']});
+      m.setFloat('radius',rad);m.setFloat('isShell',0);m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.backFaceCulling=false;
+      m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
+    const mkImp=(nm,rad,col,cnt)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+      const cb=new Float32Array(cnt*4); for(let i=0;i<cnt;i++){ cb[i*4]=col[0];cb[i*4+1]=col[1];cb[i*4+2]=col[2];cb[i*4+3]=0; } mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
+      const mb=new Float32Array(cnt*16); for(let i=0;i<cnt;i++){ mb[i*16]=1;mb[i*16+5]=1;mb[i*16+10]=1;mb[i*16+15]=1; } mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=cnt; return {mesh,mb}; };
+    const oI=mkImp('wO', info(codeO).vr*FILL_SCALE, [0.94,0.15,0.15], NW);
+    const hI=mkImp('wH', info(codeH).vr*FILL_SCALE, [0.92,0.92,0.92], NW*2);
+    scene.onBeforeRenderObservable.add(()=>{
+      const dt=Math.min(engine.getDeltaTime(),50)*0.001*gSpeed, oR=info(codeO).vr*FILL_SCALE;
+      for(let i=0;i<NW;i++){
+        for(let a=0;a<3;a++){ const j=i*3+a; wc[j]+=wv[j]*dt;
+          const lo=[x0,y0,z0][a]+oR, hi=[x1,y1,z1][a]-oR;
+          if(wc[j]<lo){ wc[j]=lo; wv[j]=Math.abs(wv[j]); } else if(wc[j]>hi){ wc[j]=hi; wv[j]=-Math.abs(wv[j]); } }
+        const cx=wc[i*3],cy=wc[i*3+1],cz=wc[i*3+2], o=i*16;
+        oI.mb[o+12]=cx; oI.mb[o+13]=cy; oI.mb[o+14]=cz;
+        const oa=(i*2)*16, ob=(i*2+1)*16;
+        hI.mb[oa+12]=cx+wh1[i*3]; hI.mb[oa+13]=cy+wh1[i*3+1]; hI.mb[oa+14]=cz+wh1[i*3+2];
+        hI.mb[ob+12]=cx+wh2[i*3]; hI.mb[ob+13]=cy+wh2[i*3+1]; hI.mb[ob+14]=cz+wh2[i*3+2];
+      }
+      oI.mesh.thinInstanceBufferUpdated('matrix'); hI.mesh.thinInstanceBufferUpdated('matrix');
+    });
+  }
 
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
@@ -1249,7 +1319,7 @@ async function run(fileName){
   const zoomEl = document.getElementById('zoomval');
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
-    gWaveT += Math.min(engine.getDeltaTime(), 50) * 0.001;   // advance the thermal-shake clock
+    gWaveT += Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;   // advance the thermal-shake clock
     const f = cam.getDirection(BABYLON.Axis.Z);   // view forward
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
     const r = cam.getDirection(BABYLON.Axis.X);   // view right
