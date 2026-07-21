@@ -1015,18 +1015,18 @@ async function run(fileName){
     shell.alwaysSelectAsActiveMesh = true;
   }
 
-  /* ── Chlorophyll showcase: a jiggling ball-and-stick whose bonds stretch like
-     springs. Rendered separately from the static protein so its atoms can move
-     every frame. Atoms = orb-shader spheres, bonds = bond-shader ellipsoids,
-     both forced always-visible (bubbleR huge). ─────────────────────────────── */
+  /* ── Chlorophyll showcase: the SAME orbital representation as the protein
+     (nucleons + core orbitals + hybrid bonds with back-knobs + π + lone pairs),
+     but rebuilt every frame from jiggling atom positions so its bonds stretch
+     like springs. Rendered separately (always visible, bubbleR huge). ───────── */
   if(chl){
     const N = chl.na, NB = chl.nb;
     const rest = new Float32Array(N*3);
     for(let k=0;k<N;k++){ rest[k*3]=chl.x[k]+chl.ox; rest[k*3+1]=chl.y[k]+chl.oy; rest[k*3+2]=chl.z[k]+chl.oz; }
-    const rnd = x => { const v = Math.sin(x*127.1)*43758.5453; return v - Math.floor(v); };   // deterministic pseudo-random (no Math.random)
+    const rnd = x => { const v = Math.sin(x*127.1)*43758.5453; return v - Math.floor(v); };   // deterministic pseudo-random
     const phase = new Float32Array(N*3), freq = new Float32Array(N*3);
-    for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.1 + rnd((i+1)*2.7)*1.8; }
-    const AMP = 0.18;   // Å of jiggle
+    for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.0 + rnd((i+1)*2.7)*1.6; }
+    const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
       const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd'].concat(extra||[]) });
       mat.setFloat('bubbleR', 1e9); mat.backFaceCulling = true;
@@ -1034,34 +1034,93 @@ async function run(fileName){
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return mat;
     };
-    // Atoms
-    const chlAtoms = BABYLON.MeshBuilder.CreateSphere('chlAtoms',{segments:10,diameter:1},scene);
-    chlAtoms.material = mkMat('chlAtomMat','orb',['position','normal','ocol','ocen','world0','world1','world2','world3']);
-    chlAtoms.isPickable=false; chlAtoms.alwaysSelectAsActiveMesh=true;
-    const aMat=new Float32Array(N*16), aCol=new Float32Array(N*3), aCen=new Float32Array(N*3), aRad=new Float32Array(N);
-    for(let k=0;k<N;k++){ const c=info(chl.el[k]).c; aCol[k*3]=c[0];aCol[k*3+1]=c[1];aCol[k*3+2]=c[2]; aRad[k]=info(chl.el[k]).r*0.85; }
-    chlAtoms.thinInstanceSetBuffer('ocol', aCol,3,true); chlAtoms.thinInstanceSetBuffer('ocen', aCen,3,true);
-    chlAtoms.thinInstanceSetBuffer('matrix', aMat,16,false); chlAtoms.thinInstanceCount=N;
-    // Bonds (springs)
-    const chlBonds = BABYLON.MeshBuilder.CreateSphere('chlBonds',{segments:6,diameter:1},scene);
-    chlBonds.material = mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],['opacity']);
+    // Nucleons (imp shader, always visible)
+    const nucMatC = new BABYLON.ShaderMaterial('chlNucMat', scene, 'imp', {
+      attributes:['position','instanceColor','world0','world1','world2','world3'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline'] });
+    nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',1e9); nucMatC.setFloat('protonOutline',0); nucMatC.backFaceCulling=false;
+    nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    let nucN=0; for(let k=0;k<N;k++) nucN += info(chl.el[k]).n;
+    const nucK=new Int32Array(nucN), nucOff=new Float32Array(nucN*3), nucCol=new Float32Array(nucN*4), nucMat=new Float32Array(nucN*16);
+    { let ni=0; for(let k=0;k<N;k++){ const A=info(chl.el[k]).n, Z=info(chl.el[k]).z;
+        for(let i=0;i<A;i++){ const proton=Math.floor((i+1)*Z/A)>Math.floor(i*Z/A);
+          nucK[ni]=k; nucOff[ni*3]=fcc[i][0]*SPACING; nucOff[ni*3+1]=fcc[i][1]*SPACING; nucOff[ni*3+2]=fcc[i][2]*SPACING;
+          const c=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62]; nucCol[ni*4]=c[0];nucCol[ni*4+1]=c[1];nucCol[ni*4+2]=c[2];nucCol[ni*4+3]=0;
+          const o=ni*16; nucMat[o]=1;nucMat[o+5]=1;nucMat[o+10]=1;nucMat[o+15]=1; ni++; } } }
+    const chlNuc=BABYLON.MeshBuilder.CreatePlane('chlNuc',{size:2},scene); chlNuc.material=nucMatC; chlNuc.isPickable=false; chlNuc.alwaysSelectAsActiveMesh=true;
+    chlNuc.thinInstanceSetBuffer('instanceColor',nucCol,4,true); chlNuc.thinInstanceSetBuffer('matrix',nucMat,16,false); chlNuc.thinInstanceCount=nucN;
+    // Core orbitals (the non-hybridised inner shells)
+    const coreDefs=[];
+    for(let k=0;k<N;k++){ const e=chl.el[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
+      for(const sh of cfg){ const n=sh[0], ty=sh[1], R=n*SHELL_STEP;
+        if(maxNe>1 && n===maxNe && ty<=1) continue;   // valence s/p hybridised → the bonds represent them
+        if(ty===0) coreDefs.push({k, s:true, R:R*0.72});
+        else for(const d of OTMPL[ty]) coreDefs.push({k, s:false, dx:d[0], dy:d[1], dz:d[2], R, w:R*0.34}); } }
+    const coreN=coreDefs.length;
+    const coreMat=new Float32Array(coreN*16), coreCol=new Float32Array(coreN*3), coreCen=new Float32Array(coreN*3);
+    for(let i=0;i<coreN;i++){ const c=info(chl.el[coreDefs[i].k]).c; coreCol[i*3]=c[0];coreCol[i*3+1]=c[1];coreCol[i*3+2]=c[2]; }
+    const chlCore=BABYLON.MeshBuilder.CreateSphere('chlCore',{segments:8,diameter:1},scene);
+    chlCore.material=mkMat('chlCoreMat','orb',['position','normal','ocol','ocen','world0','world1','world2','world3']);
+    chlCore.isPickable=false; chlCore.alwaysSelectAsActiveMesh=true;
+    chlCore.thinInstanceSetBuffer('ocol',coreCol,3,true); chlCore.thinInstanceSetBuffer('ocen',coreCen,3,false); chlCore.thinInstanceSetBuffer('matrix',coreMat,16,false); chlCore.thinInstanceCount=coreN;
+    // Bonds (hybrids: σ + back-knob + π) + lone pairs
+    const bw=[]; for(let b=0;b<NB;b++){ const en1=info(chl.el[chl.b1[b]]).en, en2=info(chl.el[chl.b2[b]]).en;
+      bw.push([Math.min(1.7,Math.max(0.5,0.55+(en1-en2)*0.5+0.5)), Math.min(1.7,Math.max(0.5,0.55+(en2-en1)*0.5+0.5))]); }
+    let bondN=0; for(let b=0;b<NB;b++) bondN += 4*(chl.bo[b]||1);   // σ2 + knob2 + π 4*(bo-1)
+    let lpN=0; for(let k=0;k<N;k++) lpN += lonePairs(chl.el[k]);
+    const TOT = bondN + lpN;
+    const bMat=new Float32Array(TOT*16), bTap=new Float32Array(TOT), bCol=new Float32Array(TOT*3), bCen=new Float32Array(TOT*3);
+    const chlBonds=BABYLON.MeshBuilder.CreateSphere('chlBonds',{segments:6,diameter:1},scene);
+    chlBonds.material=mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],['opacity']);
     chlBonds.isPickable=false; chlBonds.alwaysSelectAsActiveMesh=true;
-    const bMat=new Float32Array(NB*16), bTap=new Float32Array(NB).fill(1), bCol=new Float32Array(NB*3), bCen=new Float32Array(NB*3);
-    for(let b=0;b<NB;b++){ const c=info(chl.el[chl.b1[b]]).c; bCol[b*3]=c[0];bCol[b*3+1]=c[1];bCol[b*3+2]=c[2]; }
-    chlBonds.thinInstanceSetBuffer('taper', bTap,1,true); chlBonds.thinInstanceSetBuffer('bcol', bCol,3,true); chlBonds.thinInstanceSetBuffer('ocen', bCen,3,true);
-    chlBonds.thinInstanceSetBuffer('matrix', bMat,16,false); chlBonds.thinInstanceCount=NB;
-    const cpos = new Float32Array(N*3);
-    let chlT = 0;
-    scene.onBeforeRenderObservable.add(() => {
-      chlT += Math.min(engine.getDeltaTime(), 50) * 0.001;
-      for(let i=0;i<N*3;i++) cpos[i] = rest[i] + AMP*Math.sin(chlT*freq[i] + phase[i]);
-      for(let k=0;k<N;k++){ const R=aRad[k]*2, o=k*16;
-        aMat[o]=R; aMat[o+5]=R; aMat[o+10]=R; aMat[o+15]=1;
-        aMat[o+12]=cpos[k*3]; aMat[o+13]=cpos[k*3+1]; aMat[o+14]=cpos[k*3+2]; }
-      chlAtoms.thinInstanceBufferUpdated('matrix');
+    chlBonds.thinInstanceSetBuffer('taper',bTap,1,false); chlBonds.thinInstanceSetBuffer('bcol',bCol,3,false); chlBonds.thinInstanceSetBuffer('ocen',bCen,3,false); chlBonds.thinInstanceSetBuffer('matrix',bMat,16,false); chlBonds.thinInstanceCount=TOT;
+
+    const cpos=new Float32Array(N*3); let chlT=0;
+    scene.onBeforeRenderObservable.add(()=>{
+      chlT += Math.min(engine.getDeltaTime(),50)*0.001;
+      for(let i=0;i<N*3;i++) cpos[i]=rest[i]+AMP*Math.sin(chlT*freq[i]+phase[i]);
+      // nucleons
+      for(let ni=0;ni<nucN;ni++){ const k=nucK[ni], o=ni*16;
+        nucMat[o+12]=cpos[k*3]+nucOff[ni*3]; nucMat[o+13]=cpos[k*3+1]+nucOff[ni*3+1]; nucMat[o+14]=cpos[k*3+2]+nucOff[ni*3+2]; }
+      chlNuc.thinInstanceBufferUpdated('matrix');
+      // cores
+      for(let i=0;i<coreN;i++){ const d=coreDefs[i], k=d.k, cx=cpos[k*3],cy=cpos[k*3+1],cz=cpos[k*3+2], o=i*16;
+        coreCen[i*3]=cx;coreCen[i*3+1]=cy;coreCen[i*3+2]=cz;
+        if(d.s) sphereMat(cx,cy,cz,d.R,coreMat,o); else cylTo(cx,cy,cz, cx+d.dx*d.R,cy+d.dy*d.R,cz+d.dz*d.R, coreMat,o,d.w); }
+      chlCore.thinInstanceBufferUpdated('matrix'); chlCore.thinInstanceBufferUpdated('ocen');
+      // bond directions + plane normals
+      const bd=[]; for(let k=0;k<N;k++) bd[k]=[];
       for(let b=0;b<NB;b++){ const i=chl.b1[b], j=chl.b2[b];
-        cylTo(cpos[i*3],cpos[i*3+1],cpos[i*3+2], cpos[j*3],cpos[j*3+1],cpos[j*3+2], bMat, b*16, 0.14); }
-      chlBonds.thinInstanceBufferUpdated('matrix');
+        const dx=cpos[j*3]-cpos[i*3], dy=cpos[j*3+1]-cpos[i*3+1], dz=cpos[j*3+2]-cpos[i*3+2];
+        bd[i].push(nrm([dx,dy,dz])); bd[j].push(nrm([-dx,-dy,-dz])); }
+      const pn=[]; for(let k=0;k<N;k++){ const dirs=bd[k]; let n=null;
+        for(let a=0;a<dirs.length&&!n;a++) for(let bb=a+1;bb<dirs.length;bb++){ const c=crs(dirs[a],dirs[bb]),l=Math.hypot(c[0],c[1],c[2]); if(l>0.3){n=[c[0]/l,c[1]/l,c[2]/l];break;} } pn[k]=n; }
+      // build lobes
+      let w=0;
+      const put=(sx,sy,sz,ex,ey,ez,wid,tap,col,cx,cy,cz)=>{ const o=w*16;
+        cylTo(sx,sy,sz,ex,ey,ez,bMat,o,wid); bTap[w]=tap; bCol[w*3]=col[0];bCol[w*3+1]=col[1];bCol[w*3+2]=col[2]; bCen[w*3]=cx;bCen[w*3+1]=cy;bCen[w*3+2]=cz; w++; };
+      for(let b=0;b<NB;b++){ const i=chl.b1[b], j=chl.b2[b], bo=chl.bo[b]||1;
+        const x1=cpos[i*3],y1=cpos[i*3+1],z1=cpos[i*3+2], x2=cpos[j*3],y2=cpos[j*3+1],z2=cpos[j*3+2];
+        const bx=x2-x1,by=y2-y1,bz=z2-z1, bdir=nrm([bx,by,bz]), f=0.62;
+        const c1=info(chl.el[i]).c, c2=info(chl.el[j]).c, w1=bw[b][0], w2=bw[b][1], kL=0.24, kW=LOBE_W*0.5;
+        put(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, LOBE_W,w1,c1, x1,y1,z1);        // σ
+        put(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, LOBE_W,w2,c2, x2,y2,z2);
+        put(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, kW,1.0,c1, x1,y1,z1);        // back knob
+        put(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, kW,1.0,c2, x2,y2,z2);
+        if(bo>1){ let pnrm=pn[i]||pn[j];
+          if(pn[i]&&pn[j]){ const s=(pn[i][0]*pn[j][0]+pn[i][1]*pn[j][1]+pn[i][2]*pn[j][2])<0?-1:1; pnrm=nrm([pn[i][0]+pn[j][0]*s,pn[i][1]+pn[j][1]*s,pn[i][2]+pn[j][2]*s]); }
+          let per1; if(pnrm){ const dt=pnrm[0]*bdir[0]+pnrm[1]*bdir[1]+pnrm[2]*bdir[2]; per1=nrm([pnrm[0]-dt*bdir[0],pnrm[1]-dt*bdir[1],pnrm[2]-dt*bdir[2]]); }
+            else per1=nrm(crs([bx,by,bz],Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
+          const per2=nrm(crs([bx,by,bz],per1)), pw=LOBE_W*0.42, pf=0.6, dd=LOBE_W;
+          for(let pi=0;pi<bo-1;pi++){ const pp=pi===0?per1:per2;
+            for(const sgn of [1,-1]){ const gx=pp[0]*dd*sgn,gy=pp[1]*dd*sgn,gz=pp[2]*dd*sgn;
+              put(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, pw,1.0,c1, x1,y1,z1);
+              put(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, pw,1.0,c2, x2,y2,z2); } } } }
+      for(let k=0;k<N;k++){ const lp=lonePairs(chl.el[k]); if(lp===0||bd[k].length===0) continue;
+        const ax=cpos[k*3],ay=cpos[k*3+1],az=cpos[k*3+2], c=info(chl.el[k]).c;
+        for(const d of lonePairDirs(bd[k],lp)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az); }
+      for(let z=w*16; z<TOT*16; z++) bMat[z]=0;   // zero any unused lobe slots
+      chlBonds.thinInstanceBufferUpdated('matrix'); chlBonds.thinInstanceBufferUpdated('taper'); chlBonds.thinInstanceBufferUpdated('bcol'); chlBonds.thinInstanceBufferUpdated('ocen');
     });
   }
 
@@ -1131,8 +1190,8 @@ async function run(fileName){
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
     return mat;
   };
-  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // hover = white, thin (matches selection)
-  const selMat = mkOutlineMat('selMat', new BABYLON.Color3(0.25,0.65,1.0), 0.52, 0.66);         // selection = electric blue, thin
+  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // hover = white, thin
+  const selMat = mkOutlineMat('selMat', new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // selection = white too → reads as a highlight, not a 2nd (blue) orbital
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
