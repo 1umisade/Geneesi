@@ -554,6 +554,8 @@ async function run(fileName){
   const showTips = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = null; tips.classList.add('show'); };
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
+  let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
+  let dnX = 0, dnY = 0, snappedDrag = false;   // drag-start pointer pos + whether this drag already re-pivoted
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
   // floor, the pivot dollies forward along the view instead of the radius going negative.
   const zoomBy = delta => {                 // delta < 0 = closer
@@ -570,15 +572,22 @@ async function run(fileName){
   };
   const dragZoom = dz => zoomBy(dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005));  // middle-drag
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 0){
-      showTips(); dragging = true;
-      // Re-pivot on the selected atom so rotation orbits it, even if zooming moved the pivot.
-      if(selCenter.x < 1e5) cam.setTarget(selCenter.clone());
+    const e = p.event;
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
+      showTips();
+      if(e.button === 0){ dragging = true; snappedDrag = false; dnX = scene.pointerX; dnY = scene.pointerY; }
     }
-    else if(p.type === BABYLON.PointerEventTypes.POINTERDOWN && p.event.button === 1) showTips();
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false; }
-    else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE && (p.event.buttons & 4)){   // middle held
-      dragZoom(p.event.movementY || 0); showTips();
+    else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
+      if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)){   // right-drag / ctrl+drag = pan → stop orbiting the selection
+        orbitLocked = false; return;
+      }
+      if(e.buttons & 4){ dragZoom(e.movementY || 0); showTips(); return; }   // middle held = zoom
+      // Left-drag rotation: on the FIRST real move (not a click), re-pivot onto the selected atom.
+      if((e.buttons & 1) && orbitLocked && !snappedDrag){
+        const dx = scene.pointerX - dnX, dy = scene.pointerY - dnY;
+        if(dx*dx + dy*dy > 9){ cam.setTarget(selCenter.clone()); snappedDrag = true; }   // moved > 3px
+      }
     }
   });
 
@@ -1049,7 +1058,7 @@ async function run(fileName){
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
-  scene.setRenderingAutoClearDepthStencil(1, true, false, false);   // clear depth before group 1 → outline never hidden
+  scene.setRenderingAutoClearDepthStencil(1, true, true, false);   // CLEAR DEPTH before group 1 → outline never occluded (inner lobe rings show too)
   const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
@@ -1143,6 +1152,7 @@ async function run(fileName){
   const centerOnAtom = () => {
     const a = pickAtom(); if(!a) return;
     selCenter.copyFrom(a.center);   // marks the selected atom
+    orbitLocked = true;             // rotation orbits this atom until the user pans away
     setSelOut(a);                   // persistent white outline tracing all its orbital lobes (inner included), topmost
     flashAtom = a; flashUntil = performance.now() + 600;   // flash the nucleons
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
