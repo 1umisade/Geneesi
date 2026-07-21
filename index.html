@@ -426,9 +426,10 @@ varying vec3 vVP;
 varying vec3 vN;
 void main(void){
   vec3 N = normalize(vN), V = normalize(-vVP);
-  float f = pow(1.0 - abs(dot(N, V)), 2.6);   // thin silhouette stroke (matches the blue outline profile)
-  if(f < 0.28) discard;                        // transparent centre → glowing stroke only
-  gl_FragColor = vec4(1.0, 1.0, 1.0, min(1.0, f*1.6));
+  float f = pow(1.0 - abs(dot(N, V)), 1.7);        // silhouette factor (1 at the rim of EACH lobe)
+  float a = smoothstep(0.30, 0.58, f);             // crisp opaque white stroke on every lobe
+  if(a < 0.03) discard;                            // transparent centre → glowing stroke only
+  gl_FragColor = vec4(1.0, 1.0, 1.0, a);
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -1048,9 +1049,9 @@ async function run(fileName){
   const hlMat = new BABYLON.ShaderMaterial('hlMat', scene, 'hlo', {
     attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection']
   });
-  hlMat.alpha = 0.5; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;
+  hlMat.alpha = 0.999; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;   // blended but full-strength (not halved) → crisp white
   hlMat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows, not just the outer clump
-  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:3}, scene);   // seg3 to match the orbital lobes exactly
+  const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
   scene.setRenderingAutoClearDepthStencil(1, true, false, false);   // clear depth before group 1 → outline never hidden
