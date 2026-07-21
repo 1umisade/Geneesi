@@ -187,13 +187,15 @@ attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float radius;
+uniform float uT;        // thermal-shake time (0 = still)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
 varying float vFlag;     // instance alpha → 1 for protons, 0 for neutrons
+vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 cV = view * vec4(W[3].xyz, 1.0);
+  vec4 cV = view * vec4(shake(W[3].xyz), 1.0);
   vCenterV = cV.xyz;
   vUV = position.xy;
   vColor = instanceColor.rgb;
@@ -256,16 +258,19 @@ attribute vec3 bcol;       // per-instance element colour (so bonds combine acro
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;
+uniform float uT;          // thermal-shake time
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying float vSel;
 varying vec3 vBcol;
+vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   float wsc = taper;   // per-lobe overall width multiplier (electronegative atom's lobe is wider → pair forms a cone)
   vec3 pos = vec3(position.x*wsc, position.y, position.z*wsc);
   vec3 nrm = normal;
-  vec4 vp = view * W * vec4(pos, 1.0);
+  vec4 wp = W * vec4(pos, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(nrm, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
@@ -362,13 +367,16 @@ attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;    // focused atom centre (or far away = none selected)
+uniform float uT;          // thermal-shake time
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
 varying float vSel;
+vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 vp = view * W * vec4(position, 1.0);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(normal, 0.0)).xyz;
   vCol = ocol;
@@ -409,11 +417,14 @@ attribute vec4 world2;
 attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
+uniform float uT;          // thermal-shake time (matches the orbital shake so the outline follows)
 varying vec3 vVP;
 varying vec3 vN;
+vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 vp = view * W * vec4(position, 1.0);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  vec4 vp = view * wp;
   vVP = vp.xyz;
   vN  = (view * W * vec4(normal, 0.0)).xyz;
   gl_Position = projection * vp;
@@ -581,7 +592,14 @@ async function run(fileName){
       showTips();
       if(e.button === 0){ dragging = true; snappedDrag = false; dnX = scene.pointerX; dnY = scene.pointerY; }
     }
-    else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false; }
+    else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
+      if(e.button === 0){
+        const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
+        if(mdx*mdx + mdy*mdy < 9 && selCenter.x < 1e5 && !pickAtom()){   // a click on empty space → clear the selection
+          selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); orbitLocked = false;
+        }
+      }
+    }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
       if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)){   // right-drag / ctrl+drag = pan → stop orbiting the selection
         orbitLocked = false; return;
@@ -760,6 +778,7 @@ async function run(fileName){
   await yield_();
 
   const BUBBLE_R = 49.5;      // camera reveal-sphere radius (Å) — atoms within it go translucent
+  let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
@@ -861,7 +880,7 @@ async function run(fileName){
   const impostorMat = (name, radius, isShell, protonOutline) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT']
     });
     mat.setFloat('radius', radius);
     mat.setFloat('isShell', isShell);
@@ -870,6 +889,7 @@ async function run(fileName){
     mat.backFaceCulling = false;
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
+      eff.setFloat('uT', gWaveT);
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
@@ -891,22 +911,24 @@ async function run(fileName){
   const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0);   // isShell=0; protons are coloured light red directly (no extra red rim)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd']
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT']
   });
   orbMatG.setFloat('bubbleR', BUBBLE_R);
   orbMatG.backFaceCulling = true;   // fully opaque → default depth write, correct occlusion
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
+    eff.setFloat('uT', gWaveT);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd']
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT']
     });
     mat.setFloat('bubbleR', BUBBLE_R); mat.backFaceCulling = true;   // opaque → default depth write
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
+      eff.setFloat('uT', gWaveT);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     });
     return mat;
@@ -1028,18 +1050,19 @@ async function run(fileName){
     for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.0 + rnd((i+1)*2.7)*1.6; }
     const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
-      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd'].concat(extra||[]) });
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT'].concat(extra||[]) });
       mat.setFloat('bubbleR', 1e9); mat.backFaceCulling = true;
       mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
+        eff.setFloat('uT', gWaveT);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return mat;
     };
     // Nucleons (imp shader, always visible)
     const nucMatC = new BABYLON.ShaderMaterial('chlNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline'] });
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT'] });
     nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',1e9); nucMatC.setFloat('protonOutline',0); nucMatC.backFaceCulling=false;
-    nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
     let nucN=0; for(let k=0;k<N;k++) nucN += info(chl.el[k]).n;
     const nucK=new Int32Array(nucN), nucOff=new Float32Array(nucN*3), nucCol=new Float32Array(nucN*4), nucMat=new Float32Array(nucN*16);
     { let ni=0; for(let k=0;k<N;k++){ const A=info(chl.el[k]).n, Z=info(chl.el[k]).z;
@@ -1075,8 +1098,15 @@ async function run(fileName){
     chlBonds.isPickable=false; chlBonds.alwaysSelectAsActiveMesh=true;
     chlBonds.thinInstanceSetBuffer('taper',bTap,1,false); chlBonds.thinInstanceSetBuffer('bcol',bCol,3,false); chlBonds.thinInstanceSetBuffer('ocen',bCen,3,false); chlBonds.thinInstanceSetBuffer('matrix',bMat,16,false); chlBonds.thinInstanceCount=TOT;
 
+    // Chlorophyll centre → gate rendering on camera proximity (hide the detail when zoomed out).
+    let chlCx=0,chlCy=0,chlCz=0; for(let k=0;k<N;k++){ chlCx+=rest[k*3]; chlCy+=rest[k*3+1]; chlCz+=rest[k*3+2]; } chlCx/=N;chlCy/=N;chlCz/=N;
+    const chlMeshes=[chlNuc,chlCore,chlBonds]; let chlOn=true;
     const cpos=new Float32Array(N*3); let chlT=0;
     scene.onBeforeRenderObservable.add(()=>{
+      const cp=cam.position, ddx=cp.x-chlCx, ddy=cp.y-chlCy, ddz=cp.z-chlCz;
+      const near = (ddx*ddx+ddy*ddy+ddz*ddz) < (BUBBLE_R*2.2)*(BUBBLE_R*2.2);   // only render/animate when the camera is near it
+      if(near !== chlOn){ chlOn = near; for(const m of chlMeshes) m.setEnabled(near); }
+      if(!near) return;
       chlT += Math.min(engine.getDeltaTime(),50)*0.001;
       for(let i=0;i<N*3;i++) cpos[i]=rest[i]+AMP*Math.sin(chlT*freq[i]+phase[i]);
       // nucleons
@@ -1151,6 +1181,7 @@ async function run(fileName){
   const zoomEl = document.getElementById('zoomval');
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
+    gWaveT += Math.min(engine.getDeltaTime(), 50) * 0.001;   // advance the thermal-shake clock
     const f = cam.getDirection(BABYLON.Axis.Z);   // view forward
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
     const r = cam.getDirection(BABYLON.Axis.X);   // view right
@@ -1183,11 +1214,12 @@ async function run(fileName){
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
   const mkOutlineMat = (nm, col, rimLo, rimHi) => {
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
-      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi']
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','uT']
     });
     mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi);
     mat.alpha = 0.999; mat.backFaceCulling = false; mat.needDepthPrePass = false;   // blended, full-strength
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
+    mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
     return mat;
   };
   const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // hover = white, thin
