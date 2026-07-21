@@ -494,8 +494,8 @@ async function run(fileName){
     for(let k=0;k<m.nb;k++){
       const a1=m.b1[k], a2=m.b2[k];
       if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
-      const bo=m.bo[k]||1;
-      halfCount[m.el[a1]]+=bo; halfCount[m.el[a2]]+=bo;   // one lobe per bond order (double = 2 parallel)
+      const bo=m.bo[k]||1, hc=2*bo-1;   // σ (1) + π (2 lobes each: above & below)
+      halfCount[m.el[a1]]+=hc; halfCount[m.el[a2]]+=hc;
     }
   }
 
@@ -640,21 +640,30 @@ async function run(fileName){
       const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
       const e1=m.el[a1], e2=m.el[a2], f=0.62;   // each lobe reaches past the midpoint → the two orbitals overlap
       const en1=info(e1).en, en2=info(e2).en, bo=m.bo[k]||1;
-      // Narrower lobes for multi-bonds; width share still reflects polarity.
-      const wm = bo>1 ? 0.62 : 1.0;
-      const w1 = Math.min(1.7, Math.max(0.5, 0.55 + (en1-en2)*0.5 + 0.5)) * wm;
-      const w2 = Math.min(1.7, Math.max(0.5, 0.55 + (en2-en1)*0.5 + 0.5)) * wm;
-      // Perpendicular offset direction so the bo parallel orbital pairs sit side by side.
-      const bx=x2-x1, by=y2-y1, bz=z2-z1, per = nrm(crs([bx,by,bz], Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
-      const gap = LOBE_W*0.85;
-      for(let s=0;s<bo;s++){
-        const off = (s - (bo-1)/2)*gap, px=per[0]*off, py=per[1]*off, pz=per[2]*off;
-        const i1=cylIdx[e1]++, i2=cylIdx[e2]++;
-        cylTo(x1+px,y1+py,z1+pz, x1+bx*f+px, y1+by*f+py, z1+bz*f+pz, cylBuf[e1], i1*16);
-        cylTo(x2+px,y2+py,z2+pz, x2-bx*f+px, y2-by*f+py, z2-bz*f+pz, cylBuf[e2], i2*16);
-        wBuf[e1][i1] = w1; wBuf[e2][i2] = w2;
-        cenBuf[e1][i1*3]=x1; cenBuf[e1][i1*3+1]=y1; cenBuf[e1][i1*3+2]=z1;
-        cenBuf[e2][i2*3]=x2; cenBuf[e2][i2*3+1]=y2; cenBuf[e2][i2*3+2]=z2;
+      const w1 = Math.min(1.7, Math.max(0.5, 0.55 + (en1-en2)*0.5 + 0.5));
+      const w2 = Math.min(1.7, Math.max(0.5, 0.55 + (en2-en1)*0.5 + 0.5));
+      const bx=x2-x1, by=y2-y1, bz=z2-z1;
+      // Add one half-lobe from each atom (records atom centre for the selection test).
+      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el) => {
+        const i = cylIdx[el]++;
+        cylTo(sx,sy,sz, ex,ey,ez, cylBuf[el], i*16, wid);
+        wBuf[el][i] = tap;
+        cenBuf[el][i*3]=cx; cenBuf[el][i*3+1]=cy; cenBuf[el][i*3+2]=cz;
+      };
+      // σ bond: two overlapping lobes along the axis (width = polarity share).
+      halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1);
+      halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2);
+      // π bonds: for each, a thin lobe ABOVE and BELOW the axis, each linking the two atoms' p-orbitals.
+      const per1 = nrm(crs([bx,by,bz], Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
+      const per2 = nrm(crs([bx,by,bz], per1));
+      const pw = LOBE_W*0.42, pf = 0.6, d = LOBE_W*1.0;
+      for(let pi=0; pi<bo-1; pi++){
+        const pp = pi===0 ? per1 : per2;
+        for(const sgn of [1,-1]){
+          const gx=pp[0]*d*sgn, gy=pp[1]*d*sgn, gz=pp[2]*d*sgn;
+          halfLobe(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, x1,y1,z1, pw, 1.0, e1);
+          halfLobe(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, x2,y2,z2, pw, 1.0, e2);
+        }
       }
       bd[a1].push(nrm([bx,by,bz])); bd[a2].push(nrm([-bx,-by,-bz]));
     }
@@ -687,7 +696,7 @@ async function run(fileName){
   })();
   // Every proton & neutron is the SAME size; the nucleus grows as it packs more of
   // them (radius ∝ A^⅓), so hydrogen's single nucleon matches carbon's nucleons.
-  const NUCLEON_R = 0.13, SPACING = 2*NUCLEON_R;
+  const NUCLEON_R = 0.013, SPACING = 1.55*NUCLEON_R;   // 10× smaller, tightly packed (overlapping)
   const nucClusterR = e => { const A = info(e).n; const dm = A>1 ? Math.hypot(fcc[A-1][0],fcc[A-1][1],fcc[A-1][2]) : 0; return dm*SPACING + NUCLEON_R; };
   const nucBuf = [], nucColBuf = [];
   for(let e=0;e<nEl;e++){
@@ -929,18 +938,17 @@ async function run(fileName){
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:16}, scene);
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
-  const hlBuf = new Float32Array(80*16);   // up to 80 nucleons
+  const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
+  const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
-  // Exact ray-vs-sphere pick: nearest atom (by true vdW sphere) in front of the camera.
-  // The impostor quads don't match the visible spheres, so scene.pick was unreliable
-  // and made double-click jump to the wrong / a behind-camera atom.
+  // Exact ray-vs-sphere pick: nearest atom (hitbox = its orbital cloud) in front of the camera.
   const pickAtom = () => {
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
     const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
     let bestT = Infinity, bE = -1, bA = -1;
     for(let e=0;e<nEl;e++){
-      const hr = nucClusterR(e)*1.6, vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];   // hitbox matches the nucleus, not the vdW shell
+      const hr = orbExtent(e), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];   // hitbox = the orbital cloud
       for(let a=0;a<cnt;a++){
         const px = sb[a*16+12]-ox, py = sb[a*16+13]-oy, pz = sb[a*16+14]-oz;
         const tca = px*dx + py*dy + pz*dz;
@@ -953,19 +961,22 @@ async function run(fileName){
     }
     if(bE < 0) return null;
     const sb = sphBuf[bE], o = bA*16;
-    return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), nr: nucClusterR(bE), e: bE, idx: bA };
+    return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), e: bE, idx: bA };
   };
 
   let hoverT = 0, flashUntil = 0, flashAtom = null;
-  // Outline every nucleon of the given atom (thin instances of the rim sphere).
+  // Outline each orbital lobe of the given atom (white rim on its own lobe shapes).
   const setHL = (atom, scale) => {
-    const e = atom.e, idx = atom.idx, A = info(e).n, nb = nucBuf[e], R = NUCLEON_R * scale;
-    for(let i=0;i<A;i++){
-      const src = (idx*A + i)*16, o = i*16;
-      hlBuf.set([2*R,0,0,0, 0,2*R,0,0, 0,0,2*R,0, nb[src+12],nb[src+13],nb[src+14],1], o);
+    const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
+    for(let i=0;i<cnt;i++){
+      const s = base + i*16, o = i*16;   // copy the orbital matrix, scaling its basis for a slightly larger outline
+      hlBuf[o]=ob[s]*scale;    hlBuf[o+1]=ob[s+1]*scale;  hlBuf[o+2]=ob[s+2]*scale;   hlBuf[o+3]=0;
+      hlBuf[o+4]=ob[s+4]*scale; hlBuf[o+5]=ob[s+5]*scale; hlBuf[o+6]=ob[s+6]*scale;   hlBuf[o+7]=0;
+      hlBuf[o+8]=ob[s+8]*scale; hlBuf[o+9]=ob[s+9]*scale; hlBuf[o+10]=ob[s+10]*scale; hlBuf[o+11]=0;
+      hlBuf[o+12]=ob[s+12]; hlBuf[o+13]=ob[s+13]; hlBuf[o+14]=ob[s+14]; hlBuf[o+15]=1;
     }
     hl.thinInstanceSetBuffer('matrix', hlBuf, 16, true);
-    hl.thinInstanceCount = A;
+    hl.thinInstanceCount = cnt;
     hl.setEnabled(true);
   };
   // Per-frame: run the flash pulse on the clicked atom's nucleons.
@@ -973,7 +984,7 @@ async function run(fileName){
     const now = performance.now();
     if(now < flashUntil && flashAtom){
       const t = (flashUntil - now) / 600;                     // 1 → 0
-      setHL(flashAtom, 1.35 * (1.0 + 0.6*t));   // bright pop that shrinks in
+      setHL(flashAtom, 1.08 + 0.35*t);   // bright pop that shrinks in
     }
   });
 
@@ -994,7 +1005,7 @@ async function run(fileName){
       if(dragging || p.event.buttons || now - hoverT < 80 || now < flashUntil) return;   // skip while any button held; throttle; don't fight the flash
       hoverT = now;
       const a = pickAtom();
-      if(a) setHL(a, 1.35); else hl.setEnabled(false);   // white outline around each nucleon
+      if(a) setHL(a, 1.08); else hl.setEnabled(false);   // white outline around each orbital lobe
     }
   });
 
