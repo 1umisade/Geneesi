@@ -1072,14 +1072,30 @@ async function run(fileName){
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
     return mat;
   };
-  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.30, 0.58);                 // hover = white, normal thickness
+  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // hover = white, thin (matches selection)
   const selMat = mkOutlineMat('selMat', new BABYLON.Color3(0.25,0.65,1.0), 0.52, 0.66);         // selection = electric blue, thin
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
   scene.setRenderingAutoClearDepthStencil(1, true, true, false);   // CLEAR DEPTH before group 1 → outline never occluded (inner lobe rings show too)
-  const hlBuf = new Float32Array(80*16);   // up to 80 orbital lobes
+  const hlBuf = new Float32Array(160*16);   // orbital + bonding lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
+
+  // Shared outline geometry: fill `buf` with an atom's orbital lobes AND its bonding lobes.
+  // Hover and selection outlines use this identical geometry so they always match.
+  const OUT_MAX = 160;
+  const fillOutline = (buf, atom) => {
+    const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
+    let n = 0;
+    for(let i=0;i<cnt;i++){ const s=base+i*16, o=n*16; for(let j=0;j<16;j++) buf[o+j]=ob[s+j]; n++; }
+    const cb = cylBuf[e], ce = cenBuf[e], cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    if(cb) for(let i=0;i<cylIdx[e] && n<OUT_MAX;i++){
+      const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
+      if(dx*dx+dy*dy+dz*dz > 1e-4) continue;              // bonding lobe on a different atom
+      const s=i*16, o=n*16; for(let j=0;j<16;j++) buf[o+j]=cb[s+j]; n++;
+    }
+    return n;
+  };
 
   /* Persistent selection outline: orbitals stay opaque, but the selected atom gets a
      thin BLUE outline tracing every one of its orbital lobes AND its bonding lobes,
@@ -1090,18 +1106,7 @@ async function run(fileName){
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
   const setSelOut = atom => {
-    const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
-    let n = 0;
-    for(let i=0;i<cnt;i++){ const s=base+i*16, o=n*16;   // atomic orbital lobes
-      for(let j=0;j<16;j++) selOutBuf[o+j] = ob[s+j]; n++;
-    }
-    // Bonding lobes belonging to this atom (matched by their stored atom centre).
-    const cb = cylBuf[e], ce = cenBuf[e], cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
-    if(cb) for(let i=0;i<cylIdx[e] && n<160;i++){
-      const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
-      if(dx*dx+dy*dy+dz*dz > 1e-4) continue;              // this bonding lobe is on a different atom
-      const s=i*16, o=n*16; for(let j=0;j<16;j++) selOutBuf[o+j] = cb[s+j]; n++;
-    }
+    const n = fillOutline(selOutBuf, atom);
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
@@ -1156,36 +1161,20 @@ async function run(fileName){
     return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), e: bE, idx: bA };
   };
 
-  let hoverT = 0, flashUntil = 0, flashAtom = null;
-  // Outline each orbital lobe of the given atom (white rim on its own lobe shapes).
-  const setHL = (atom, scale) => {
-    const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], base = atom.idx*cnt*16;
-    for(let i=0;i<cnt;i++){
-      const s = base + i*16, o = i*16;   // copy the orbital matrix, scaling its basis for a slightly larger outline
-      hlBuf[o]=ob[s]*scale;    hlBuf[o+1]=ob[s+1]*scale;  hlBuf[o+2]=ob[s+2]*scale;   hlBuf[o+3]=0;
-      hlBuf[o+4]=ob[s+4]*scale; hlBuf[o+5]=ob[s+5]*scale; hlBuf[o+6]=ob[s+6]*scale;   hlBuf[o+7]=0;
-      hlBuf[o+8]=ob[s+8]*scale; hlBuf[o+9]=ob[s+9]*scale; hlBuf[o+10]=ob[s+10]*scale; hlBuf[o+11]=0;
-      hlBuf[o+12]=ob[s+12]; hlBuf[o+13]=ob[s+13]; hlBuf[o+14]=ob[s+14]; hlBuf[o+15]=1;
-    }
+  let hoverT = 0;
+  // Hover outline — identical geometry to the selection outline (orbital + bonding lobes).
+  const setHL = atom => {
+    const n = fillOutline(hlBuf, atom);
     hl.thinInstanceSetBuffer('matrix', hlBuf, 16, true);
-    hl.thinInstanceCount = cnt;
+    hl.thinInstanceCount = n;
     hl.setEnabled(true);
   };
-  // Per-frame: run the flash pulse on the clicked atom's nucleons.
-  scene.onBeforeRenderObservable.add(() => {
-    const now = performance.now();
-    if(now < flashUntil && flashAtom){
-      const t = (flashUntil - now) / 600;                     // 1 → 0
-      setHL(flashAtom, 1.0 + 0.3*t);   // bright pop that shrinks onto the orbital surface
-    }
-  });
 
   const centerOnAtom = () => {
     const a = pickAtom(); if(!a) return;
     selCenter.copyFrom(a.center);   // marks the selected atom
     orbitLocked = true;             // rotation orbits this atom until the user pans away
-    setSelOut(a);                   // persistent white outline tracing all its orbital lobes (inner included), topmost
-    flashAtom = a; flashUntil = performance.now() + 600;   // flash the nucleons
+    setSelOut(a);                   // persistent blue outline tracing all its orbital + bonding lobes, topmost
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
@@ -1203,10 +1192,10 @@ async function run(fileName){
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ centerOnAtom(); return; }   // touch double-tap
     if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
       const now = performance.now();
-      if(dragging || p.event.buttons || now - hoverT < 80 || now < flashUntil) return;   // skip while any button held; throttle; don't fight the flash
+      if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
       hoverT = now;
       const a = pickAtom();
-      if(a) setHL(a, 1.0); else hl.setEnabled(false);   // white stroke exactly on each orbital lobe
+      if(a) setHL(a); else hl.setEnabled(false);   // white stroke exactly on each orbital + bonding lobe
     }
   });
 
