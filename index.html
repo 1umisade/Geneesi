@@ -988,6 +988,7 @@ async function run(fileName){
     attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection']
   });
   hlMat.alpha = 0.5; hlMat.backFaceCulling = false; hlMat.needDepthPrePass = false;
+  hlMat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows, not just the outer clump
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:3}, scene);   // seg3 to match the orbital lobes exactly
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 1;                                     // draw on top
