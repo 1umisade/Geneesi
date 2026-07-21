@@ -289,10 +289,10 @@ void main(void){
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
-  // Electric-blue Fresnel rim → thin glowing orbital outline at the silhouette
+  // Electric-blue Fresnel rim → matches the atomic-orbital shader exactly
   vec3 V = normalize(-vViewPos);
-  float fres = pow(1.0 - abs(dot(N, V)), 4.5);
-  c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));
+  float fres = pow(1.0 - abs(dot(N, V)), 3.0);
+  c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.2, 0.0, 1.0));
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
 }`;
@@ -526,7 +526,7 @@ async function run(fileName){
     for(let k=0;k<m.nb;k++){
       const a1=m.b1[k], a2=m.b2[k];
       if(a1<0||a1>=m.na||a2<0||a2>=m.na) continue;
-      const bo=m.bo[k]||1, hc=2*bo-1;   // σ (1) + π (2 lobes each: above & below)
+      const bo=m.bo[k]||1, hc=2*bo;   // σ (1) + its small back-knob (1) + π (2 lobes each: above & below)
       halfCount[m.el[a1]]+=hc; halfCount[m.el[a2]]+=hc;
     }
   }
@@ -718,9 +718,13 @@ async function run(fileName){
         wBuf[el][i] = tap;
         cenBuf[el][i*3]=cx; cenBuf[el][i*3+1]=cy; cenBuf[el][i*3+2]=cz;
       };
-      // σ bond: two overlapping lobes along the axis (width = polarity share).
+      // σ bond: two overlapping hybrid lobes along the axis (width = polarity share).
       halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1);
       halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2);
+      // …each hybrid gets a small back lobe (the textbook sp knob) on the opposite side of the atom.
+      const kL=0.24, kW=LOBE_W*0.5;
+      halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1);
+      halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2);
       // π direction = the bond-plane normal (from either atom), projected ⊥ to the bond axis.
       let pnrm = pn[a1] || pn[a2];
       if(pn[a1] && pn[a2]){ const s = (pn[a1][0]*pn[a2][0]+pn[a1][1]*pn[a2][1]+pn[a1][2]*pn[a2][2])<0?-1:1;
@@ -814,7 +818,7 @@ async function run(fileName){
                   [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],        // p — 6 lobes
                   cube,                                                        // d — 8 lobes
                   cube.concat([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) ];   // f — 14
-  const TMUL = [0.60, 1.0, 1.45, 1.9];   // per-type brightness of the element colour (s dim … f bright) → tells s/p/d/f apart
+  const TMUL = [1.0, 1.0, 1.0, 1.0];   // all orbitals use the true element colour (matches the bonding orbitals)
   const orbCount = e => econf(e).reduce((s,sh)=>s + (sh[1]===0 ? 1 : OTMPL[sh[1]].length), 0);
   const orbBuf = [], orbColBuf = [], orbCenBuf = [];
   for(let e=0;e<nEl;e++){
