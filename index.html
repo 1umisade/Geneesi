@@ -470,6 +470,30 @@ void main(void){
   gl_FragColor = vec4(oc, a);
 }`;
 
+/* Stencil mask for the selected atom: renders its own orbital lobes (colour-write off) so
+   the nucleus, drawn afterwards, appears only where its OWN orbital is the frontmost surface
+   (other atoms in front leave the stencil clear → they occlude the nucleus). Shakes with the
+   orbitals so its depth matches the fill exactly. */
+BABYLON.Effect.ShadersStore['maskVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec4 world0;
+attribute vec4 world1;
+attribute vec4 world2;
+attribute vec4 world3;
+uniform mat4 view;
+uniform mat4 projection;
+uniform float uT;
+vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+void main(void){
+  mat4 W = mat4(world0, world1, world2, world3);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  gl_Position = projection * view * wp;
+}`;
+BABYLON.Effect.ShadersStore['maskFragmentShader'] = `
+precision highp float;
+void main(void){ gl_FragColor = vec4(0.0); }`;
+
 /* Aromatic delocalised-pi cloud: a translucent torus above/below each aromatic ring,
    with a bright arc that orbits it (the ring current). */
 BABYLON.Effect.ShadersStore['ringVertexShader'] = `
@@ -628,7 +652,7 @@ async function run(fileName){
 
   /* Engine/scene */
   const canvas = document.getElementById('c');
-  engine = new BABYLON.Engine(canvas, true, {stencil:false});
+  engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
   // Supersample: render at higher internal res so the shader-drawn sphere edges /
   // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
@@ -679,7 +703,7 @@ async function run(fileName){
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         if(mdx*mdx + mdy*mdy < 9 && selCenter.x < 1e5 && !pickAtom()){   // a click on empty space → clear the selection
-          selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); orbitLocked = false;
+          selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false); orbitLocked = false;
         }
       }
     }
@@ -718,13 +742,14 @@ async function run(fileName){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], colBuf = [],
+  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], colBuf = [],
         sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
     cylBuf[e] = new Float32Array(halfCount[e]*16);             // bonding half-lobes (one per bond half)
     wBuf[e]   = new Float32Array(halfCount[e]);                // per-lobe width (electronegativity)
     knobBuf[e] = new Uint8Array(halfCount[e]);                 // 1 = small back-knob → skipped by the selection outline
+    cylAtBuf[e] = new Int32Array(halfCount[e]).fill(-1);       // per-lobe owning atom index (element-local) → picking
     cenBuf[e] = new Float32Array(halfCount[e]*3);              // bonding lobe's atom centre (selection test)
     lpBuf[e]  = new Float32Array(atomCount[e]*lonePairs(e)*16); // lone-pair lobes (translucent)
     lpCenBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)*3);
@@ -845,21 +870,23 @@ async function run(fileName){
       const w1 = Math.min(1.7, Math.max(0.5, 0.55 + (en1-en2)*0.5 + 0.5));
       const w2 = Math.min(1.7, Math.max(0.5, 0.55 + (en2-en1)*0.5 + 0.5));
       const bx=x2-x1, by=y2-y1, bz=z2-z1, bdir=nrm([bx,by,bz]);
-      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el, knob) => {
+      const ai1 = kci[a1], ai2 = kci[a2];
+      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el, ai, knob) => {
         const i = cylIdx[el]++;
         cylTo(sx,sy,sz, ex,ey,ez, cylBuf[el], i*16, wid);
         wBuf[el][i] = tap;
+        cylAtBuf[el][i] = ai;
         if(knob) knobBuf[el][i] = 1;
         cenBuf[el][i*3]=cx; cenBuf[el][i*3+1]=cy; cenBuf[el][i*3+2]=cz;
       };
       // σ bond: two overlapping hybrid lobes along the axis (width = polarity share).
-      halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1);
-      halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2);
+      halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1, ai1);
+      halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2, ai2);
       // …each hybrid gets a small back lobe (the textbook sp knob). Hydrogen uses a pure 1s
       // (it doesn't hybridise), so it gets no knob.
       const kL=0.24, kW=LOBE_W*0.5;
-      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1, true);
-      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2, true);
+      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1, ai1, true);
+      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2, ai2, true);
       // π direction = the bond-plane normal (from either atom), projected ⊥ to the bond axis.
       let pnrm = pn[a1] || pn[a2];
       if(pn[a1] && pn[a2]){ const s = (pn[a1][0]*pn[a2][0]+pn[a1][1]*pn[a2][1]+pn[a1][2]*pn[a2][2])<0?-1:1;
@@ -875,8 +902,8 @@ async function run(fileName){
         const pp = pi===0 ? per1 : per2;
         for(const sgn of [1,-1]){
           const gx=pp[0]*d*sgn, gy=pp[1]*d*sgn, gz=pp[2]*d*sgn;
-          halfLobe(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, x1,y1,z1, pw, 1.0, e1);
-          halfLobe(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, x2,y2,z2, pw, 1.0, e2);
+          halfLobe(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, x1,y1,z1, pw, 1.0, e1, ai1);
+          halfLobe(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, x2,y2,z2, pw, 1.0, e2, ai2);
         }
       }
     }
@@ -890,6 +917,20 @@ async function run(fileName){
         lpCenBuf[e][li*3]=ax; lpCenBuf[e][li*3+1]=ay; lpCenBuf[e][li*3+2]=az;
       }
     }
+  }
+  await yield_();
+
+  // Per-atom index of bonding lobes (CSR: start offsets + lobe list) → picking can ray-test
+  // an atom's σ/knob/π lobes, not just its orbital lobes (so clicking any visible lobe selects it).
+  const cylAtStart = [], cylAtList = [];
+  for(let e=0;e<nEl;e++){
+    const nA = atomCount[e], nL = cylIdx[e], at = cylAtBuf[e];
+    const start = new Int32Array(nA+1);
+    for(let i=0;i<nL;i++){ const a=at[i]; if(a>=0) start[a+1]++; }
+    for(let a=0;a<nA;a++) start[a+1]+=start[a];
+    const list = new Int32Array(nL), cur = start.slice(0, nA);
+    for(let i=0;i<nL;i++){ const a=at[i]; if(a>=0) list[cur[a]++]=i; }
+    cylAtStart[e]=start; cylAtList[e]=list;
   }
   await yield_();
 
@@ -1496,17 +1537,21 @@ async function run(fileName){
       attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','uT']
     });
     mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi);
-    mat.alpha = 0.999; mat.backFaceCulling = false; mat.needDepthPrePass = false;   // blended, full-strength
+    mat.alpha = 0.999; mat.backFaceCulling = true; mat.needDepthPrePass = false;   // cull backs → ONE contour per lobe (not a front+back pair)
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
     mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
     return mat;
   };
-  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // hover = white, thin
-  const selMat = mkOutlineMat('selMat', new BABYLON.Color3(1,1,1), 0.52, 0.66);                 // selection = white too → reads as a highlight, not a 2nd (blue) orbital
+  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66);                 // hover = white, hugs the lobe edge
+  const selMat = mkOutlineMat('selMat', new BABYLON.Color3(1,1,1), 0.85, 0.66);                 // selection = white too → reads as a highlight, not a 2nd (blue) orbital
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
-  hl.renderingGroupId = 1;                                     // draw on top
-  scene.setRenderingAutoClearDepthStencil(1, true, true, false);   // CLEAR DEPTH before group 1 → outline never occluded (inner lobe rings show too)
+  hl.renderingGroupId = 3;                                     // outlines drawn topmost (above the nucleus pass)
+  // Group 1 = selection stencil mask (keep scene depth, clear stencil); group 2 = nucleus
+  // (keep stencil, clear depth); group 3 = outlines (clear depth → never occluded).
+  scene.setRenderingAutoClearDepthStencil(1, true, false, true);
+  scene.setRenderingAutoClearDepthStencil(2, true, true, false);
+  scene.setRenderingAutoClearDepthStencil(3, true, true, false);
   const hlBuf = new Float32Array(160*16);   // orbital + bonding lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
@@ -1545,7 +1590,7 @@ async function run(fileName){
      drawn topmost (group 1, depth pre-cleared, no self-occlusion). */
   const selOut = BABYLON.MeshBuilder.CreateSphere('selOut', {diameter:1, segments:8}, scene);
   selOut.material = selMat; selOut.isPickable = false; selOut.setEnabled(false);
-  selOut.renderingGroupId = 1;                                 // same topmost group as the hover outline
+  selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
   const setSelOut = atom => {
@@ -1553,14 +1598,45 @@ async function run(fileName){
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
+    // The mask reuses the very same lobes (solid) → the nucleus later shows only where one of them is frontmost.
+    selMask.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
+    selMask.thinInstanceCount = n;
+    selMask.setEnabled(true);
   };
 
-  /* Selected atom's nucleus — drawn topmost (group 1, depth pre-cleared) so it shows
-     through the opaque orbitals. */
+  /* Stencil mask: the selected atom's own lobes rendered solid (colour-write off) with the
+     scene depth still bound → stencil = 1 only where one of THIS atom's orbitals is the
+     frontmost surface. Where another atom sits in front, the mask fails depth and the stencil
+     stays 0, so the nucleus (drawn next, gated on stencil==1) is hidden there. */
+  const maskMat = new BABYLON.ShaderMaterial('maskMat', scene, 'mask', {
+    attributes: ['position','world0','world1','world2','world3'], uniforms: ['view','projection','uT'] });
+  maskMat.backFaceCulling = true; maskMat.disableDepthWrite = true;   // test against scene depth, don't overwrite it
+  maskMat.onBindObservable.add(() => { const eff=maskMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
+  const selMask = BABYLON.MeshBuilder.CreateSphere('selMask', {diameter:1, segments:8}, scene);
+  selMask.material = maskMat; selMask.isPickable = false; selMask.setEnabled(false);
+  selMask.renderingGroupId = 1; selMask.alwaysSelectAsActiveMesh = true;
+  const SC = BABYLON.Constants;
+  selMask.onBeforeRenderObservable.add(() => {
+    engine.setColorWrite(false);
+    engine.setStencilBuffer(true); engine.setStencilMask(0xFF);
+    engine.setStencilFunction(SC.ALWAYS); engine.setStencilFunctionReference(1); engine.setStencilFunctionMask(0xFF);
+    engine.setStencilOperationFail(SC.KEEP); engine.setStencilOperationDepthFail(SC.KEEP); engine.setStencilOperationPass(SC.REPLACE);
+  });
+  selMask.onAfterRenderObservable.add(() => { engine.setColorWrite(true); });
+
+  /* Selected atom's nucleus — group 2, gated on the stencil mask so it shows through its OWN
+     opaque orbitals but is occluded wherever another atom is in front. */
   const selNucMat = impostorMat('selNucMat', NUCLEON_R, 0.0, 1.0);   // isShell=0, protonOutline on
   selNucMat.setFloat('bubbleR', 1e9);   // always visible (never gated by the reveal bubble)
+  selNucMat.depthFunction = BABYLON.Constants.ALWAYS; selNucMat.disableDepthWrite = true;   // depth handled by the stencil gate
   const selNuc = BABYLON.MeshBuilder.CreatePlane('selNuc', {size:2}, scene);
-  selNuc.material=selNucMat; selNuc.isPickable=false; selNuc.setEnabled(false); selNuc.renderingGroupId=1; selNuc.alwaysSelectAsActiveMesh=true;
+  selNuc.material=selNucMat; selNuc.isPickable=false; selNuc.setEnabled(false); selNuc.renderingGroupId=2; selNuc.alwaysSelectAsActiveMesh=true;
+  selNuc.onBeforeRenderObservable.add(() => {
+    engine.setStencilBuffer(true); engine.setStencilMask(0x00);   // read stencil, don't modify it
+    engine.setStencilFunction(BABYLON.Constants.EQUAL); engine.setStencilFunctionReference(1); engine.setStencilFunctionMask(0xFF);
+    engine.setStencilOperationFail(BABYLON.Constants.KEEP); engine.setStencilOperationDepthFail(BABYLON.Constants.KEEP); engine.setStencilOperationPass(BABYLON.Constants.KEEP);
+  });
+  selNuc.onAfterRenderObservable.add(() => { engine.setStencilBuffer(false); });
   const selNucM=new Float32Array(80*16), selNucC=new Float32Array(80*4);
   const setSelNuc = atom => {
     const e=atom.e, A=info(e).n, Z=info(e).z, cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
@@ -1581,11 +1657,27 @@ async function run(fileName){
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
     const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
+    // Ray vs one lobe (unit sphere r=0.5 in its local space). Returns the hit distance or -1.
+    const hitLobe = (buf, off) => {
+      BABYLON.Matrix.FromArrayToRef(buf, off, _pkM);
+      _pkM.invertToRef(_pkInv);
+      BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(ox, oy, oz, _pkInv, _pkLo);
+      BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, _pkLd);
+      const A2 = _pkLd.x*_pkLd.x + _pkLd.y*_pkLd.y + _pkLd.z*_pkLd.z;
+      const B2 = 2*(_pkLo.x*_pkLd.x + _pkLo.y*_pkLd.y + _pkLo.z*_pkLd.z);
+      const C2 = _pkLo.x*_pkLo.x + _pkLo.y*_pkLo.y + _pkLo.z*_pkLo.z - 0.25;
+      const disc = B2*B2 - 4.0*A2*C2;
+      if(disc < 0.0) return -1.0;
+      const sq = Math.sqrt(disc);
+      let t = (-B2 - sq)/(2.0*A2);
+      if(t < 0.0) t = (-B2 + sq)/(2.0*A2);   // camera inside the lobe → use the exit
+      return t;
+    };
     const cp = cam.position;                                     // only atoms whose orbitals actually render (inside the bubble) are pickable
     let bestT = Infinity, bE = -1, bA = -1;
     for(let e=0;e<nEl;e++){
-      const hr = orbExtent(e), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];
-      const oc = orbCount(e), ob = orbBuf[e];
+      const hr = Math.max(orbExtent(e), 2.6), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];   // reach covers σ-lobe tips too
+      const oc = orbCount(e), ob = orbBuf[e], cb = cylBuf[e], cs = cylAtStart[e], cl = cylAtList[e];
       const bub2 = (BUBBLE_R + hr) * (BUBBLE_R + hr);
       for(let a=0;a<cnt;a++){
         const cxp = sb[a*16+12]-cp.x, cyp = sb[a*16+13]-cp.y, czp = sb[a*16+14]-cp.z;
@@ -1596,24 +1688,17 @@ async function run(fileName){
         const d2 = px*px+py*py+pz*pz - tca*tca;
         if(d2 > vr2) continue;                                   // ray misses the atom's bounding sphere
         if(tca - Math.sqrt(vr2 - d2) >= bestT) continue;         // can't beat the current nearest hit
-        // narrow phase: intersect each orbital lobe (unit sphere r=0.5 in lobe space)
+        // narrow phase: intersect the atom's orbital lobes AND its bonding σ/knob/π lobes
         const base = a*oc*16;
         for(let i=0;i<oc;i++){
           const bo = base + i*16;
           if(ob[bo]*ob[bo] + ob[bo+1]*ob[bo+1] + ob[bo+2]*ob[bo+2] < 1e-9) continue;   // skipped (bond-doubled) lobe → zero matrix
-          BABYLON.Matrix.FromArrayToRef(ob, bo, _pkM);
-          _pkM.invertToRef(_pkInv);
-          BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(ox, oy, oz, _pkInv, _pkLo);
-          BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, _pkLd);
-          const A2 = _pkLd.x*_pkLd.x + _pkLd.y*_pkLd.y + _pkLd.z*_pkLd.z;
-          const B2 = 2*(_pkLo.x*_pkLd.x + _pkLo.y*_pkLd.y + _pkLo.z*_pkLd.z);
-          const C2 = _pkLo.x*_pkLo.x + _pkLo.y*_pkLo.y + _pkLo.z*_pkLo.z - 0.25;
-          const disc = B2*B2 - 4*A2*C2;
-          if(disc < 0) continue;                                 // ray misses this lobe
-          const sq = Math.sqrt(disc);
-          let t = (-B2 - sq)/(2*A2);
-          if(t < 0) t = (-B2 + sq)/(2*A2);                       // camera inside the lobe → use the exit
+          const t = hitLobe(ob, bo);
           if(t > 0 && t < bestT){ bestT = t; bE = e; bA = a; }   // t is the world-space ray distance
+        }
+        for(let p=cs[a]; p<cs[a+1]; p++){                        // this atom's bonding lobes (so clicking a σ-lobe selects it)
+          const t = hitLobe(cb, cl[p]*16);
+          if(t > 0 && t < bestT){ bestT = t; bE = e; bA = a; }
         }
       }
     }
@@ -1657,7 +1742,9 @@ async function run(fileName){
       if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
       hoverT = now;
       const a = pickAtom();
-      if(a) setHL(a); else hl.setEnabled(false);   // white stroke exactly on each orbital + bonding lobe
+      // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
+      if(a && BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a);
+      else hl.setEnabled(false);   // white stroke exactly on each orbital + bonding lobe
     }
   });
 
