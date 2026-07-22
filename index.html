@@ -451,7 +451,11 @@ void main(void){
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
   vec4 vp = view * wp;
   vVP = vp.xyz;
-  vN  = (view * W * vec4(normal, 0.0)).xyz;
+  // Correct normal under non-uniform lobe scale via the cofactor matrix (= det inverse-transpose),
+  // since the raw world matrix warps the normal so dot(N,V) goes non-monotonic → a doubled contour.
+  vec3 M0 = world0.xyz, M1 = world1.xyz, M2 = world2.xyz;
+  vec3 wn = cross(M1, M2)*normal.x + cross(M2, M0)*normal.y + cross(M0, M1)*normal.z;
+  vN  = (view * vec4(wn, 0.0)).xyz;
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['hloFragmentShader'] = `
@@ -463,7 +467,7 @@ varying vec3 vVP;
 varying vec3 vN;
 void main(void){
   vec3 N = normalize(vN), V = normalize(-vVP);
-  float f = 1.0 - abs(dot(N, V));                  // 0 face-on … 1 at the silhouette
+  float f = 1.0 - max(dot(N, V), 0.0);             // 0 face-on … 1 at the silhouette (front faces only)
   float w = fwidth(f);                             // screen-space gradient → normalise the band to a constant pixel width
   float a = 1.0 - smoothstep(0.0, w*2.6, abs(f - rimLo));   // even stroke along the f=rimLo contour
   if(a < 0.04) discard;
@@ -1638,8 +1642,10 @@ async function run(fileName){
   });
   selNuc.onAfterRenderObservable.add(() => { engine.setStencilBuffer(false); });
   const selNucM=new Float32Array(80*16), selNucC=new Float32Array(80*4);
+  let selNucA=0; const selNucCtr=new BABYLON.Vector3();   // for the per-frame tumble of the selected nucleus
   const setSelNuc = atom => {
     const e=atom.e, A=info(e).n, Z=info(e).z, cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    selNucA=A; selNucCtr.set(cx,cy,cz);
     for(let i=0;i<A;i++){ const o=i*16;
       selNucM[o]=1;selNucM[o+5]=1;selNucM[o+10]=1;selNucM[o+15]=1;
       selNucM[o+12]=cx+fcc[i][0]*SPACING; selNucM[o+13]=cy+fcc[i][1]*SPACING; selNucM[o+14]=cz+fcc[i][2]*SPACING;
@@ -1648,6 +1654,21 @@ async function run(fileName){
     selNuc.thinInstanceSetBuffer('matrix', selNucM,16,true); selNuc.thinInstanceSetBuffer('instanceColor', selNucC,4,true);
     selNuc.thinInstanceCount=A; selNuc.setEnabled(true);
   };
+  // Tumble the WHOLE selected nucleus (rigid rotation, random-looking via 3 unequal Euler rates).
+  // Selected-atom only → just ≤65 nucleons rewritten per frame (negligible cost).
+  const _spinM=new BABYLON.Matrix(), _spinIn=new BABYLON.Vector3(), _spinOut=new BABYLON.Vector3();
+  scene.onBeforeRenderObservable.add(() => {
+    if(!selNuc.isEnabled() || selNucA===0) return;
+    const t=gWaveT;   // driven by the speed slider (pauses/scales with the thermal clock)
+    BABYLON.Matrix.RotationYawPitchRollToRef(t*0.9, t*1.3, t*0.7, _spinM);
+    for(let i=0;i<selNucA;i++){
+      _spinIn.set(fcc[i][0]*SPACING, fcc[i][1]*SPACING, fcc[i][2]*SPACING);
+      BABYLON.Vector3.TransformCoordinatesToRef(_spinIn, _spinM, _spinOut);
+      const o=i*16;
+      selNucM[o+12]=selNucCtr.x+_spinOut.x; selNucM[o+13]=selNucCtr.y+_spinOut.y; selNucM[o+14]=selNucCtr.z+_spinOut.z;
+    }
+    selNuc.thinInstanceBufferUpdated('matrix');
+  });
 
   // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
   // ray-vs-ellipsoid against its actual orbital lobes → the hitbox traces the lobes exactly.
