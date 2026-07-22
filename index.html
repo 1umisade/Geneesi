@@ -461,6 +461,58 @@ void main(void){
   if(a < 0.03) discard;                            // transparent centre → glowing stroke only
   gl_FragColor = vec4(oc, a);
 }`;
+
+/* Aromatic delocalised-pi cloud: a translucent torus above/below each aromatic ring,
+   with a bright arc that orbits it (the ring current). */
+BABYLON.Effect.ShadersStore['ringVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec4 world0;
+attribute vec4 world1;
+attribute vec4 world2;
+attribute vec4 world3;
+uniform mat4 view;
+uniform mat4 projection;
+uniform float uT;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+varying vec3 vLoc;
+vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+void main(void){
+  mat4 W = mat4(world0, world1, world2, world3);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  vec4 vp = view * wp;
+  vViewPos = vp.xyz;
+  vNrmV = (view * W * vec4(normal, 0.0)).xyz;
+  vLoc = position;                                 // local torus position → ring angle
+  gl_Position = projection * vp;
+}`;
+BABYLON.Effect.ShadersStore['ringFragmentShader'] = `
+precision highp float;
+uniform float bubbleR;
+uniform float uRingT;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogEnd;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+varying vec3 vLoc;
+const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
+void main(void){
+  if(length(vViewPos) >= bubbleR) discard;         // only inside the camera reveal-bubble
+  vec3 N = normalize(vNrmV);
+  float ndl = dot(N, L) * 0.5 + 0.5;
+  vec3 c = vec3(0.30, 0.55, 1.0) * (0.55 + 0.45 * ndl);   // soft blue delocalised cloud
+  float ang = atan(vLoc.z, vLoc.x);                // position around the ring
+  float cur = 0.5 + 0.5 * sin(ang - uRingT);       // a bright arc that orbits as uRingT advances
+  c += smoothstep(0.55, 1.0, cur) * vec3(0.7, 0.75, 0.5);   // the ring current
+  vec3 V = normalize(-vViewPos);
+  float fres = pow(1.0 - abs(dot(N, V)), 3.0);
+  c = mix(c, vec3(0.35, 0.7, 1.0), clamp(fres*1.3, 0.0, 1.0));
+  float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
+  gl_FragColor = vec4(mix(fogColor, c, fog), 0.6);
+}`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
 BABYLON.Effect.ShadersStore['aoFragmentShader'] = `
@@ -708,6 +760,7 @@ async function run(fileName){
 
   const bondDirEA = [];   // bondDirEA[element][atomIdx] = list of bond directions → used to drop doubled atomic p/d/f lobes
   for(let e=0;e<nEl;e++) bondDirEA[e] = [];
+  const RINGS = [];       // detected aromatic rings → {cx,cy,cz, nx,ny,nz, R} (world) for the delocalised-π tori
   for(const m of mols){
     if(m===chl) continue;   // chlorophyll built separately (animated)
     const ox=m.ox, oy=m.oy, oz=m.oz;
@@ -740,6 +793,31 @@ async function run(fileName){
       }
       pn[k] = n;
     }
+    // ── Detect aromatic rings (planar 6-membered C/N cycles) → delocalised-π tori ──
+    const aromSet = new Set();
+    const bkey = (a,b) => a<b ? a*1000003+b : b*1000003+a;
+    {
+      const adj = []; for(let k=0;k<m.na;k++) adj[k]=[];
+      for(let k=0;k<m.nb;k++){ const a=m.b1[k], b=m.b2[k]; if(a>=0&&b>=0&&a<m.na&&b<m.na){ adj[a].push(b); adj[b].push(a); } }
+      const isAr = k => { const s=EL_LIST[m.el[k]]; return s==='C'||s==='N'; };
+      const path = new Array(6), seen = new Uint8Array(m.na); let start=0;
+      const record = () => {
+        let cx=0,cy=0,cz=0; for(let i=0;i<6;i++){ cx+=m.x[path[i]];cy+=m.y[path[i]];cz+=m.z[path[i]]; } cx/=6;cy/=6;cz/=6;
+        const v1=[m.x[path[0]]-cx,m.y[path[0]]-cy,m.z[path[0]]-cz], v2=[m.x[path[2]]-cx,m.y[path[2]]-cy,m.z[path[2]]-cz];
+        let n=crs(v1,v2); const nl=Math.hypot(n[0],n[1],n[2]); if(nl<1e-4) return; n=[n[0]/nl,n[1]/nl,n[2]/nl];
+        let maxd=0, R=0; for(let i=0;i<6;i++){ const dx=m.x[path[i]]-cx,dy=m.y[path[i]]-cy,dz=m.z[path[i]]-cz;
+          maxd=Math.max(maxd, Math.abs(dx*n[0]+dy*n[1]+dz*n[2])); R+=Math.hypot(dx,dy,dz); }
+        if(maxd>0.35) return;   // puckered (sp3, e.g. cyclohexane) → not aromatic
+        RINGS.push({ cx:cx+ox, cy:cy+oy, cz:cz+oz, nx:n[0], ny:n[1], nz:n[2], R:R/6 });
+        for(let i=0;i<6;i++) aromSet.add(bkey(path[i], path[(i+1)%6]));
+      };
+      const rec = (u,cnt) => {
+        if(cnt===6){ const nb=adj[u]; for(let x=0;x<nb.length;x++) if(nb[x]===start){ if(path[1]<path[5]) record(); break; } return; }
+        const nb=adj[u]; for(let x=0;x<nb.length;x++){ const w=nb[x]; if(w<=start||seen[w]||!isAr(w)) continue; seen[w]=1; path[cnt]=w; rec(w,cnt+1); seen[w]=0; }
+      };
+      for(let s=0;s<m.na && RINGS.length<8000;s++){ if(!isAr(s)||adj[s].length<2||adj[s].length>3) continue; start=s; path[0]=s; seen[s]=1; rec(s,1); seen[s]=0; }
+    }
+    await yield_();
     // Pass 2 — build σ + π lobes.
     for(let k=0;k<m.nb;k++){
       const a1=m.b1[k], a2=m.b2[k];
@@ -775,7 +853,8 @@ async function run(fileName){
       else per1 = nrm(crs([bx,by,bz], Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
       const per2 = nrm(crs([bx,by,bz], per1));
       const pw = LOBE_W*0.42, pf = 0.6, d = LOBE_W*1.0;
-      for(let pi=0; pi<bo-1; pi++){
+      const aromatic = aromSet.has(bkey(a1,a2));   // aromatic ring → the delocalised π is shown as a torus, not localized lobes
+      for(let pi=0; pi<bo-1 && !aromatic; pi++){
         const pp = pi===0 ? per1 : per2;
         for(const sgn of [1,-1]){
           const gx=pp[0]*d*sgn, gy=pp[1]*d*sgn, gz=pp[2]*d*sgn;
@@ -1056,6 +1135,31 @@ async function run(fileName){
     shell.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
     shell.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
     shell.alwaysSelectAsActiveMesh = true;
+  }
+
+  /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
+     ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
+     torus mesh; the shader shows it only inside the reveal-bubble. */
+  if(RINGS.length){
+    const ringMat = new BABYLON.ShaderMaterial('ringMat', scene, 'ring', {
+      attributes:['position','normal','world0','world1','world2','world3'],
+      uniforms:['view','projection','bubbleR','uRingT','uT','fogColor','fogStart','fogEnd'] });
+    ringMat.setFloat('bubbleR', BUBBLE_R); ringMat.alpha=0.6; ringMat.disableDepthWrite=true; ringMat.backFaceCulling=true;
+    ringMat.onBindObservable.add(()=>{ const eff=ringMat.getEffect(); if(!eff)return;
+      eff.setFloat('uT',gWaveT); eff.setFloat('uRingT',gWaveT*2.2);
+      eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    const torus = BABYLON.MeshBuilder.CreateTorus('rings', {diameter:2, thickness:0.7, tessellation:14}, scene);
+    torus.material=ringMat; torus.isPickable=false; torus.alwaysSelectAsActiveMesh=true;
+    const perpV = n => { const a = Math.abs(n[0])<0.9?[1,0,0]:[0,1,0]; const c=crs(n,a); const l=Math.hypot(c[0],c[1],c[2])||1; return [c[0]/l,c[1]/l,c[2]/l]; };
+    const rmat = new Float32Array(RINGS.length*2*16); let ii=0;
+    for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], T=perpV(N), B=crs(N,T), R=rg.R;
+      for(const dw of [0.5,-0.5]){ const o=ii*16;
+        rmat[o]=T[0]*R; rmat[o+1]=T[1]*R; rmat[o+2]=T[2]*R; rmat[o+3]=0;
+        rmat[o+4]=N[0]*R; rmat[o+5]=N[1]*R; rmat[o+6]=N[2]*R; rmat[o+7]=0;
+        rmat[o+8]=B[0]*R; rmat[o+9]=B[1]*R; rmat[o+10]=B[2]*R; rmat[o+11]=0;
+        rmat[o+12]=rg.cx+dw*N[0]; rmat[o+13]=rg.cy+dw*N[1]; rmat[o+14]=rg.cz+dw*N[2]; rmat[o+15]=1; ii++; }
+    }
+    torus.thinInstanceSetBuffer('matrix', rmat, 16, true); torus.thinInstanceCount = RINGS.length*2;
   }
 
   /* ── Chlorophyll showcase: the SAME orbital representation as the protein
