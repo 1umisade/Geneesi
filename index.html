@@ -244,8 +244,12 @@ void main(void){
   vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
   vec3 posV = vCenterV + n * radius;
   float dist = length(vCenterV);           // atom-centre distance from the camera
-  if(isShell < 0.5 && dist >= bubbleR) discard;   // core (nuclei) only INSIDE the bubble
-  if(isShell > 0.5 && dist <  bubbleR) discard;   // shell only OUTSIDE the bubble (orbitals take over inside)
+  // Screen-door cross-fade across an 8-unit band at the bubble edge, so vdW shells
+  // dissolve away to reveal the orbitals inside (and cores dissolve in).
+  float hsh = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside, 1 outside
+  if(isShell < 0.5){ if((1.0 - edge) < hsh) discard; }        // core solid inside, dissolves out
+  else { if(edge < hsh) discard; }                            // shell solid outside, dissolves in
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
@@ -308,7 +312,8 @@ varying float vSel;
 varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
-  if(length(vViewPos) >= bubbleR) discard;   // orbital lobes only inside the camera bubble
+  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
@@ -360,7 +365,8 @@ varying vec3 vNrmV;
 varying vec3 vCol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
-  if(length(vViewPos) >= bubbleR) discard;
+  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
@@ -413,7 +419,8 @@ varying vec3 vCol;
 varying float vSel;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
-  if(length(vViewPos) >= bubbleR) discard;   // orbitals only inside the camera sphere
+  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
@@ -456,9 +463,10 @@ varying vec3 vVP;
 varying vec3 vN;
 void main(void){
   vec3 N = normalize(vN), V = normalize(-vVP);
-  float f = pow(1.0 - abs(dot(N, V)), 1.7);        // silhouette factor (1 at the rim of EACH lobe)
-  float a = smoothstep(rimLo, rimHi, f);           // crisp stroke on every lobe
-  if(a < 0.03) discard;                            // transparent centre → glowing stroke only
+  float f = 1.0 - abs(dot(N, V));                  // 0 face-on … 1 at the silhouette
+  float w = fwidth(f);                             // screen-space gradient → normalise the band to a constant pixel width
+  float a = 1.0 - smoothstep(0.0, w*2.6, abs(f - rimLo));   // even stroke along the f=rimLo contour
+  if(a < 0.04) discard;
   gl_FragColor = vec4(oc, a);
 }`;
 
@@ -472,12 +480,14 @@ attribute vec4 world0;
 attribute vec4 world1;
 attribute vec4 world2;
 attribute vec4 world3;
+attribute vec3 rcol;       // per-ring element colour
 uniform mat4 view;
 uniform mat4 projection;
 uniform float uT;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLoc;
+varying vec3 vRcol;
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -486,6 +496,7 @@ void main(void){
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(normal, 0.0)).xyz;
   vLoc = position;                                 // local torus position → ring angle
+  vRcol = rcol;
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['ringFragmentShader'] = `
@@ -498,20 +509,21 @@ uniform float fogEnd;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLoc;
+varying vec3 vRcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   if(length(vViewPos) >= bubbleR) discard;         // only inside the camera reveal-bubble
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vec3(0.30, 0.55, 1.0) * (0.55 + 0.45 * ndl);   // soft blue delocalised cloud
+  vec3 c = vRcol * (0.5 + 0.5 * ndl);              // element-coloured delocalised cloud (base tone)
   float ang = atan(vLoc.z, vLoc.x);                // position around the ring
   float cur = 0.5 + 0.5 * sin(ang - uRingT);       // a bright arc that orbits as uRingT advances
-  c += smoothstep(0.55, 1.0, cur) * vec3(0.7, 0.75, 0.5);   // the ring current
+  c += smoothstep(0.6, 1.0, cur) * (vRcol * 0.35 + vec3(0.14, 0.19, 0.30));   // gentle cool ring-current pulse
   vec3 V = normalize(-vViewPos);
   float fres = pow(1.0 - abs(dot(N, V)), 3.0);
-  c = mix(c, vec3(0.35, 0.7, 1.0), clamp(fres*1.3, 0.0, 1.0));
+  c += fres * 0.30 * vec3(0.5, 0.65, 0.9);         // faint rim glow (additive → element colour still shows)
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 0.6);
+  gl_FragColor = vec4(mix(fogColor, c, fog), 0.75);   // 25% transparent
 }`;
 /* Screen-space ambient occlusion reading the depth packed in alpha: a fragment
    surrounded by nearer neighbours sits in a tunnel → darken it. */
@@ -532,7 +544,7 @@ void main(void){
     vec2 dir = vec2(cos(a), sin(a));
     float n1 = texture2D(textureSampler, vUV + dir*texel*r1).a;
     float n2 = texture2D(textureSampler, vUV + dir*texel*r2).a;
-    // range check: occlude ONLY across tight contact crevices; reject any wider
+    // range check: occlude ONLY across tight contact crevices — reject any wider
     // depth gap so no soft occlusion haze forms around silhouette edges
     occ += step(n1 + 0.004, d) * (1.0 - smoothstep(0.006, 0.014, d - n1));
     occ += 0.5 * step(n2 + 0.006, d) * (1.0 - smoothstep(0.008, 0.018, d - n2));
@@ -667,7 +679,7 @@ async function run(fileName){
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         if(mdx*mdx + mdy*mdy < 9 && selCenter.x < 1e5 && !pickAtom()){   // a click on empty space → clear the selection
-          selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); orbitLocked = false;
+          selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); orbitLocked = false;
         }
       }
     }
@@ -706,12 +718,13 @@ async function run(fileName){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], wBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], colBuf = [],
+  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], colBuf = [],
         sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
     cylBuf[e] = new Float32Array(halfCount[e]*16);             // bonding half-lobes (one per bond half)
     wBuf[e]   = new Float32Array(halfCount[e]);                // per-lobe width (electronegativity)
+    knobBuf[e] = new Uint8Array(halfCount[e]);                 // 1 = small back-knob → skipped by the selection outline
     cenBuf[e] = new Float32Array(halfCount[e]*3);              // bonding lobe's atom centre (selection test)
     lpBuf[e]  = new Float32Array(atomCount[e]*lonePairs(e)*16); // lone-pair lobes (translucent)
     lpCenBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)*3);
@@ -808,7 +821,10 @@ async function run(fileName){
         let maxd=0, R=0; for(let i=0;i<6;i++){ const dx=m.x[path[i]]-cx,dy=m.y[path[i]]-cy,dz=m.z[path[i]]-cz;
           maxd=Math.max(maxd, Math.abs(dx*n[0]+dy*n[1]+dz*n[2])); R+=Math.hypot(dx,dy,dz); }
         if(maxd>0.35) return;   // puckered (sp3, e.g. cyclohexane) → not aromatic
-        RINGS.push({ cx:cx+ox, cy:cy+oy, cz:cz+oz, nx:n[0], ny:n[1], nz:n[2], R:R/6 });
+        let cr=0,cg=0,cb=0; const ats=[];
+        for(let i=0;i<6;i++){ const cc=info(m.el[path[i]]).c; cr+=cc[0];cg+=cc[1];cb+=cc[2];
+          ats.push(m.x[path[i]]+ox, m.y[path[i]]+oy, m.z[path[i]]+oz); }
+        RINGS.push({ cx:cx+ox, cy:cy+oy, cz:cz+oz, nx:n[0], ny:n[1], nz:n[2], R:R/6, col:[cr/6,cg/6,cb/6], ats });
         for(let i=0;i<6;i++) aromSet.add(bkey(path[i], path[(i+1)%6]));
       };
       const rec = (u,cnt) => {
@@ -829,10 +845,11 @@ async function run(fileName){
       const w1 = Math.min(1.7, Math.max(0.5, 0.55 + (en1-en2)*0.5 + 0.5));
       const w2 = Math.min(1.7, Math.max(0.5, 0.55 + (en2-en1)*0.5 + 0.5));
       const bx=x2-x1, by=y2-y1, bz=z2-z1, bdir=nrm([bx,by,bz]);
-      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el) => {
+      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el, knob) => {
         const i = cylIdx[el]++;
         cylTo(sx,sy,sz, ex,ey,ez, cylBuf[el], i*16, wid);
         wBuf[el][i] = tap;
+        if(knob) knobBuf[el][i] = 1;
         cenBuf[el][i*3]=cx; cenBuf[el][i*3+1]=cy; cenBuf[el][i*3+2]=cz;
       };
       // σ bond: two overlapping hybrid lobes along the axis (width = polarity share).
@@ -841,8 +858,8 @@ async function run(fileName){
       // …each hybrid gets a small back lobe (the textbook sp knob). Hydrogen uses a pure 1s
       // (it doesn't hybridise), so it gets no knob.
       const kL=0.24, kW=LOBE_W*0.5;
-      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1);
-      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2);
+      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1, true);
+      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2, true);
       // π direction = the bond-plane normal (from either atom), projected ⊥ to the bond axis.
       let pnrm = pn[a1] || pn[a2];
       if(pn[a1] && pn[a2]){ const s = (pn[a1][0]*pn[a2][0]+pn[a1][1]*pn[a2][1]+pn[a1][2]*pn[a2][2])<0?-1:1;
@@ -1141,25 +1158,45 @@ async function run(fileName){
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
      torus mesh; the shader shows it only inside the reveal-bubble. */
   if(RINGS.length){
+    const perpV = n => { const a = Math.abs(n[0])<0.9?[1,0,0]:[0,1,0]; const c=crs(n,a); const l=Math.hypot(c[0],c[1],c[2])||1; return [c[0]/l,c[1]/l,c[2]/l]; };
     const ringMat = new BABYLON.ShaderMaterial('ringMat', scene, 'ring', {
-      attributes:['position','normal','world0','world1','world2','world3'],
+      attributes:['position','normal','rcol','world0','world1','world2','world3'],
       uniforms:['view','projection','bubbleR','uRingT','uT','fogColor','fogStart','fogEnd'] });
-    ringMat.setFloat('bubbleR', BUBBLE_R); ringMat.alpha=0.6; ringMat.disableDepthWrite=true; ringMat.backFaceCulling=true;
+    ringMat.setFloat('bubbleR', BUBBLE_R); ringMat.alpha=0.75; ringMat.disableDepthWrite=true; ringMat.backFaceCulling=true;
     ringMat.onBindObservable.add(()=>{ const eff=ringMat.getEffect(); if(!eff)return;
       eff.setFloat('uT',gWaveT); eff.setFloat('uRingT',gWaveT*2.2);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
-    const torus = BABYLON.MeshBuilder.CreateTorus('rings', {diameter:2, thickness:0.7, tessellation:14}, scene);
+    const torus = BABYLON.MeshBuilder.CreateTorus('rings', {diameter:2, thickness:0.35, tessellation:14}, scene);   // 2× narrower tube
     torus.material=ringMat; torus.isPickable=false; torus.alwaysSelectAsActiveMesh=true;
-    const perpV = n => { const a = Math.abs(n[0])<0.9?[1,0,0]:[0,1,0]; const c=crs(n,a); const l=Math.hypot(c[0],c[1],c[2])||1; return [c[0]/l,c[1]/l,c[2]/l]; };
-    const rmat = new Float32Array(RINGS.length*2*16); let ii=0;
-    for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], T=perpV(N), B=crs(N,T), R=rg.R;
+    const rmat = new Float32Array(RINGS.length*2*16), rcol = new Float32Array(RINGS.length*2*3); let ii=0;
+    for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], T=perpV(N), B=crs(N,T), R=rg.R, c=rg.col;
       for(const dw of [0.5,-0.5]){ const o=ii*16;
         rmat[o]=T[0]*R; rmat[o+1]=T[1]*R; rmat[o+2]=T[2]*R; rmat[o+3]=0;
         rmat[o+4]=N[0]*R; rmat[o+5]=N[1]*R; rmat[o+6]=N[2]*R; rmat[o+7]=0;
         rmat[o+8]=B[0]*R; rmat[o+9]=B[1]*R; rmat[o+10]=B[2]*R; rmat[o+11]=0;
-        rmat[o+12]=rg.cx+dw*N[0]; rmat[o+13]=rg.cy+dw*N[1]; rmat[o+14]=rg.cz+dw*N[2]; rmat[o+15]=1; ii++; }
+        rmat[o+12]=rg.cx+dw*N[0]; rmat[o+13]=rg.cy+dw*N[1]; rmat[o+14]=rg.cz+dw*N[2]; rmat[o+15]=1;
+        rcol[ii*3]=c[0]; rcol[ii*3+1]=c[1]; rcol[ii*3+2]=c[2]; ii++; }
     }
-    torus.thinInstanceSetBuffer('matrix', rmat, 16, true); torus.thinInstanceCount = RINGS.length*2;
+    torus.thinInstanceSetBuffer('matrix', rmat, 16, true); torus.thinInstanceSetBuffer('rcol', rcol, 3, true); torus.thinInstanceCount = RINGS.length*2;
+
+    /* The unhybridised p-orbitals (perpendicular to the ring on each carbon) that
+       overlap side-on to form the delocalised π. Drawn with the orbital shader. */
+    const pMat = new BABYLON.ShaderMaterial('aromPMat', scene, 'orb', {
+      attributes:['position','normal','ocol','ocen','world0','world1','world2','world3'],
+      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT'] });
+    pMat.setFloat('bubbleR', BUBBLE_R); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;
+    pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
+      eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    const pMesh = BABYLON.MeshBuilder.CreateSphere('aromP', {segments:3, diameter:1}, scene);
+    pMesh.material=pMat; pMesh.isPickable=false; pMesh.alwaysSelectAsActiveMesh=true;
+    const NP = RINGS.length*6*2;   // 6 atoms × 2 lobes (±normal)
+    const pmat=new Float32Array(NP*16), pcol=new Float32Array(NP*3), pcen=new Float32Array(NP*3), pLen=0.62, pW=0.30; let pi=0;
+    for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], c=rg.col;
+      for(let a=0;a<6;a++){ const ax=rg.ats[a*3], ay=rg.ats[a*3+1], az=rg.ats[a*3+2];
+        for(const s of [1,-1]){ cylTo(ax,ay,az, ax+N[0]*pLen*s, ay+N[1]*pLen*s, az+N[2]*pLen*s, pmat, pi*16, pW);
+          pcol[pi*3]=c[0];pcol[pi*3+1]=c[1];pcol[pi*3+2]=c[2]; pcen[pi*3]=ax;pcen[pi*3+1]=ay;pcen[pi*3+2]=az; pi++; } }
+    }
+    pMesh.thinInstanceSetBuffer('matrix', pmat,16,true); pMesh.thinInstanceSetBuffer('ocol', pcol,3,true); pMesh.thinInstanceSetBuffer('ocen', pcen,3,true); pMesh.thinInstanceCount=NP;
   }
 
   /* ── Chlorophyll showcase: the SAME orbital representation as the protein
@@ -1487,8 +1524,9 @@ async function run(fileName){
       buf[o]*=tap; buf[o+1]*=tap; buf[o+2]*=tap; buf[o+8]*=tap; buf[o+9]*=tap; buf[o+10]*=tap;   // scale local x & z axes
       n++;
     };
-    const cb=cylBuf[e], ce=cenBuf[e], wb=wBuf[e];        // bonding lobes (σ/knob/π) with per-lobe taper
+    const cb=cylBuf[e], ce=cenBuf[e], wb=wBuf[e], kf=knobBuf[e];   // bonding lobes (σ/knob/π) with per-lobe taper
     if(cb) for(let i=0;i<cylIdx[e] && n<OUT_MAX;i++){
+      if(kf[i]) continue;                                // skip the small back-knobs → clean outline (no central scribble)
       const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
       if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
       copyLobe(cb, i*16, wb[i]);
@@ -1515,6 +1553,24 @@ async function run(fileName){
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
+  };
+
+  /* Selected atom's nucleus — drawn topmost (group 1, depth pre-cleared) so it shows
+     through the opaque orbitals. */
+  const selNucMat = impostorMat('selNucMat', NUCLEON_R, 0.0, 1.0);   // isShell=0, protonOutline on
+  selNucMat.setFloat('bubbleR', 1e9);   // always visible (never gated by the reveal bubble)
+  const selNuc = BABYLON.MeshBuilder.CreatePlane('selNuc', {size:2}, scene);
+  selNuc.material=selNucMat; selNuc.isPickable=false; selNuc.setEnabled(false); selNuc.renderingGroupId=1; selNuc.alwaysSelectAsActiveMesh=true;
+  const selNucM=new Float32Array(80*16), selNucC=new Float32Array(80*4);
+  const setSelNuc = atom => {
+    const e=atom.e, A=info(e).n, Z=info(e).z, cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    for(let i=0;i<A;i++){ const o=i*16;
+      selNucM[o]=1;selNucM[o+5]=1;selNucM[o+10]=1;selNucM[o+15]=1;
+      selNucM[o+12]=cx+fcc[i][0]*SPACING; selNucM[o+13]=cy+fcc[i][1]*SPACING; selNucM[o+14]=cz+fcc[i][2]*SPACING;
+      const proton=Math.floor((i+1)*Z/A)>Math.floor(i*Z/A), c=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62];
+      selNucC[i*4]=c[0];selNucC[i*4+1]=c[1];selNucC[i*4+2]=c[2];selNucC[i*4+3]=proton?1:0; }
+    selNuc.thinInstanceSetBuffer('matrix', selNucM,16,true); selNuc.thinInstanceSetBuffer('instanceColor', selNucC,4,true);
+    selNuc.thinInstanceCount=A; selNuc.setEnabled(true);
   };
 
   // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
@@ -1580,6 +1636,7 @@ async function run(fileName){
     selCenter.copyFrom(a.center);   // marks the selected atom
     orbitLocked = true;             // rotation orbits this atom until the user pans away
     setSelOut(a);                   // persistent blue outline tracing all its orbital + bonding lobes, topmost
+    setSelNuc(a);                   // show the nucleus on top of the orbitals
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
