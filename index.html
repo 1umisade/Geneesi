@@ -236,6 +236,7 @@ uniform float bubbleR;   // reveal-sphere radius around the camera (view-space d
 uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on protons
 uniform float depthBias;   // nuclei: push toward camera (view units) so they clear their OWN orbitals (0 elsewhere)
 uniform vec3 selCenter;    // the focused atom (its static nucleus is hidden → the spinning highlight shows instead)
+uniform float coneCos;     // reveal only atoms within this cosine of the view axis (negative disables the cone)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -253,8 +254,11 @@ void main(void){
   // dissolve away to reveal the orbitals inside (and cores dissolve in).
   float hsh = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside, 1 outside
-  if(isShell < 0.5){ if((1.0 - edge) < hsh) discard; }        // core solid inside, dissolves out
-  else { if(edge < hsh) discard; }                            // shell solid outside, dissolves in
+  float cang = normalize(vCenterV).z;                        // cosine of the atom's angle off the view axis
+  float inCone = (coneCos < -0.5) ? 1.0 : step(coneCos, cang);
+  float reveal = (1.0 - edge) * inCone;                       // 1 = orbitals/nuclei show here, 0 = vdW shell
+  if(isShell < 0.5){ if(reveal < hsh) discard; }             // core/nucleons show only where revealed
+  else { if((1.0 - reveal) < hsh) discard; }                 // shell shows where NOT revealed (outside bubble OR off-cone)
   if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
   posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
   vec4 clip = projection * vec4(posV, 1.0);
@@ -294,6 +298,7 @@ varying vec3 vLocalDir;
 varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
+varying float vCang;
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -311,6 +316,7 @@ void main(void){
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vBcol = bcol;
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = normalize(ocv).z;   // atom's cosine off the view axis (reveal cone)
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
@@ -323,9 +329,11 @@ uniform float fogEnd;
 uniform float uT;
 uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) or 1 (each bonding lobe)
 uniform float focusId; // negative shows all, bonds/lone pairs are the hybrid/valence group (id 99)
+uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
+varying float vCang;
 varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
@@ -341,23 +349,35 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fil = pow(0.5 + 0.5*sin(ang*9.0 + sin(rad*28.0 - uT*16.0)*2.7 + uT*4.0), 18.0);   // thin fast filaments
   return fil * exp(-rad*9.0) * (0.5 + 0.5*sin(uT*36.0 + ang*5.0));   // localised, rapidly flickering lightning
 }
-void electrons(inout vec3 c){
+// A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
+vec3 wanderDir(float s){
+  return normalize(vec3(
+    sin(uT*0.73 + s) + 0.7*sin(uT*1.61 + s*2.3),
+    sin(uT*0.91 + s*1.7) + 0.7*sin(uT*1.29 + s*0.6),
+    sin(uT*1.13 + s*0.4) + 0.7*sin(uT*0.53 + s*3.1)));
+}
+// Fold a full-sphere direction onto the camera-facing hemisphere so the electron is ALWAYS visible
+// (never slips behind the lobe), while still roaming the whole visible surface.
+vec3 toFront(vec3 w, vec3 V, vec3 fb){
+  float d = clamp(dot(w, V), -1.0, 1.0);
+  vec3 tang = w - d*V; float tl = length(tang);
+  tang = tl > 1e-4 ? tang/tl : fb;
+  float polar = acos(d) * 0.42;                 // map [0,180°] → [0,~76°] off the view axis
+  return cos(polar)*V + sin(polar)*tang;
+}
+void electrons(inout vec3 c, float ne){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
   float ph = vSeed * 6.2831, t = uT;
   vec3 axA = vec3(cos(ph), sin(ph), 0.0);        // two screen-plane axes → the electrons circle in this plane
   vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
-  float orbit = t*0.9 + ph;                        // sweeps the electron around the lobe
-  vec3 ring = cos(orbit)*axA + sin(orbit)*axB;
-  float theta = 1.15;                              // ~66° off the view axis → rides near the outline, tilted toward the camera
-  float ca = cos(theta), sa = sin(theta);
   float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);   // gentle in/out breathing
   float gEx = mix(54.0, 34.0, breathe);            // smaller footprint, breathes
-  vec3 e1 = normalize(ca*V + sa*ring);
+  vec3 e1 = toFront(wanderDir(ph), V, axA);         // random wander, always on the camera-facing side
   float d1 = max(dot(N, e1), 0.0);
   float glow = pow(d1, gEx), core = pow(d1, 220.0), bolt = elecBolt(N, e1, axA);
-  if(nElec > 1.5){
-    vec3 e2 = normalize(ca*V - sa*ring);           // the pair rides opposite each other around the outline
+  if(ne > 1.5){
+    vec3 e2 = toFront(wanderDir(ph + 2.4), V, axB); // second electron, an independent random path
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
@@ -369,11 +389,12 @@ void electrons(inout vec3 c){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
+  if(coneCos > -0.5 && vCang < coneCos) discard;   // off-cone atoms don't reveal orbitals (they stay vdW)
   if(focusId >= 0.0 && vSel > 0.5 && abs(99.0 - focusId) > 0.5 && _h < 0.5) discard;   // focusing a non-hybrid subshell → dim bonds/lone pairs
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
-  electrons(c);
+  electrons(c, nElec);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
 }`;
@@ -453,6 +474,7 @@ varying vec3 vLocalDir;
 varying float vSeed;
 varying float vSel;
 varying float vOid;
+varying float vCang;
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -467,6 +489,7 @@ void main(void){
   vCol = ocol;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vOid = oid;
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = normalize(ocv).z;   // atom's cosine off the view axis (reveal cone)
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['orbFragmentShader'] = `
@@ -478,6 +501,7 @@ uniform float fogEnd;
 uniform float uT;
 uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) or 1 (each bonding lobe)
 uniform float focusId; // negative shows all, otherwise the selected atom's other subshells go 50% transparent
+uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -485,6 +509,7 @@ varying vec3 vLocalDir;
 varying float vSeed;
 varying float vSel;
 varying float vOid;
+varying float vCang;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
@@ -497,23 +522,35 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fil = pow(0.5 + 0.5*sin(ang*9.0 + sin(rad*28.0 - uT*16.0)*2.7 + uT*4.0), 18.0);   // thin fast filaments
   return fil * exp(-rad*9.0) * (0.5 + 0.5*sin(uT*36.0 + ang*5.0));   // localised, rapidly flickering lightning
 }
-void electrons(inout vec3 c){
+// A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
+vec3 wanderDir(float s){
+  return normalize(vec3(
+    sin(uT*0.73 + s) + 0.7*sin(uT*1.61 + s*2.3),
+    sin(uT*0.91 + s*1.7) + 0.7*sin(uT*1.29 + s*0.6),
+    sin(uT*1.13 + s*0.4) + 0.7*sin(uT*0.53 + s*3.1)));
+}
+// Fold a full-sphere direction onto the camera-facing hemisphere so the electron is ALWAYS visible
+// (never slips behind the lobe), while still roaming the whole visible surface.
+vec3 toFront(vec3 w, vec3 V, vec3 fb){
+  float d = clamp(dot(w, V), -1.0, 1.0);
+  vec3 tang = w - d*V; float tl = length(tang);
+  tang = tl > 1e-4 ? tang/tl : fb;
+  float polar = acos(d) * 0.42;                 // map [0,180°] → [0,~76°] off the view axis
+  return cos(polar)*V + sin(polar)*tang;
+}
+void electrons(inout vec3 c, float ne){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
   float ph = vSeed * 6.2831, t = uT;
   vec3 axA = vec3(cos(ph), sin(ph), 0.0);        // two screen-plane axes → the electrons circle in this plane
   vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
-  float orbit = t*0.9 + ph;                        // sweeps the electron around the lobe
-  vec3 ring = cos(orbit)*axA + sin(orbit)*axB;
-  float theta = 1.15;                              // ~66° off the view axis → rides near the outline, tilted toward the camera
-  float ca = cos(theta), sa = sin(theta);
   float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);   // gentle in/out breathing
   float gEx = mix(54.0, 34.0, breathe);            // smaller footprint, breathes
-  vec3 e1 = normalize(ca*V + sa*ring);
+  vec3 e1 = toFront(wanderDir(ph), V, axA);         // random wander, always on the camera-facing side
   float d1 = max(dot(N, e1), 0.0);
   float glow = pow(d1, gEx), core = pow(d1, 220.0), bolt = elecBolt(N, e1, axA);
-  if(nElec > 1.5){
-    vec3 e2 = normalize(ca*V - sa*ring);           // the pair rides opposite each other around the outline
+  if(ne > 1.5){
+    vec3 e2 = toFront(wanderDir(ph + 2.4), V, axB); // second electron, an independent random path
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
@@ -525,11 +562,13 @@ void electrons(inout vec3 c){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
+  if(coneCos > -0.5 && vCang < coneCos) discard;   // off-cone atoms don't reveal orbitals (they stay vdW)
   if(focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5 && _h < 0.5) discard;   // focus one subshell → others ~50% transparent
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
-  electrons(c);
+  float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
+  electrons(c, ne);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
 }`;
@@ -994,9 +1033,10 @@ async function run(fileName){
         if(knob) knobBuf[el][i] = 1;
         cenBuf[el][i*3]=cx; cenBuf[el][i*3+1]=cy; cenBuf[el][i*3+2]=cz;
       };
-      // σ bond: two overlapping hybrid lobes along the axis (width = polarity share).
-      halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1, ai1);
-      halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2, ai2);
+      // σ bond: overlapping hybrid lobes along the axis. Hydrogen contributes its own 1s orbital
+      // (drawn separately), so it gets NO σ lobe — its 1s overlaps the partner's hybrid instead.
+      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1, ai1);
+      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2, ai2);
       // …each hybrid gets a small back lobe (the textbook sp knob). Hydrogen uses a pure 1s
       // (it doesn't hybridise), so it gets no knob.
       const kL=0.24, kW=LOBE_W*0.5;
@@ -1053,6 +1093,7 @@ async function run(fileName){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
+  const CONE_COS = 0.96;      // only atoms within ~16° of the view axis reveal their orbitals (sides stay vdW)
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
@@ -1153,17 +1194,21 @@ async function run(fileName){
     }
     await yield_();
   }
+  const bondCntEA = [];   // per-atom σ-bond count → steric number → hybridisation label
+  for(let e=0;e<nEl;e++){ bondCntEA[e] = new Uint8Array(atomCount[e]);
+    for(let a=0;a<atomCount[e];a++) bondCntEA[e][a] = (bondDirEA[e][a]||[]).length; }
   bondDirEA.length = 0;   // done with bond directions
   const impostorMat = (name, radius, isShell, protonOutline) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos']
     });
     mat.setFloat('radius', radius);
     mat.setFloat('isShell', isShell);
     mat.setFloat('bubbleR', BUBBLE_R);
     mat.setFloat('protonOutline', protonOutline || 0);
     mat.setFloat('depthBias', 0);
+    mat.setFloat('coneCos', CONE_COS);   // shells + cell nucleons reveal only within the forward cone
     mat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6));
     mat.backFaceCulling = false;
     mat.onBindObservable.add(() => {
@@ -1197,9 +1242,9 @@ async function run(fileName){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId']
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos']
   });
-  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('nElec', 2);   // atomic orbitals / lone pairs = an electron pair
+  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', CONE_COS);   // atomic orbitals / lone pairs = an electron pair
   orbMatG.backFaceCulling = true;   // fully opaque → default depth write, correct occlusion
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
@@ -1210,9 +1255,9 @@ async function run(fileName){
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId']
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos']
     });
-    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.backFaceCulling = true;   // opaque → default depth write
+    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.setFloat('coneCos', CONE_COS); mat.backFaceCulling = true;   // opaque → default depth write
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('uT', gWaveT);
@@ -1357,8 +1402,8 @@ async function run(fileName){
        overlap side-on to form the delocalised π. Drawn with the orbital shader. */
     const pMat = new BABYLON.ShaderMaterial('aromPMat', scene, 'orb', {
       attributes:['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId'] });
-    pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron
+      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos'] });
+    pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.setFloat('coneCos', -1.0); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron
     pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
@@ -1387,8 +1432,8 @@ async function run(fileName){
     for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.0 + rnd((i+1)*2.7)*1.6; }
     const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
-      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId'].concat(extra||[]) });
-      mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.backFaceCulling = true;
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos'].concat(extra||[]) });
+      mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.backFaceCulling = true;
       mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('uT', gWaveT);
         eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
@@ -1398,8 +1443,8 @@ async function run(fileName){
     // Nucleons (imp shader, always visible)
     const nucMatC = new BABYLON.ShaderMaterial('chlNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter'] });
-    nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',1e9); nucMatC.setFloat('protonOutline',0); nucMatC.backFaceCulling=false;
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'] });
+    nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',1e9); nucMatC.setFloat('protonOutline',0); nucMatC.setFloat('coneCos',-1.0); nucMatC.backFaceCulling=false;
     nucMatC.setFloat('depthBias', NUC_BIAS); nucMatC.disableDepthWrite = true;   // same nucleus-on-top-of-own-orbitals treatment
     nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); eff.setVector3('selCenter', selCenter); });
     let nucN=0; for(let k=0;k<N;k++) nucN += info(chl.el[k]).n;
@@ -1532,8 +1577,8 @@ async function run(fileName){
     for(let e=0;e<nEl;e++){ if(!elCount[e]) continue;
       const mat=new BABYLON.ShaderMaterial('lipMat'+e, scene, 'imp', {
         attributes:['position','instanceColor','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT'] });
-      mat.setFloat('radius', info(e).vr*FILL_SCALE); mat.setFloat('isShell',0); mat.setFloat('bubbleR',1e9); mat.setFloat('protonOutline',0); mat.backFaceCulling=false;
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos'] });
+      mat.setFloat('radius', info(e).vr*FILL_SCALE); mat.setFloat('isShell',0); mat.setFloat('bubbleR',1e9); mat.setFloat('protonOutline',0); mat.setFloat('coneCos',-1.0); mat.backFaceCulling=false;
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
       const mesh=BABYLON.MeshBuilder.CreatePlane('lip'+e,{size:2},scene); mesh.material=mat; mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
       mesh.thinInstanceSetBuffer('matrix', lipM[e],16,true); mesh.thinInstanceSetBuffer('instanceColor', lipC[e],4,true);
@@ -1604,8 +1649,8 @@ async function run(fileName){
       wh2[i*3]=oh*(ux*ca-qx*sa); wh2[i*3+1]=oh*(uy*ca-qy*sa); wh2[i*3+2]=oh*(uz*ca-qz*sa);
     }
     const codeO=codeOf('O'), codeH=codeOf('H');
-    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{attributes:['position','instanceColor','world0','world1','world2','world3'],uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT']});
-      m.setFloat('radius',rad);m.setFloat('isShell',0);m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.backFaceCulling=false;
+    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{attributes:['position','instanceColor','world0','world1','world2','world3'],uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos']});
+      m.setFloat('radius',rad);m.setFloat('isShell',0);m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.setFloat('coneCos',-1.0);m.backFaceCulling=false;
       m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
     const mkImp=(nm,rad,col,cnt)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
       const cb=new Float32Array(cnt*4); for(let i=0;i<cnt;i++){ cb[i*4]=col[0];cb[i*4+1]=col[1];cb[i*4+2]=col[2];cb[i*4+3]=0; } mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
@@ -1650,14 +1695,19 @@ async function run(fileName){
     // the camera or off to the sides never load.
     const cp = cam.position;
     const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
+    const fwd = cam.getForwardRay(1).direction;   // camera forward
     const cR = cellHalfDiag;
+    const COS_CONE = 0.92;   // ~23° half-angle: only a narrow cone straight ahead reveals orbitals (sides stay vdW)
     for(const cell of cellList){
-      const dx=cp.x-cell.cx, dy=cp.y-cell.cy, dz=cp.z-cell.cz;
-      let want = (dx*dx+dy*dy+dz*dz) < cellReach2;
-      if(want){
-        for(let p=0;p<6;p++){ const pl=fplanes[p];
-          if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
-        }
+      const vx=cell.cx-cp.x, vy=cell.cy-cp.y, vz=cell.cz-cp.z, d2=vx*vx+vy*vy+vz*vz;
+      let want = d2 < cellReach2;
+      if(want) for(let p=0;p<6;p++){ const pl=fplanes[p];
+        if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
+      }
+      if(want && d2 > 25){   // beyond ~5 units, require the cell to sit inside the narrow forward cone
+        const vlen = Math.sqrt(d2);
+        const cosang = (vx*fwd.x + vy*fwd.y + vz*fwd.z)/vlen + cR/vlen;   // widen by the cell's angular size
+        if(cosang < COS_CONE) want = false;
       }
       if(want !== cell.on){ cell.on = want; for(const m of cell.meshes) m.setEnabled(want); }
     }
@@ -1774,7 +1824,7 @@ async function run(fileName){
   /* Selected atom's nucleus — group 2, gated on the stencil mask so it shows through its OWN
      opaque orbitals but is occluded wherever another atom is in front. */
   const selNucMat = impostorMat('selNucMat', NUCLEON_R, 0.0, 1.0);   // isShell=0, protonOutline on
-  selNucMat.setFloat('bubbleR', 1e9);   // always visible (never gated by the reveal bubble)
+  selNucMat.setFloat('bubbleR', 1e9); selNucMat.setFloat('coneCos', -1.0);   // always visible (never gated by bubble or cone)
   selNucMat.depthFunction = BABYLON.Constants.ALWAYS; selNucMat.disableDepthWrite = true;   // depth handled by the stencil gate
   const selNuc = BABYLON.MeshBuilder.CreatePlane('selNuc', {size:2}, scene);
   selNuc.material=selNucMat; selNuc.isPickable=false; selNuc.setEnabled(false); selNuc.renderingGroupId=3; selNuc.alwaysSelectAsActiveMesh=true;
@@ -1899,22 +1949,35 @@ async function run(fileName){
     return 99;
   };
   const hideConfig = () => { econfPanel.style.display='none'; econfPanel.innerHTML=''; };
+  const hybLabel = {2:'sp',3:'sp²',4:'sp³',5:'sp³d',6:'sp³d²'};
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
     econfPanel.innerHTML = '';
+    const items = [], parts = [];
+    for(const [n,ty] of econf(e)){ const cnt = Math.min(capOf[ty], Z); Z -= cnt; if(cnt<=0) continue;
+      items.push([n,ty,cnt]); parts.push(n + subL[ty] + sup(cnt)); }
+    // steric number = σ bonds + lone pairs → hybridisation (only for bonded p-block atoms)
+    const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
+    const bonds = bondCntEA[e][atom.idx], sn = bonds + lonePairs(e);
+    const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
+
     const title = document.createElement('div');
-    title.textContent = EL_LIST[e] + ' — electron configuration';
-    title.style.cssText = 'font-size:12px;color:#8fe;margin-bottom:7px;';
+    title.textContent = EL_LIST[e] + (hyb ? '  ·  ' + hyb + ' hybridised' : '');
+    title.style.cssText = 'font-size:13px;color:#8fe;margin-bottom:5px;';
+    const notation = document.createElement('div');
+    notation.textContent = parts.join(' ');
+    notation.style.cssText = 'font-size:16px;color:#eff;margin-bottom:8px;letter-spacing:0.5px;';
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
     const chips = [];
     const paint = () => { for(const ch of chips){ const on = (gFocusId>=0 && +ch.dataset.t===gFocusId);
       ch.style.background = on ? 'rgba(90,180,255,0.9)' : 'rgba(40,90,140,0.5)'; ch.style.color = on ? '#012' : '#dff'; } };
-    for(const [n,ty] of econf(e)){
-      const cnt = Math.min(capOf[ty], Z); Z -= cnt; if(cnt <= 0) continue;
+    for(const [n,ty,cnt] of items){
       const chip = document.createElement('button');
       chip.textContent = n + subL[ty] + sup(cnt);
-      chip.dataset.t = subshellTarget(atom, n, ty);
+      const tgt = subshellTarget(atom, n, ty);
+      chip.dataset.t = tgt;
+      chip.title = (tgt === 99) ? (hyb ? hyb + ' hybrid (bonds + lone pairs)' : 'valence (bonds + lone pairs)') : 'atomic '+n+subL[ty];
       chip.style.cssText = 'font-family:inherit;font-size:15px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 9px;cursor:pointer;';
       chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
       chips.push(chip); row.appendChild(chip);
@@ -1922,7 +1985,7 @@ async function run(fileName){
     const hint = document.createElement('div');
     hint.textContent = 'click a subshell to isolate it';
     hint.style.cssText = 'font-size:10px;color:#6ac;margin-top:7px;';
-    econfPanel.appendChild(title); econfPanel.appendChild(row); econfPanel.appendChild(hint);
+    econfPanel.appendChild(title); econfPanel.appendChild(notation); econfPanel.appendChild(row); econfPanel.appendChild(hint);
     econfPanel.style.display = 'block';
   };
 
