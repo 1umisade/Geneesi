@@ -1068,9 +1068,12 @@ async function run(fileName){
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
       showTips();
-      if(e.button === 0){ dragging = true; snappedDrag = false; dnX = scene.pointerX; dnY = scene.pointerY; }
+      if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;
+        if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it instead of rotating
+        dragging = true; snappedDrag = false; }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
+      if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0, 2]; return; }   // finished moving a spawned atom
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         const isTap = mdx*mdx + mdy*mdy < 9;
@@ -1082,6 +1085,7 @@ async function run(fileName){
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
+      if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
       if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)){   // right-drag / ctrl+drag = pan → stop orbiting the selection
         orbitLocked = false; return;
       }
@@ -1709,7 +1713,7 @@ async function run(fileName){
     const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
       const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'].concat(extra||[]) });
-      mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // chlorophyll keeps inline electrons
+      mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.setFloat('coneCos', CONE_COS); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // reveal like the protein (vdW far, orbitals near); inline electrons
       mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('uT', gWaveT);
         eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
@@ -1720,7 +1724,7 @@ async function run(fileName){
     const nucMatC = new BABYLON.ShaderMaterial('chlNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
       uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'] });
-    nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',1e9); nucMatC.setFloat('protonOutline',0); nucMatC.setFloat('coneCos',-1.0); nucMatC.backFaceCulling=false;
+    nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',BUBBLE_R); nucMatC.setFloat('protonOutline',0); nucMatC.setFloat('coneCos',CONE_COS); nucMatC.backFaceCulling=false;   // reveal like the protein nuclei
     nucMatC.setFloat('depthBias', NUC_BIAS); nucMatC.disableDepthWrite = true;   // same nucleus-on-top-of-own-orbitals treatment
     nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); eff.setVector3('selCenter', selCenter); });
     let nucN=0; for(let k=0;k<N;k++) nucN += info(chl.el[k]).n;
@@ -1732,6 +1736,21 @@ async function run(fileName){
           const o=ni*16; nucMat[o]=1;nucMat[o+5]=1;nucMat[o+10]=1;nucMat[o+15]=1; ni++; } } }
     const chlNuc=BABYLON.MeshBuilder.CreatePlane('chlNuc',{size:2},scene); chlNuc.material=nucMatC; chlNuc.isPickable=false; chlNuc.alwaysSelectAsActiveMesh=true; chlNuc.renderingGroupId=1;
     chlNuc.thinInstanceSetBuffer('instanceColor',nucCol,4,true); chlNuc.thinInstanceSetBuffer('matrix',nucMat,16,false); chlNuc.thinInstanceCount=nucN;
+    // vdW shells (per element) — chlorophyll shows as space-filling spheres when the camera is
+    // far and dissolves to orbitals up close, exactly like the protein. Static (shader wiggles them).
+    { const byEl = new Map();
+      for(let k=0;k<N;k++){ const e=chl.el[k]; if(!byEl.has(e)) byEl.set(e,[]); byEl.get(e).push(k); }
+      for(const [e, ks] of byEl){
+        const sm = impostorMat('chlShell'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell=1 → self-gating vdW
+        const shell = BABYLON.MeshBuilder.CreatePlane('chlF'+e, {size:2}, scene);
+        shell.material=sm; shell.isPickable=false; shell.alwaysSelectAsActiveMesh=true;
+        const mb=new Float32Array(ks.length*16), cb=new Float32Array(ks.length*4), col=info(e).c;
+        for(let a=0;a<ks.length;a++){ const k=ks[a], o=a*16;
+          mb[o]=1;mb[o+5]=1;mb[o+10]=1;mb[o+15]=1; mb[o+12]=rest[k*3]; mb[o+13]=rest[k*3+1]; mb[o+14]=rest[k*3+2];
+          cb[a*4]=col[0];cb[a*4+1]=col[1];cb[a*4+2]=col[2];cb[a*4+3]=0; }
+        shell.thinInstanceSetBuffer('matrix', mb,16,true); shell.thinInstanceSetBuffer('instanceColor', cb,4,true);
+      }
+    }
     // Core orbitals (the non-hybridised inner shells)
     const coreDefs=[];
     for(let k=0;k<N;k++){ const e=chl.el[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
@@ -1985,16 +2004,19 @@ async function run(fileName){
     const fwd = cam.getForwardRay(1).direction;   // camera forward
     const cR = cellHalfDiag;
     const COS_CONE = 0.92;   // ~23° half-angle: only a narrow cone straight ahead reveals orbitals (sides stay vdW)
+    const nearR2 = (1.7*cR)*(1.7*cR);   // camera inside/adjacent to a cell → never cull it (else a zoomed-in atom vanishes at some orbit angles, leaving only its outline)
     for(const cell of cellList){
       const vx=cell.cx-cp.x, vy=cell.cy-cp.y, vz=cell.cz-cp.z, d2=vx*vx+vy*vy+vz*vz;
       let want = d2 < cellReach2;
-      if(want) for(let p=0;p<6;p++){ const pl=fplanes[p];
-        if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
-      }
-      if(want && d2 > 25){   // beyond ~5 units, require the cell to sit inside the narrow forward cone
-        const vlen = Math.sqrt(d2);
-        const cosang = (vx*fwd.x + vy*fwd.y + vz*fwd.z)/vlen + cR/vlen;   // widen by the cell's angular size
-        if(cosang < COS_CONE) want = false;
+      if(want && d2 > nearR2){   // only apply frustum + forward-cone culling to cells the camera is NOT sitting inside
+        for(let p=0;p<6;p++){ const pl=fplanes[p];
+          if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
+        }
+        if(want && d2 > 25){   // beyond ~5 units, require the cell to sit inside the narrow forward cone
+          const vlen = Math.sqrt(d2);
+          const cosang = (vx*fwd.x + vy*fwd.y + vz*fwd.z)/vlen + cR/vlen;   // widen by the cell's angular size
+          if(cosang < COS_CONE) want = false;
+        }
       }
       if(want !== cell.on){ cell.on = want; for(const m of cell.meshes) m.setEnabled(want); }
     }
@@ -2231,52 +2253,83 @@ async function run(fileName){
   document.body.appendChild(brStack);
 
   // ── Atom spawner ───────────────────────────────────────────────────────────
-  // Click an element in the table to arm it, then left-click empty space to drop a
-  // space-filling atom onto the fixed z-plane (gSpawnPlaneZ) — a flat 2-D sheet.
+  // Click an element to arm it, then left-click empty space to drop an atom on the fixed
+  // z-plane. Spawned atoms get the SAME representation as the protein: a vdW shell when the
+  // camera is far, dissolving to nucleus + orbitals + electrons up close. Left-drag moves them.
   const spawned = [];                    // {sym,x,y,z}
-  const spawnMeshes = new Map();         // sym -> {mesh, mb, cap, count}
-  const spawnMat = rad => {
-    const m = new BABYLON.ShaderMaterial('spwMat'+rad, scene, 'imp',
-      {attributes:['position','instanceColor','world0','world1','world2','world3'],
-       uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos']});
-    m.setFloat('radius',rad); m.setFloat('isShell',0); m.setFloat('bubbleR',1e9);
-    m.setFloat('protonOutline',0); m.setFloat('coneCos',-1.0); m.backFaceCulling=false;
-    m.onBindObservable.add(()=>{ const eff=m.getEffect(); if(!eff) return;
-      eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);
-      eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
-    return m;
-  };
+  const spawnMeshes = new Map();         // sym -> {shell, nuc, orb, orbE}
+  const orbCountSym = sym => (ECONF[sym]||[[1,0]]).reduce((s,sh)=> s + (sh[1]===0 ? 1 : OTMPL[sh[1]].length), 0);
   const spawnMeshFor = sym => {
     let rec = spawnMeshes.get(sym); if(rec) return rec;
-    const el = ELEM[sym] || ELEM.FB, cap = 64;
-    const mesh = BABYLON.MeshBuilder.CreatePlane('spw_'+sym,{size:2},scene);
-    mesh.material = spawnMat(el.vr*FILL_SCALE); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
-    const cb = new Float32Array(cap*4);
-    for(let i=0;i<cap;i++){ cb[i*4]=el.c[0]; cb[i*4+1]=el.c[1]; cb[i*4+2]=el.c[2]; cb[i*4+3]=0; }
-    mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
-    const mb = new Float32Array(cap*16);
-    mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=0;
-    rec = {mesh, mb, cb, cap, count:0}; spawnMeshes.set(sym,rec); return rec;
+    const el = ELEM[sym] || ELEM.FB;
+    const shell = BABYLON.MeshBuilder.CreatePlane('spwF_'+sym,{size:2},scene);
+    shell.material = impostorMat('spwShell_'+sym, el.vr*FILL_SCALE, 1.0);   // isShell=1 → self-gating vdW
+    shell.isPickable=false; shell.alwaysSelectAsActiveMesh=true;
+    const nuc = BABYLON.MeshBuilder.CreatePlane('spwN_'+sym,{size:2},scene);
+    nuc.material = nucMatG; nuc.isPickable=false; nuc.alwaysSelectAsActiveMesh=true; nuc.renderingGroupId=1;
+    const orb = BABYLON.MeshBuilder.CreateSphere('spwO_'+sym,{segments:3,diameter:1},scene);
+    orb.material = orbMatG; orb.isPickable=false; orb.alwaysSelectAsActiveMesh=true;
+    const orbE = BABYLON.MeshBuilder.CreateSphere('spwOe_'+sym,{segments:3,diameter:1},scene);
+    orbE.material = orbElecMat; orbE.isPickable=false; orbE.alwaysSelectAsActiveMesh=true; orbE.renderingGroupId=1;
+    rec = { shell, nuc, orb, orbE }; spawnMeshes.set(sym, rec); return rec;
   };
-  const spawnAtom = (sym, x, y, z) => {
-    const rec = spawnMeshFor(sym), el = ELEM[sym] || ELEM.FB;
-    if(rec.count >= rec.cap){                                 // grow buffers
-      const nc = rec.cap*2, mb = new Float32Array(nc*16), cb = new Float32Array(nc*4);
-      mb.set(rec.mb);
-      for(let i=0;i<nc;i++){ cb[i*4]=el.c[0]; cb[i*4+1]=el.c[1]; cb[i*4+2]=el.c[2]; cb[i*4+3]=0; }
-      rec.mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
-      rec.mesh.thinInstanceSetBuffer('matrix',mb,16,false);
-      rec.mb=mb; rec.cb=cb; rec.cap=nc;
+  // Rebuild all spawn geometry from the `spawned` list (called on spawn / drag / clear).
+  const rebuildSpawn = () => {
+    const bySym = new Map();
+    for(const a of spawned){ if(!bySym.has(a.sym)) bySym.set(a.sym, []); bySym.get(a.sym).push(a); }
+    for(const [sym, rec] of spawnMeshes){ if(!bySym.has(sym)){
+      rec.shell.thinInstanceCount=0; rec.nuc.thinInstanceCount=0; rec.orb.thinInstanceCount=0; rec.orbE.thinInstanceCount=0; } }
+    for(const [sym, atoms] of bySym){
+      const rec = spawnMeshFor(sym), el = ELEM[sym] || ELEM.FB;
+      const A = el.n, Z = el.z, cfg = ECONF[sym] || [[1,0]], oc = orbCountSym(sym), n = atoms.length;
+      const sMb=new Float32Array(n*16), sCb=new Float32Array(n*4);
+      const nMb=new Float32Array(n*A*16), nCb=new Float32Array(n*A*4);
+      const oMb=new Float32Array(n*oc*16), oCol=new Float32Array(n*oc*3), oCen=new Float32Array(n*oc*3), oId=new Float32Array(n*oc);
+      for(let ai=0; ai<n; ai++){ const at=atoms[ai], cx=at.x, cy=at.y, cz=at.z;
+        const so=ai*16; sMb[so]=1;sMb[so+5]=1;sMb[so+10]=1;sMb[so+15]=1; sMb[so+12]=cx;sMb[so+13]=cy;sMb[so+14]=cz;
+        sCb[ai*4]=el.c[0];sCb[ai*4+1]=el.c[1];sCb[ai*4+2]=el.c[2];sCb[ai*4+3]=0;
+        for(let i=0;i<A;i++){ const idx=ai*A+i, o=idx*16;
+          nMb[o]=1;nMb[o+5]=1;nMb[o+10]=1;nMb[o+15]=1;
+          nMb[o+12]=cx+fcc[i][0]*SPACING; nMb[o+13]=cy+fcc[i][1]*SPACING; nMb[o+14]=cz+fcc[i][2]*SPACING;
+          const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);
+          nCb[idx*4]=proton?1.0:0.62; nCb[idx*4+1]=proton?0.5:0.62; nCb[idx*4+2]=proton?0.5:0.62; nCb[idx*4+3]=proton?1:0; }
+        let w=ai*oc;
+        for(const sh of cfg){ const R=sh[0]*SHELL_STEP, ty=sh[1];
+          if(ty===0){ sphereMat(cx,cy,cz, R*0.72, oMb, w*16);
+            oCol[w*3]=el.c[0];oCol[w*3+1]=el.c[1];oCol[w*3+2]=el.c[2]; oCen[w*3]=cx;oCen[w*3+1]=cy;oCen[w*3+2]=cz; oId[w]=sh[0]*100+ty*10; w++; }
+          else { const Lw=R*0.34; let k=0; for(const d of OTMPL[ty]){ cylTo(cx,cy,cz, cx+d[0]*R,cy+d[1]*R,cz+d[2]*R, oMb, w*16, Lw);
+            oCol[w*3]=el.c[0];oCol[w*3+1]=el.c[1];oCol[w*3+2]=el.c[2]; oCen[w*3]=cx;oCen[w*3+1]=cy;oCen[w*3+2]=cz; oId[w]=sh[0]*100+ty*10+Math.floor(k/2); w++; k++; } }
+        }
+      }
+      rec.shell.thinInstanceSetBuffer('matrix', sMb,16,true); rec.shell.thinInstanceSetBuffer('instanceColor', sCb,4,true);
+      rec.nuc.thinInstanceSetBuffer('matrix', nMb,16,true); rec.nuc.thinInstanceSetBuffer('instanceColor', nCb,4,true);
+      const setOrb = m => { m.thinInstanceSetBuffer('matrix', oMb,16,true); m.thinInstanceSetBuffer('ocol', oCol,3,true); m.thinInstanceSetBuffer('ocen', oCen,3,true); m.thinInstanceSetBuffer('oid', oId,1,true); };
+      setOrb(rec.orb); setOrb(rec.orbE);
     }
-    const o = rec.count*16;
-    rec.mb[o]=1; rec.mb[o+5]=1; rec.mb[o+10]=1; rec.mb[o+15]=1;
-    rec.mb[o+12]=x; rec.mb[o+13]=y; rec.mb[o+14]=z;
-    rec.count++; rec.mesh.thinInstanceCount=rec.count; rec.mesh.thinInstanceBufferUpdated('matrix');
-    spawned.push({sym,x,y,z});
   };
-  const clearSpawned = () => {
-    for(const rec of spawnMeshes.values()){ rec.count=0; rec.mesh.thinInstanceCount=0; }
-    spawned.length = 0;
+  const spawnAtom = (sym, x, y, z) => { spawned.push({sym,x,y,z}); rebuildSpawn(); };
+  const clearSpawned = () => { spawned.length = 0; rebuildSpawn(); };
+  // Custom pick against the spawned atoms' vdW spheres → index or -1.
+  const pickSpawned = () => {
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const ox0=ray.origin.x, oy0=ray.origin.y, oz0=ray.origin.z, dx=ray.direction.x, dy=ray.direction.y, dz=ray.direction.z;
+    let best=-1, bestT=Infinity;
+    for(let i=0;i<spawned.length;i++){ const a=spawned[i], el=ELEM[a.sym]||ELEM.FB, r=el.vr*FILL_SCALE*1.1;
+      const ox=ox0-a.x, oy=oy0-a.y, oz=oz0-a.z;
+      const b=ox*dx+oy*dy+oz*dz, c=ox*ox+oy*oy+oz*oz-r*r, disc=b*b-c;
+      if(disc<0) continue; let t=-b-Math.sqrt(disc); if(t<0) t=-b+Math.sqrt(disc);
+      if(t>0 && t<bestT){ bestT=t; best=i; } }
+    return best;
+  };
+  let dragAtom = -1;   // index of the spawned atom being left-dragged (or -1)
+  // Move a dragged spawned atom to where the cursor ray meets the z-plane.
+  const dragSpawnedTo = i => {
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const dz = ray.direction.z; if(Math.abs(dz) < 1e-6) return;
+    const t = (gSpawnPlaneZ - ray.origin.z)/dz; if(t <= 0) return;
+    let x = ray.origin.x + t*ray.direction.x, y = ray.origin.y + t*ray.direction.y;
+    if(gSpawnBounds){ x=Math.max(gSpawnBounds.x0,Math.min(gSpawnBounds.x1,x)); y=Math.max(gSpawnBounds.y0,Math.min(gSpawnBounds.y1,y)); }
+    spawned[i].x = x; spawned[i].y = y; rebuildSpawn();
   };
   // Drop the armed atom where the cursor ray meets the z-plane, clamped to the inner cage.
   const spawnAtPointer = () => {
@@ -2363,6 +2416,33 @@ async function run(fileName){
   };
   const hideConfig = () => { econfPanel.style.display='none'; econfPanel.innerHTML=''; };
   const hybLabel = {2:'sp',3:'sp²',4:'sp³',5:'sp³d',6:'sp³d²'};
+
+  // ── Orbital energies (eV) via a hydrogenic model with Slater-rule effective charge ──
+  //    E = −13.6 · Z_eff² / n*² ;  Z_eff = Z − σ (Slater screening), n* = effective principal number.
+  const nStar = {1:1.0, 2:2.0, 3:3.0, 4:3.7, 5:4.0, 6:4.2};
+  const subOcc = e => { let Z = info(e).z; const occ=[];
+    for(const [n,l] of econf(e)){ const c = Math.min(capOf[l], Z); Z -= c; if(c>0) occ.push({n,l,count:c}); } return occ; };
+  const grpRank = (n,l) => n*10 + (l<=1 ? 0 : l);   // Slater groups: (ns np) share a rank; nd, nf are separate, higher
+  const zeffSub = (e, N, L) => {
+    const occ = subOcc(e), Z = info(e).z, selfR = grpRank(N,L); let sigma = 0;
+    for(const s of occ){ const sR = grpRank(s.n,s.l);
+      if(sR === selfR){ const other = s.count - (s.n===N && s.l===L ? 1 : 0);   // same group (self excluded)
+        if(other > 0) sigma += other * ((N===1 && L===0) ? 0.30 : 0.35); }
+      else if(L <= 1){ if(s.n === N-1) sigma += s.count*0.85; else if(s.n <= N-2) sigma += s.count*1.00; }
+      else { if(sR < selfR) sigma += s.count*1.00; }   // d/f: everything to the left screens fully
+    }
+    return Math.max(0.5, Z - sigma);
+  };
+  const subEnergyEV = (e, N, L) => { const ze = zeffSub(e,N,L), ns = nStar[N]||N; return -13.6 * ze*ze / (ns*ns); };
+  // Energy for one panel orbital id (atomic subshell, hybrid, π or lone pair) on this atom.
+  const orbEnergyEV = (e, oid, hyb, maxN) => {
+    if(oid < 900){ const N = Math.floor(oid/100), L = Math.floor((oid%100)/10); return subEnergyEV(e, N, L); }
+    const Es = subEnergyEV(e, maxN, 0), Ep = subEnergyEV(e, maxN, 1);
+    if(oid === 900) return Ep;                                   // π = unhybridised valence p
+    const pN = {sp:1, 'sp²':2, 'sp³':3, 'sp³d':4, 'sp³d²':5}[hyb] ?? 3;   // spⁿ = 1 s + pN p orbitals
+    return (Es + pN*Ep) / (1 + pN);                             // hybrid / lone-pair sit at the mixed level
+  };
+  const fmtEV = ev => (ev>=0 ? '+' : '−') + Math.abs(ev).toFixed(1) + ' eV';
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
     econfPanel.innerHTML = '';
@@ -2382,23 +2462,41 @@ async function run(fileName){
     const notation = document.createElement('div');
     notation.textContent = parts.join(' ');
     notation.style.cssText = 'font-size:16px;color:#eff;margin-bottom:8px;letter-spacing:0.5px;';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
+    // Vertical energy-level diagram: group the orbitals into energy levels (equal-energy
+    // subshells share a rung), highest energy on top, each rung labelled with its eV.
+    const items = collectOrbitals(atom).map(oid => ({ oid, energy: orbEnergyEV(e, oid, hyb, maxN) }));
+    const levelMap = new Map();
+    for(const it of items){ const key = it.energy.toFixed(2);
+      if(!levelMap.has(key)) levelMap.set(key, { energy: it.energy, oids: [] }); levelMap.get(key).oids.push(it.oid); }
+    const levels = [...levelMap.values()].sort((a,b) => b.energy - a.energy);   // top = highest (least bound)
+
+    const stack = document.createElement('div');
+    stack.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
     const chips = [];
     const paint = () => { for(const ch of chips){ const on = (gFocusId>=0 && +ch.dataset.t===gFocusId);
       ch.style.background = on ? 'rgba(90,180,255,0.9)' : 'rgba(40,90,140,0.5)'; ch.style.color = on ? '#012' : '#dff'; } };
-    for(const oid of collectOrbitals(atom)){
-      const chip = document.createElement('button');
-      chip.textContent = orbLabel(oid, hyb);
-      chip.dataset.t = oid;
-      chip.style.cssText = 'font-family:inherit;font-size:14px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 8px;cursor:pointer;';
-      chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
-      chips.push(chip); row.appendChild(chip);
+    for(const lv of levels){
+      const rung = document.createElement('div');
+      rung.style.cssText = 'display:flex;align-items:center;gap:8px;border-top:1px solid rgba(90,150,200,0.28);padding-top:5px;';
+      const ev = document.createElement('span');
+      ev.textContent = fmtEV(lv.energy);
+      ev.style.cssText = 'font-size:12px;color:#9cf;min-width:64px;text-align:right;font-variant-numeric:tabular-nums;';
+      const chipsWrap = document.createElement('div');
+      chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
+      for(const oid of lv.oids){
+        const chip = document.createElement('button');
+        chip.textContent = orbLabel(oid, hyb);
+        chip.dataset.t = oid;
+        chip.style.cssText = 'font-family:inherit;font-size:14px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 8px;cursor:pointer;';
+        chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
+        chips.push(chip); chipsWrap.appendChild(chip);
+      }
+      rung.appendChild(ev); rung.appendChild(chipsWrap); stack.appendChild(rung);
     }
     const hint = document.createElement('div');
-    hint.textContent = 'click an orbital to isolate it';
+    hint.textContent = 'energy ↑ · click an orbital to isolate it';
     hint.style.cssText = 'font-size:10px;color:#6ac;margin-top:7px;';
-    econfPanel.appendChild(title); econfPanel.appendChild(notation); econfPanel.appendChild(row); econfPanel.appendChild(hint);
+    econfPanel.appendChild(title); econfPanel.appendChild(notation); econfPanel.appendChild(stack); econfPanel.appendChild(hint);
     econfPanel.style.display = 'block';
   };
 
