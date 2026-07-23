@@ -318,6 +318,7 @@ uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
 uniform float uT;
+uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) or 1 (each bonding lobe)
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -325,15 +326,22 @@ varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
-// Two electrons per bonding orbital: bright blue points of light wandering the surface (the bonding pair).
+// Electrons as fixed points of light on the camera-facing side of the lobe (no animation — they
+// only slide over the surface as you orbit, so they always face you). nElec = 1 or 2.
 void electrons(inout vec3 c){
-  float s = vSeed * 6.2831, t = uT;
-  vec3 e1 = normalize(vec3(sin(t*0.7+s), cos(t*1.1+s*1.7), sin(t*0.9+s*0.6)) + vec3(0.12,-0.10,0.11));
-  vec3 e2 = normalize(vec3(cos(t*0.9+s*1.3), sin(t*0.6+s*2.1), cos(t*1.3+s*0.8)) + vec3(-0.11,0.13,-0.10));
-  float d1 = max(dot(vLocalDir, e1), 0.0), d2 = max(dot(vLocalDir, e2), 0.0);
-  float halo = pow(d1, 8.0)  + pow(d2, 8.0);           // soft outer blue glow
-  float body = pow(d1, 45.0) + pow(d2, 45.0);          // the glowing electron dot
-  float core = pow(d1, 130.0) + pow(d2, 130.0);        // white-hot pinpoint centre
+  vec3 N = normalize(vNrmV);
+  vec3 V = normalize(-vViewPos);                 // toward the camera
+  float ang = vSeed * 6.2831;
+  vec3 axis = vec3(cos(ang), sin(ang), 0.0);     // per-lobe tilt within the screen plane
+  vec3 e1 = V;
+  if(nElec > 1.5) e1 = normalize(V + axis*0.5); // two electrons flank the near point…
+  float d1 = max(dot(N, e1), 0.0);
+  float halo = pow(d1, 8.0), body = pow(d1, 45.0), core = pow(d1, 130.0);
+  if(nElec > 1.5){
+    vec3 e2 = normalize(V - axis*0.5);          // …the other on the opposite side
+    float d2 = max(dot(N, e2), 0.0);
+    halo += pow(d2, 8.0); body += pow(d2, 45.0); core += pow(d2, 130.0);
+  }
   c += vec3(0.15, 0.40, 1.0) * halo * 0.55;
   c += vec3(0.35, 0.65, 1.0) * body * 1.6;
   c += vec3(1.0, 1.0, 1.0)   * core * 1.6;
@@ -442,6 +450,7 @@ uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
 uniform float uT;
+uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) or 1 (each bonding lobe)
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -449,16 +458,25 @@ varying vec3 vLocalDir;
 varying float vSeed;
 varying float vSel;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
-// Two electrons per orbital: bright blue points of light that wander over the lobe surface.
+// Electrons as fixed points of light on the camera-facing side of the lobe (no animation — they
+// only slide over the surface as you orbit, so they always face you). nElec = 1 or 2.
 void electrons(inout vec3 c){
-  float s = vSeed * 6.2831, t = uT;
-  vec3 e1 = normalize(vec3(sin(t*0.7+s), cos(t*1.1+s*1.7), sin(t*0.9+s*0.6)) + vec3(0.12,-0.10,0.11));
-  vec3 e2 = normalize(vec3(cos(t*0.9+s*1.3), sin(t*0.6+s*2.1), cos(t*1.3+s*0.8)) + vec3(-0.11,0.13,-0.10));
-  float d1 = max(dot(vLocalDir, e1), 0.0), d2 = max(dot(vLocalDir, e2), 0.0);
-  float core = pow(d1, 70.0) + pow(d2, 70.0);          // tight electron cores
-  float halo = pow(d1, 10.0) + pow(d2, 10.0);          // soft glow around each
-  c += vec3(0.25, 0.55, 1.0) * halo * 0.55;
-  c += vec3(0.85, 0.95, 1.0) * core * 1.4;
+  vec3 N = normalize(vNrmV);
+  vec3 V = normalize(-vViewPos);                 // toward the camera
+  float ang = vSeed * 6.2831;
+  vec3 axis = vec3(cos(ang), sin(ang), 0.0);     // per-lobe tilt within the screen plane
+  vec3 e1 = V;
+  if(nElec > 1.5) e1 = normalize(V + axis*0.5); // two electrons flank the near point…
+  float d1 = max(dot(N, e1), 0.0);
+  float halo = pow(d1, 8.0), body = pow(d1, 45.0), core = pow(d1, 130.0);
+  if(nElec > 1.5){
+    vec3 e2 = normalize(V - axis*0.5);          // …the other on the opposite side
+    float d2 = max(dot(N, e2), 0.0);
+    halo += pow(d2, 8.0); body += pow(d2, 45.0); core += pow(d2, 130.0);
+  }
+  c += vec3(0.15, 0.40, 1.0) * halo * 0.55;
+  c += vec3(0.35, 0.65, 1.0) * body * 1.6;
+  c += vec3(1.0, 1.0, 1.0)   * core * 1.6;
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -1122,9 +1140,9 @@ async function run(fileName){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT']
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec']
   });
-  orbMatG.setFloat('bubbleR', BUBBLE_R);
+  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('nElec', 2);   // atomic orbitals / lone pairs = an electron pair
   orbMatG.backFaceCulling = true;   // fully opaque → default depth write, correct occlusion
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
@@ -1134,9 +1152,9 @@ async function run(fileName){
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT']
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec']
     });
-    mat.setFloat('bubbleR', BUBBLE_R); mat.backFaceCulling = true;   // opaque → default depth write
+    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.backFaceCulling = true;   // opaque → default depth write
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('uT', gWaveT);
@@ -1145,7 +1163,8 @@ async function run(fileName){
     return mat;
   };
   const bondBondingMat = bondMatG('bondG');    // bonding lobes
-  const bondLPMat      = bondMatG('lobeLPG');  // lone-pair lobes
+  bondBondingMat.setFloat('nElec', 1);         // a σ/π bond = 2 lobes (one per atom), one electron each
+  const bondLPMat      = bondMatG('lobeLPG');  // lone-pair lobes (nElec stays 2 → the lone pair)
 
   // Global atom bounds → grid dimensions.
   let bMiX=Infinity,bMiY=Infinity,bMiZ=Infinity,bMaX=-Infinity,bMaY=-Infinity,bMaZ=-Infinity;
@@ -1278,8 +1297,8 @@ async function run(fileName){
        overlap side-on to form the delocalised π. Drawn with the orbital shader. */
     const pMat = new BABYLON.ShaderMaterial('aromPMat', scene, 'orb', {
       attributes:['position','normal','ocol','ocen','world0','world1','world2','world3'],
-      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT'] });
-    pMat.setFloat('bubbleR', BUBBLE_R); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;
+      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec'] });
+    pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron
     pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
     const pMesh = BABYLON.MeshBuilder.CreateSphere('aromP', {segments:3, diameter:1}, scene);
@@ -1307,8 +1326,8 @@ async function run(fileName){
     for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.0 + rnd((i+1)*2.7)*1.6; }
     const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
-      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT'].concat(extra||[]) });
-      mat.setFloat('bubbleR', 1e9); mat.backFaceCulling = true;
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec'].concat(extra||[]) });
+      mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.backFaceCulling = true;
       mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('uT', gWaveT);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
@@ -1352,7 +1371,7 @@ async function run(fileName){
     const TOT = bondN + lpN;
     const bMat=new Float32Array(TOT*16), bTap=new Float32Array(TOT), bCol=new Float32Array(TOT*3), bCen=new Float32Array(TOT*3);
     const chlBonds=BABYLON.MeshBuilder.CreateSphere('chlBonds',{segments:6,diameter:1},scene);
-    chlBonds.material=mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],['opacity']);
+    chlBonds.material=mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],['opacity']); chlBonds.material.setFloat('nElec', 1);
     chlBonds.isPickable=false; chlBonds.alwaysSelectAsActiveMesh=true;
     chlBonds.thinInstanceSetBuffer('taper',bTap,1,false); chlBonds.thinInstanceSetBuffer('bcol',bCol,3,false); chlBonds.thinInstanceSetBuffer('ocen',bCen,3,false); chlBonds.thinInstanceSetBuffer('matrix',bMat,16,false); chlBonds.thinInstanceCount=TOT;
 
@@ -1567,12 +1586,20 @@ async function run(fileName){
     scene.fogEnd   = ar + modelR*0.6;
     const zoom = fitRadius / Math.max(0.01, ar);
     if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
-    // Spatial culling: enable only the grid cells the camera bubble overlaps.
-    // (bubble is centred on the camera → a distant overview lights no cells at all.)
+    // Spatial culling: enable only the grid cells that are BOTH inside the camera reveal-bubble
+    // AND inside the view frustum (the cone the camera is actually looking at) → cells behind
+    // the camera or off to the sides never load.
     const cp = cam.position;
+    const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
+    const cR = cellHalfDiag;
     for(const cell of cellList){
       const dx=cp.x-cell.cx, dy=cp.y-cell.cy, dz=cp.z-cell.cz;
-      const want = (dx*dx+dy*dy+dz*dz) < cellReach2;
+      let want = (dx*dx+dy*dy+dz*dz) < cellReach2;
+      if(want){
+        for(let p=0;p<6;p++){ const pl=fplanes[p];
+          if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
+        }
+      }
       if(want !== cell.on){ cell.on = want; for(const m of cell.meshes) m.setEnabled(want); }
     }
     if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
@@ -1601,15 +1628,12 @@ async function run(fileName){
   const selMat = mkOutlineMat('selMat', new BABYLON.Color3(1,1,1), 0.85, 0.66);                 // selection = white too → reads as a highlight, not a 2nd (blue) orbital
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
-  hl.renderingGroupId = 4;                                     // outlines drawn topmost (above the nucleus passes)
-  // Group 1 = selection stencil mask (keep scene depth, clear stencil); group 2 = nucleus
-  // (keep stencil, clear depth); group 3 = outlines (clear depth → never occluded).
+  hl.renderingGroupId = 3;                                     // outlines drawn topmost (Babylon allows only groups 0-3)
   // group 1 = all-atom nuclei (keep scene depth, no clears); 2 = selection stencil mask
-  // (keep depth, clear stencil); 3 = highlighted nucleus (keep stencil); 4 = outlines (clear depth).
+  // (keep depth, clear stencil); 3 = highlighted nucleus + outlines (keep stencil, clear depth → topmost).
   scene.setRenderingAutoClearDepthStencil(1, false);
   scene.setRenderingAutoClearDepthStencil(2, true, false, true);
   scene.setRenderingAutoClearDepthStencil(3, true, true, false);
-  scene.setRenderingAutoClearDepthStencil(4, true, true, false);
   const hlBuf = new Float32Array(160*16);   // orbital + bonding lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
@@ -1648,7 +1672,7 @@ async function run(fileName){
      drawn topmost (group 1, depth pre-cleared, no self-occlusion). */
   const selOut = BABYLON.MeshBuilder.CreateSphere('selOut', {diameter:1, segments:8}, scene);
   selOut.material = selMat; selOut.isPickable = false; selOut.setEnabled(false);
-  selOut.renderingGroupId = 4;                                 // same topmost group as the hover outline
+  selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
   const setSelOut = atom => {
