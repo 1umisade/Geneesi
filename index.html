@@ -331,20 +331,24 @@ const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void electrons(inout vec3 c){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
-  float ang = vSeed * 6.2831;
-  vec3 axis = vec3(cos(ang), sin(ang), 0.0);     // per-lobe tilt within the screen plane
-  vec3 e1 = V;
-  if(nElec > 1.5) e1 = normalize(V + axis*0.5); // two electrons flank the near point…
+  float ph = vSeed * 6.2831, t = uT;
+  vec3 axis = vec3(cos(ph), sin(ph), 0.0);       // per-lobe tilt within the screen plane
+  vec3 wob = 0.13 * vec3(sin(t*0.9+ph), cos(t*1.2+ph*1.6), sin(t*0.7+ph*0.5));   // gentle drift so they wander
+  vec3 e1 = normalize(V + wob);
+  if(nElec > 1.5) e1 = normalize(V + wob + axis*0.5);   // two electrons flank the near point…
   float d1 = max(dot(N, e1), 0.0);
-  float halo = pow(d1, 8.0), body = pow(d1, 45.0), core = pow(d1, 130.0);
+  float g1 = pow(d1, 13.0) * (0.7 + 0.3*sin(d1*22.0 - t*4.0));   // soft blob + radiating waves (wave-like)
+  float halo = pow(d1, 4.0), sum = g1;
   if(nElec > 1.5){
-    vec3 e2 = normalize(V - axis*0.5);          // …the other on the opposite side
+    vec3 e2 = normalize(V - wob - axis*0.5);            // …the other on the opposite side
     float d2 = max(dot(N, e2), 0.0);
-    halo += pow(d2, 8.0); body += pow(d2, 45.0); core += pow(d2, 130.0);
+    sum += pow(d2, 13.0) * (0.7 + 0.3*sin(d2*22.0 - t*4.0 + 2.0));
+    halo += pow(d2, 4.0);
   }
-  c += vec3(0.15, 0.40, 1.0) * halo * 0.55;
-  c += vec3(0.35, 0.65, 1.0) * body * 1.6;
-  c += vec3(1.0, 1.0, 1.0)   * core * 1.6;
+  sum = max(sum, 0.0);
+  c += vec3(0.18, 0.45, 1.0) * halo * 0.45;              // soft blue aura
+  c += vec3(0.45, 0.72, 1.0) * sum * 1.5;                // wavy electron glow
+  c += vec3(0.90, 0.97, 1.0) * pow(sum, 2.2) * 0.5;      // gentle bright core
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -463,20 +467,24 @@ const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void electrons(inout vec3 c){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
-  float ang = vSeed * 6.2831;
-  vec3 axis = vec3(cos(ang), sin(ang), 0.0);     // per-lobe tilt within the screen plane
-  vec3 e1 = V;
-  if(nElec > 1.5) e1 = normalize(V + axis*0.5); // two electrons flank the near point…
+  float ph = vSeed * 6.2831, t = uT;
+  vec3 axis = vec3(cos(ph), sin(ph), 0.0);       // per-lobe tilt within the screen plane
+  vec3 wob = 0.13 * vec3(sin(t*0.9+ph), cos(t*1.2+ph*1.6), sin(t*0.7+ph*0.5));   // gentle drift so they wander
+  vec3 e1 = normalize(V + wob);
+  if(nElec > 1.5) e1 = normalize(V + wob + axis*0.5);   // two electrons flank the near point…
   float d1 = max(dot(N, e1), 0.0);
-  float halo = pow(d1, 8.0), body = pow(d1, 45.0), core = pow(d1, 130.0);
+  float g1 = pow(d1, 13.0) * (0.7 + 0.3*sin(d1*22.0 - t*4.0));   // soft blob + radiating waves (wave-like)
+  float halo = pow(d1, 4.0), sum = g1;
   if(nElec > 1.5){
-    vec3 e2 = normalize(V - axis*0.5);          // …the other on the opposite side
+    vec3 e2 = normalize(V - wob - axis*0.5);            // …the other on the opposite side
     float d2 = max(dot(N, e2), 0.0);
-    halo += pow(d2, 8.0); body += pow(d2, 45.0); core += pow(d2, 130.0);
+    sum += pow(d2, 13.0) * (0.7 + 0.3*sin(d2*22.0 - t*4.0 + 2.0));
+    halo += pow(d2, 4.0);
   }
-  c += vec3(0.15, 0.40, 1.0) * halo * 0.55;
-  c += vec3(0.35, 0.65, 1.0) * body * 1.6;
-  c += vec3(1.0, 1.0, 1.0)   * core * 1.6;
+  sum = max(sum, 0.0);
+  c += vec3(0.18, 0.45, 1.0) * halo * 0.45;              // soft blue aura
+  c += vec3(0.45, 0.72, 1.0) * sum * 1.5;                // wavy electron glow
+  c += vec3(0.90, 0.97, 1.0) * pow(sum, 2.2) * 0.5;      // gentle bright core
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -928,9 +936,8 @@ async function run(fileName){
       const x1=m.x[a1]+ox, y1=m.y[a1]+oy, z1=m.z[a1]+oz;
       const x2=m.x[a2]+ox, y2=m.y[a2]+oy, z2=m.z[a2]+oz;
       const e1=m.el[a1], e2=m.el[a2], f=0.62;   // each lobe reaches past the midpoint → the two orbitals overlap
-      const en1=info(e1).en, en2=info(e2).en, bo=m.bo[k]||1;
-      const w1 = Math.min(1.7, Math.max(0.5, 0.55 + (en1-en2)*0.5 + 0.5));
-      const w2 = Math.min(1.7, Math.max(0.5, 0.55 + (en2-en1)*0.5 + 0.5));
+      const bo=m.bo[k]||1;
+      const w1 = 1.0, w2 = 1.0;   // symmetric lobes (no electronegativity-driven taper)
       const bx=x2-x1, by=y2-y1, bz=z2-z1, bdir=nrm([bx,by,bz]);
       const ai1 = kci[a1], ai2 = kci[a2];
       const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el, ai, knob) => {
@@ -1364,8 +1371,7 @@ async function run(fileName){
     chlCore.isPickable=false; chlCore.alwaysSelectAsActiveMesh=true;
     chlCore.thinInstanceSetBuffer('ocol',coreCol,3,true); chlCore.thinInstanceSetBuffer('ocen',coreCen,3,false); chlCore.thinInstanceSetBuffer('matrix',coreMat,16,false); chlCore.thinInstanceCount=coreN;
     // Bonds (hybrids: σ + back-knob + π) + lone pairs
-    const bw=[]; for(let b=0;b<NB;b++){ const en1=info(chl.el[chl.b1[b]]).en, en2=info(chl.el[chl.b2[b]]).en;
-      bw.push([Math.min(1.7,Math.max(0.5,0.55+(en1-en2)*0.5+0.5)), Math.min(1.7,Math.max(0.5,0.55+(en2-en1)*0.5+0.5))]); }
+    const bw=[]; for(let b=0;b<NB;b++) bw.push([1.0, 1.0]);   // symmetric lobes (no electronegativity taper)
     let bondN=0; for(let b=0;b<NB;b++) bondN += 4*(chl.bo[b]||1);   // σ2 + knob2 + π 4*(bo-1)
     let lpN=0; for(let k=0;k<N;k++) lpN += lonePairs(chl.el[k]);
     const TOT = bondN + lpN;
@@ -1377,15 +1383,13 @@ async function run(fileName){
 
     // Chlorophyll centre → gate rendering on camera proximity (hide the detail when zoomed out).
     let chlCx=0,chlCy=0,chlCz=0; for(let k=0;k<N;k++){ chlCx+=rest[k*3]; chlCy+=rest[k*3+1]; chlCz+=rest[k*3+2]; } chlCx/=N;chlCy/=N;chlCz/=N;
-    const chlMeshes=[chlNuc,chlCore,chlBonds]; let chlOn=true;
-    const cpos=new Float32Array(N*3); let chlT=0;
+    // Chlorophyll is ALWAYS shown (never gated away) and built once at rest — the shader shakeOff
+    // then wiggles it exactly like the protein (same thermal-shake as every other atom).
+    const cpos=new Float32Array(N*3); let chlBuilt=false;
     scene.onBeforeRenderObservable.add(()=>{
-      const cp=cam.position, ddx=cp.x-chlCx, ddy=cp.y-chlCy, ddz=cp.z-chlCz;
-      const near = (ddx*ddx+ddy*ddy+ddz*ddz) < (BUBBLE_R*2.2)*(BUBBLE_R*2.2);   // only render/animate when the camera is near it
-      if(near !== chlOn){ chlOn = near; for(const m of chlMeshes) m.setEnabled(near); }
-      if(!near) return;
-      chlT += Math.min(engine.getDeltaTime(),50)*0.001*gSpeed;
-      for(let i=0;i<N*3;i++) cpos[i]=rest[i]+AMP*Math.sin(chlT*freq[i]+phase[i]);
+      if(chlBuilt) return;
+      chlBuilt = true;
+      for(let i=0;i<N*3;i++) cpos[i]=rest[i];
       // nucleons
       for(let ni=0;ni<nucN;ni++){ const k=nucK[ni], o=ni*16;
         nucMat[o+12]=cpos[k*3]+nucOff[ni*3]; nucMat[o+13]=cpos[k*3+1]+nucOff[ni*3+1]; nucMat[o+14]=cpos[k*3+2]+nucOff[ni*3+2]; }
