@@ -329,8 +329,17 @@ varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
-// Electrons as fixed points of light on the camera-facing side of the lobe (no animation — they
-// only slide over the surface as you orbit, so they always face you). nElec = 1 or 2.
+// Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
+// with flickering electric filaments crackling around it. nElec = 1 or 2.
+float elecBolt(vec3 N, vec3 e, vec3 uref){
+  float d = clamp(dot(N, e), -1.0, 1.0);
+  vec3 tp = N - d*e;                                   // tangent offset from the electron centre
+  vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
+  float ang = atan(dot(tp, w), dot(tp, u));
+  float rad = acos(clamp(d, 0.0, 1.0));                // angular distance from the electron
+  float fil = pow(0.5 + 0.5*sin(ang*8.0 + sin(rad*22.0 - uT*9.0)*2.5 + uT*2.0), 14.0);   // thin wavy filaments
+  return fil * exp(-rad*7.0) * (0.55 + 0.45*sin(uT*22.0 + ang*4.0));   // localised, rapidly flickering
+}
 void electrons(inout vec3 c){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
@@ -343,13 +352,14 @@ void electrons(inout vec3 c){
   float gEx = mix(34.0, 18.0, breathe);            // glow expands & contracts as it breathes
   vec3 e1 = normalize(V + off);
   float d1 = max(dot(N, e1), 0.0);
-  float glow = pow(d1, gEx), core = pow(d1, 150.0);   // small footprint now
+  float glow = pow(d1, gEx), core = pow(d1, 150.0), bolt = elecBolt(N, e1, axA);
   if(nElec > 1.5){
     vec3 e2 = normalize(V - off);
     float d2 = max(dot(N, e2), 0.0);
-    glow += pow(d2, gEx); core += pow(d2, 150.0);
+    glow += pow(d2, gEx); core += pow(d2, 150.0); bolt += elecBolt(N, e2, axB);
   }
   c += vec3(0.30, 0.58, 1.0) * glow * (0.30 + 0.30*breathe);   // breathing blue light (much smaller)
+  c += vec3(0.55, 0.80, 1.0) * bolt * 1.4;                     // electric filaments crackling around it
   c += vec3(1.0, 1.0, 1.0)   * core * 1.1;                     // small bright core
 }
 void main(void){
@@ -466,8 +476,17 @@ varying vec3 vLocalDir;
 varying float vSeed;
 varying float vSel;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
-// Electrons as fixed points of light on the camera-facing side of the lobe (no animation — they
-// only slide over the surface as you orbit, so they always face you). nElec = 1 or 2.
+// Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
+// with flickering electric filaments crackling around it. nElec = 1 or 2.
+float elecBolt(vec3 N, vec3 e, vec3 uref){
+  float d = clamp(dot(N, e), -1.0, 1.0);
+  vec3 tp = N - d*e;                                   // tangent offset from the electron centre
+  vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
+  float ang = atan(dot(tp, w), dot(tp, u));
+  float rad = acos(clamp(d, 0.0, 1.0));                // angular distance from the electron
+  float fil = pow(0.5 + 0.5*sin(ang*8.0 + sin(rad*22.0 - uT*9.0)*2.5 + uT*2.0), 14.0);   // thin wavy filaments
+  return fil * exp(-rad*7.0) * (0.55 + 0.45*sin(uT*22.0 + ang*4.0));   // localised, rapidly flickering
+}
 void electrons(inout vec3 c){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
@@ -480,13 +499,14 @@ void electrons(inout vec3 c){
   float gEx = mix(34.0, 18.0, breathe);            // glow expands & contracts as it breathes
   vec3 e1 = normalize(V + off);
   float d1 = max(dot(N, e1), 0.0);
-  float glow = pow(d1, gEx), core = pow(d1, 150.0);   // small footprint now
+  float glow = pow(d1, gEx), core = pow(d1, 150.0), bolt = elecBolt(N, e1, axA);
   if(nElec > 1.5){
     vec3 e2 = normalize(V - off);
     float d2 = max(dot(N, e2), 0.0);
-    glow += pow(d2, gEx); core += pow(d2, 150.0);
+    glow += pow(d2, gEx); core += pow(d2, 150.0); bolt += elecBolt(N, e2, axB);
   }
   c += vec3(0.30, 0.58, 1.0) * glow * (0.30 + 0.30*breathe);   // breathing blue light (much smaller)
+  c += vec3(0.55, 0.80, 1.0) * bolt * 1.4;                     // electric filaments crackling around it
   c += vec3(1.0, 1.0, 1.0)   * core * 1.1;                     // small bright core
 }
 void main(void){
