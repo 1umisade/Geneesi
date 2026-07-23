@@ -254,8 +254,8 @@ void main(void){
   // dissolve away to reveal the orbitals inside (and cores dissolve in).
   float hsh = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside, 1 outside
-  float cang = normalize(vCenterV).z;                        // cosine of the atom's angle off the view axis
-  float inCone = (coneCos < -0.5) ? 1.0 : step(coneCos, cang);
+  float perp = (vCenterV.z > 0.0) ? length(vCenterV.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
+  float inCone = (coneCos < -0.5) ? 1.0 : step(perp, coneCos);   // in tube if perp <= tube radius
   float reveal = (1.0 - edge) * inCone;                       // 1 = orbitals/nuclei show here, 0 = vdW shell
   if(isShell < 0.5){ if(reveal < hsh) discard; }             // core/nucleons show only where revealed
   else { if((1.0 - reveal) < hsh) discard; }                 // shell shows where NOT revealed (outside bubble OR off-cone)
@@ -316,7 +316,7 @@ void main(void){
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vBcol = bcol;
-  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = normalize(ocv).z;   // atom's cosine off the view axis (reveal cone)
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
@@ -389,7 +389,7 @@ void electrons(inout vec3 c, float ne){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
-  if(coneCos > -0.5 && vCang < coneCos) discard;   // off-cone atoms don't reveal orbitals (they stay vdW)
+  if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   if(focusId >= 0.0 && vSel > 0.5 && abs(99.0 - focusId) > 0.5 && _h < 0.5) discard;   // focusing a non-hybrid subshell → dim bonds/lone pairs
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
@@ -489,7 +489,7 @@ void main(void){
   vCol = ocol;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vOid = oid;
-  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = normalize(ocv).z;   // atom's cosine off the view axis (reveal cone)
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['orbFragmentShader'] = `
@@ -562,7 +562,7 @@ void electrons(inout vec3 c, float ne){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
-  if(coneCos > -0.5 && vCang < coneCos) discard;   // off-cone atoms don't reveal orbitals (they stay vdW)
+  if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   if(focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5 && _h < 0.5) discard;   // focus one subshell → others ~50% transparent
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
@@ -1093,7 +1093,7 @@ async function run(fileName){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
-  const CONE_COS = 0.96;      // only atoms within ~16° of the view axis reveal their orbitals (sides stay vdW)
+  const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
