@@ -1992,8 +1992,10 @@ async function run(fileName){
     const nearR2 = (1.7*cR)*(1.7*cR);   // camera inside/adjacent to a cell → never cull it (else a zoomed-in atom vanishes at some orbit angles, leaving only its outline)
     for(const cell of cellList){
       const vx=cell.cx-cp.x, vy=cell.cy-cp.y, vz=cell.cz-cp.z, d2=vx*vx+vy*vy+vz*vz;
-      let want = d2 < cellReach2;
-      if(want && d2 > nearR2){   // frustum cull only (orbitals fill the whole view now — no forward-cone/vdW gate)
+      // Show everything: NO distance limit. Only skip cells that are fully OFF-SCREEN (behind the
+      // camera / outside the view). Nothing in view is ever hidden by distance now.
+      let want = true;
+      if(d2 > nearR2){
         for(let p=0;p<6;p++){ const pl=fplanes[p];
           if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
         }
@@ -2400,6 +2402,14 @@ async function run(fileName){
     let x = ray.origin.x + t*ray.direction.x, y = ray.origin.y + t*ray.direction.y;
     if(gSpawnBounds){ x=Math.max(gSpawnBounds.x0,Math.min(gSpawnBounds.x1,x)); y=Math.max(gSpawnBounds.y0,Math.min(gSpawnBounds.y1,y)); }
     spawned[i].x = x; spawned[i].y = y; rebuildSpawn();
+    refreshSpawnSelection();   // if a spawned atom is selected, keep its outline / nucleus / electrons on it (it may have moved or reaction-snapped)
+  };
+  // Re-sync the selection visuals to the selected spawned atom's current position.
+  const refreshSpawnSelection = () => {
+    if(!selAtom || !selAtom.spawn) return;
+    const a = spawned[selAtom.si]; if(!a) return;
+    selAtom.center.set(a.x, a.y, a.z); selCenter.copyFrom(selAtom.center);
+    setSelOut(selAtom); setSelNuc(selAtom); setSelElec(selAtom);
   };
   // Drop the armed atom where the cursor ray meets the z-plane, clamped to the inner cage.
   const spawnAtPointer = () => {
