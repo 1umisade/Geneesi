@@ -411,7 +411,7 @@ vec3 toFront(vec3 w, vec3 V, vec3 fb){
   float polar = acos(d) * 0.42;                 // map [0,180°] → [0,~76°] off the view axis
   return cos(polar)*V + sin(polar)*tang;
 }
-void electrons(inout vec3 c, float ne){
+void electrons(inout vec3 c, float ne, float bri){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
   float ph = vSeed * 6.2831, t = uT;
@@ -427,10 +427,10 @@ void electrons(inout vec3 c, float ne){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);           // rapid lightning strobe
-  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe);  // faint smooth glow
-  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1;                    // rapid electric lightning (dominant)
-  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe);         // tiny bright core strobing like lightning
+  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);                 // rapid lightning strobe
+  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe) * bri;  // faint smooth glow
+  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1 * bri;                    // rapid electric lightning (dominant)
+  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe) * bri;         // tiny bright core strobing like lightning
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -439,7 +439,8 @@ void main(void){
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
-  if(drawElec > 0.5) electrons(c, nElec);
+  float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate an orbital → others' electrons dim to 25%
+  if(drawElec > 0.5) electrons(c, nElec, efac);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque (focus isolates via the outline, not transparency)
 }`;
@@ -584,7 +585,7 @@ vec3 toFront(vec3 w, vec3 V, vec3 fb){
   float polar = acos(d) * 0.42;                 // map [0,180°] → [0,~76°] off the view axis
   return cos(polar)*V + sin(polar)*tang;
 }
-void electrons(inout vec3 c, float ne){
+void electrons(inout vec3 c, float ne, float bri){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);                 // toward the camera
   float ph = vSeed * 6.2831, t = uT;
@@ -600,23 +601,23 @@ void electrons(inout vec3 c, float ne){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);           // rapid lightning strobe
-  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe);  // faint smooth glow
-  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1;                    // rapid electric lightning (dominant)
-  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe);         // tiny bright core strobing like lightning
+  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);                 // rapid lightning strobe
+  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe) * bri;  // faint smooth glow
+  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1 * bri;                    // rapid electric lightning (dominant)
+  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe) * bri;         // tiny bright core strobing like lightning
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
-  if(focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5 && _h < 0.5) discard;   // focus one subshell → others ~50% transparent
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
-  if(drawElec > 0.5) electrons(c, ne);
+  float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate an orbital → the others' electrons dim to 25%
+  if(drawElec > 0.5) electrons(c, ne, efac);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque (focus isolates via the outline, not transparency)
+  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // opaque orbital, isolation shows via outline + dimmed electrons
 }`;
 
 /* Spawn orbital vertex shader: identical to 'orb' but the electron phase + thermal-shake come
@@ -738,7 +739,7 @@ void main(void){
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;
-  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.32 : 1.0;
+  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate → other orbitals' electrons dim to 25%
   vec3 g = electronGlow(ne) * foc;
   vec3 pv = vViewPos; pv.z -= depthBias;
   vec4 clip = projection * vec4(pv, 1.0);
@@ -812,7 +813,7 @@ void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
-  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.32 : 1.0;
+  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate → other orbitals' electrons dim to 25%
   vec3 g = electronGlow(nElec) * foc;
   vec3 pv = vViewPos; pv.z -= depthBias;
   vec4 clip = projection * vec4(pv, 1.0);
@@ -1528,13 +1529,13 @@ async function run(fileName){
   // hidden here (its spinning highlight nucleus draws instead).
   const NUC_BIAS = 1.0;
   nucMatG.setFloat('depthBias', NUC_BIAS); nucMatG.disableDepthWrite = true;
-  nucMatG.setFloat('bubbleR', BUBBLE_R); nucMatG.setFloat('coneCos', -1.0);   // nuclei show with the near orbitals; vdW shell beyond
+  nucMatG.setFloat('bubbleR', 1e9); nucMatG.setFloat('coneCos', -1.0);   // nuclei always shown (no vdW gate)
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
     uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec']
   });
-  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // orbitals near (full FOV, no tube); vdW shells take over beyond the bubble
+  orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // always fully revealed → no screen-door band
   orbMatG.backFaceCulling = true;
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
@@ -1547,7 +1548,7 @@ async function run(fileName){
       attributes: ['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],
       uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec']
     });
-    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // near only; vdW shells beyond; electrons inline
+    mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('uT', gWaveT);
@@ -1649,18 +1650,9 @@ async function run(fileName){
   // Free the per-element core buffers now baked into cells. Keep orbBuf (hover outline) and sphBuf/colBuf (shells + picking).
   for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=null; }   // keep orbBuf/orbColBuf + cylBuf/cenBuf/wBuf + lpBuf/lpCenBuf → the outline can match every fill lobe exactly
 
-  /* Van der Waals shells — the always-visible FAR layer. They self-gate in the shader (shown only
-     OUTSIDE the reveal bubble), so close atoms show orbitals and everything else stays visible as a
-     space-filling sphere. This is what keeps the whole protein/membrane on screen at any distance. */
-  for(let e=0;e<nEl;e++){
-    if(atomCount[e]===0) continue;
-    const shellMat = impostorMat('imp'+e, info(e).vr*FILL_SCALE, 1.0);   // isShell = 1 (bubbleR = BUBBLE_R → far only)
-    const shell = BABYLON.MeshBuilder.CreatePlane('f'+e, {size:2}, scene);
-    shell.material = shellMat; shell.isPickable = false;
-    shell.thinInstanceSetBuffer('matrix', sphBuf[e], 16, true);
-    shell.thinInstanceSetBuffer('instanceColor', colBuf[e], 4, true);
-    shell.alwaysSelectAsActiveMesh = true;
-  }
+  /* No vdW shells: every atom always shows its full orbitals (no space-filling stand-in, no
+     screen-door reveal band). Orbitals render for cells near the camera; far cells simply aren't
+     drawn (rather than falling back to a vdW sphere). */
 
   /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
@@ -2056,14 +2048,14 @@ async function run(fileName){
   // Shared outline geometry: fill `buf` with an atom's orbital lobes AND its bonding lobes.
   // Hover and selection outlines use this identical geometry so they always match.
   const OUT_MAX = 160;
-  const fillOutline = (buf, atom) => {
+  const fillOutline = (buf, atom, applyFoc = true) => {
+    const foc = applyFoc ? gFocusId : -1;       // hover passes false → always outline the whole atom (focus only isolates the SELECTED atom)
     if(atom.spawn){                                             // hand-spawned atom → its own lobe list
-      const lobes = spawnLobeList(atom.sym, atom.center.x, atom.center.y, atom.center.z), foc = gFocusId; let m = 0;
+      const lobes = spawnLobeList(atom.sym, atom.center.x, atom.center.y, atom.center.z); let m = 0;
       for(const L of lobes){ if(foc >= 0 && Math.abs(L.oid - foc) > 0.5) continue; const o=m*16; for(let j=0;j<16;j++) buf[o+j]=L.m[j]; m++; }
       return m;
     }
     const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], oidb = orbIdBuf[e], base = atom.idx*cnt*16, oidBase = atom.idx*cnt;
-    const foc = gFocusId;                       // <0 = outline everything; else only the picked subshell
     let n = 0;
     for(let i=0;i<cnt;i++){ const s=base+i*16;
       if(ob[s]*ob[s]+ob[s+1]*ob[s+1]+ob[s+2]*ob[s+2] < 1e-9) continue;   // skip invisible (hybridised) lobe
@@ -2278,7 +2270,7 @@ async function run(fileName){
   let hoverT = 0;
   // Hover outline — identical geometry to the selection outline (orbital + bonding lobes).
   const setHL = atom => {
-    const n = fillOutline(hlBuf, atom);
+    const n = fillOutline(hlBuf, atom, false);   // hover always outlines the whole atom, even when an orbital is isolated
     hl.thinInstanceSetBuffer('matrix', hlBuf, 16, true);
     hl.thinInstanceCount = n;
     hl.setEnabled(true);
@@ -2529,7 +2521,8 @@ async function run(fileName){
     return (Es + pN*Ep) / (1 + pN);                             // hybrid / lone-pair sit at the mixed level
   };
   const EV_J = 1.602176634e-19;   // 1 eV in joules
-  const fmtJ = ev => { const j = ev*EV_J; return (j>=0 ? '+' : '−') + Math.abs(j).toExponential(2) + ' J'; };
+  // Relative energy (lowest orbital = 0, others above it): E'_i = E_i − E_lowest, in joules.
+  const fmtJ = evRel => { const j = evRel*EV_J; return j < 1e-30 ? '0 J' : '+' + j.toExponential(2) + ' J'; };
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
     econfPanel.innerHTML = '';
@@ -2552,6 +2545,7 @@ async function run(fileName){
     // Vertical energy-level diagram: group the orbitals into energy levels (equal-energy
     // subshells share a rung), highest energy on top, each rung labelled with its eV.
     const items = collectOrbitals(atom).map(oid => ({ oid, energy: orbEnergyEV(e, oid, hyb, maxN) }));
+    const eMin = items.length ? Math.min(...items.map(x => x.energy)) : 0;   // lowest orbital → 0, others relative to it
     const levelMap = new Map();
     for(const it of items){ const key = it.energy.toFixed(2);
       if(!levelMap.has(key)) levelMap.set(key, { energy: it.energy, oids: [] }); levelMap.get(key).oids.push(it.oid); }
@@ -2566,8 +2560,8 @@ async function run(fileName){
       const rung = document.createElement('div');
       rung.style.cssText = 'display:flex;align-items:center;gap:8px;border-top:1px solid rgba(90,150,200,0.28);padding-top:5px;';
       const ev = document.createElement('span');
-      ev.textContent = fmtJ(lv.energy);
-      ev.style.cssText = 'font-size:11px;color:#9cf;min-width:78px;text-align:right;font-variant-numeric:tabular-nums;';
+      ev.textContent = fmtJ(lv.energy - eMin);
+      ev.style.cssText = 'font-size:11px;color:#9cf;min-width:82px;text-align:right;font-variant-numeric:tabular-nums;';
       const chipsWrap = document.createElement('div');
       chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
       for(const oid of lv.oids){
