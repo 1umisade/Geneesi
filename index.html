@@ -30,6 +30,22 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
   display:flex;align-items:center;justify-content:center}
 .zt:active{transform:translateY(1px);box-shadow:0 1px 0 #8a5a2b}
 .ztlabel{font-size:10px;color:#8a5a2b;letter-spacing:1px}
+/* ── Dark-mode toggle (warm-brown palette, styled like Solukko's "Teema" pill) ── */
+#darkmode-btn{position:absolute;left:16px;top:12px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:12px;letter-spacing:.5px;
+  color:#6b6055;background:#fffef9;border:1px solid #d4cec4;border-radius:999px;cursor:pointer;
+  box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:7px 13px;display:inline-flex;align-items:center;gap:6px;
+  line-height:1;user-select:none;-webkit-user-select:none;
+  transition:transform .1s ease,box-shadow .1s ease,background-color .25s,color .25s,border-color .25s}
+#darkmode-btn:active{transform:scale(0.92);box-shadow:0 2px 6px rgba(0,0,0,0.18)}
+#darkmode-icon{font-size:15px;line-height:1}
+body.dark-mode #darkmode-btn{background:#3a312b;border-color:#6d5f52;color:#cbb89b}
+body.dark-mode #zoomval{color:#cbb89b}
+body.dark-mode .zt{color:#eadfce;background:#3a312b;border-color:#6d5f52;box-shadow:0 2px 0 #6d5f52}
+body.dark-mode .zt:active{box-shadow:0 1px 0 #6d5f52}
+body.dark-mode .ztlabel{color:#cbb89b}
+body.dark-mode #speedbox{color:#cbb89b}
+body.dark-mode #econf{background:rgba(42,33,27,0.82)!important;border-color:#6d5f52!important}
 </style>
 </head>
 <body>
@@ -37,6 +53,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 <div id="overlay">
   <div class="ptr"><div class="pfil" id="load-bar"></div></div>
 </div>
+<button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
@@ -813,6 +830,27 @@ async function run(fileName){
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
   scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
   scene.fogColor = new BABYLON.Color3(0.16,0.17,0.13);         // dark olive-grey (not black) → lighter vibe
+  // ── Theme toggle: light (cream) ↔ warm-dark (Solukko brown palette) ─────────
+  const THEME = {
+    light:{ clear:new BABYLON.Color4(1.0,0.996,0.976,1), fog:new BABYLON.Color3(0.16,0.17,0.13) },
+    dark: { clear:new BABYLON.Color4(0.145,0.102,0.063,1), fog:new BABYLON.Color3(0.10,0.075,0.05) }
+  };
+  let darkMode = false;
+  try { darkMode = JSON.parse(localStorage.getItem('solukone-dark') || 'false'); } catch(_){}
+  const applyTheme = () => {
+    const t = darkMode ? THEME.dark : THEME.light;
+    scene.clearColor = t.clear; scene.fogColor = t.fog;
+    document.body.classList.toggle('dark-mode', darkMode);
+    const ov = document.getElementById('overlay'); if(ov) ov.style.background = darkMode ? '#251a10' : '#fffef9';
+    const ic = document.getElementById('darkmode-icon'); if(ic) ic.textContent = darkMode ? '🌙' : '☀️';
+  };
+  const dmBtn = document.getElementById('darkmode-btn');
+  if(dmBtn) dmBtn.addEventListener('click', () => {
+    darkMode = !darkMode;
+    try { localStorage.setItem('solukone-dark', JSON.stringify(darkMode)); } catch(_){}
+    applyTheme();
+  });
+  applyTheme();
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
