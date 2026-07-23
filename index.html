@@ -439,7 +439,7 @@ void main(void){
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
-  float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate an orbital → others' electrons dim to 25%
+  float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → others' electrons dim to  5%
   if(drawElec > 0.5) electrons(c, nElec, efac);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque (focus isolates via the outline, not transparency)
@@ -614,7 +614,7 @@ void main(void){
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
-  float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate an orbital → the others' electrons dim to 25%
+  float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → the others' electrons dim to  5%
   if(drawElec > 0.5) electrons(c, ne, efac);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // opaque orbital, isolation shows via outline + dimmed electrons
@@ -741,7 +741,7 @@ void main(void){
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;
-  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate → other orbitals' electrons dim to 25%
+  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate → other orbitals' electrons dim to  5%
   vec3 g = electronGlow(ne) * foc;
   vec3 pv = vViewPos; pv.z -= depthBias;
   vec4 clip = projection * vec4(pv, 1.0);
@@ -815,7 +815,7 @@ void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
-  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.25 : 1.0;   // isolate → other orbitals' electrons dim to 25%
+  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate → other orbitals' electrons dim to  5%
   vec3 g = electronGlow(nElec) * foc;
   vec3 pv = vViewPos; pv.z -= depthBias;
   vec4 clip = projection * vec4(pv, 1.0);
@@ -2310,28 +2310,22 @@ async function run(fileName){
     orb.material = orbSpawnMat; orb.isPickable=false; orb.alwaysSelectAsActiveMesh=true;   // always-shown orbitals, inline electrons, stable phase
     rec = { nuc, orb }; spawnMeshes.set(sym, rec); return rec;
   };
+  // Valence-shell radius (Å) of an element's outermost orbitals — how far its lobes reach.
+  const reachOf = sym => (ECONF[sym]||[[1,0]]).reduce((mx,sh)=>Math.max(mx,sh[0]),0) * SHELL_STEP;
   // Rebuild all spawn geometry from the `spawned` list (called on spawn / drag / clear).
-  const O_BOND = 1.21, O_REACH = 1.9;   // O₂ bond length (Å) and the distance at which two O's snap together
   const rebuildSpawn = () => {
-    // ── Reaction: two oxygens dragged close pair up into O₂ (each O bonds ONE partner, closest
-    //    first) and snap to the O₂ bond length. 4 oxygens → 2 separate O₂, not a bonded blob. ──
-    const bondPairs = [], taken = new Array(spawned.length).fill(false);
-    // candidate O-O pairs within reach, sorted nearest-first
-    const cand = [];
-    for(let i=0;i<spawned.length;i++){ if(spawned[i].sym!=='O') continue;
-      for(let j=i+1;j<spawned.length;j++){ if(spawned[j].sym!=='O') continue;
-        const a=spawned[i], b=spawned[j], d=Math.hypot(b.x-a.x, b.y-a.y, b.z-a.z);
-        if(d<=O_REACH && d>1e-4) cand.push([d,i,j]); } }
-    cand.sort((p,q)=>p[0]-q[0]);
-    for(const [d,i,j] of cand){
-      if(taken[i] || taken[j]) continue;                                                   // each O only bonds once
-      taken[i]=taken[j]=true;
-      const a=spawned[i], b=spawned[j]; let ux=(b.x-a.x)/d, uy=(b.y-a.y)/d, uz=(b.z-a.z)/d;
-      if(dragAtom===i){ b.x=a.x+ux*O_BOND; b.y=a.y+uy*O_BOND; b.z=a.z+uz*O_BOND; }          // keep the dragged O on the cursor, snap its partner
-      else if(dragAtom===j){ a.x=b.x-ux*O_BOND; a.y=b.y-uy*O_BOND; a.z=b.z-uz*O_BOND; }
-      else { const mx=(a.x+b.x)/2, my=(a.y+b.y)/2, mz=(a.z+b.z)/2;                          // neither dragged → snap both to the midpoint
-        a.x=mx-ux*O_BOND/2; a.y=my-uy*O_BOND/2; a.z=mz-uz*O_BOND/2; b.x=mx+ux*O_BOND/2; b.y=my+uy*O_BOND/2; b.z=mz+uz*O_BOND/2; }
-      bondPairs.push([i,j]);
+    // ── Bonding by orbital overlap: while you DRAG an atom near another (any elements — H, O, C…),
+    //    it snaps to a distance where their own orbitals overlap. No stretched bonding lobes: the
+    //    bond is simply the two atoms' orbitals interpenetrating. (Bond length is not to scale.) ──
+    if(dragAtom >= 0 && dragAtom < spawned.length){
+      const a = spawned[dragAtom], rA = reachOf(a.sym);
+      let best=-1, bestD=Infinity, rBest=0;
+      for(let j=0;j<spawned.length;j++){ if(j===dragAtom) continue;
+        const b=spawned[j], d=Math.hypot(b.x-a.x, b.y-a.y, b.z-a.z), rB=reachOf(b.sym);
+        if(d < 1.35*(rA+rB) && d < bestD){ bestD=d; best=j; rBest=rB; } }
+      if(best>=0){ const b=spawned[best], target=0.65*(rA+rBest);   // overlap distance (orbitals interpenetrate)
+        let ux=a.x-b.x, uy=a.y-b.y, uz=a.z-b.z; const d=Math.hypot(ux,uy,uz)||1; ux/=d;uy/=d;uz/=d;
+        a.x=b.x+ux*target; a.y=b.y+uy*target; a.z=b.z+uz*target; }   // snap the dragged atom to the overlap distance
     }
     const bySym = new Map();
     for(const a of spawned){ if(!bySym.has(a.sym)) bySym.set(a.sym, []); bySym.get(a.sym).push(a); }
@@ -2359,25 +2353,7 @@ async function run(fileName){
       rec.nuc.thinInstanceSetBuffer('matrix', nMb,16,true); rec.nuc.thinInstanceSetBuffer('instanceColor', nCb,4,true);
       rec.orb.thinInstanceSetBuffer('matrix', oMb,16,true); rec.orb.thinInstanceSetBuffer('ocol', oCol,3,true); rec.orb.thinInstanceSetBuffer('ocen', oCen,3,true); rec.orb.thinInstanceSetBuffer('oid', oId,1,true); rec.orb.thinInstanceSetBuffer('seed', oSeed,1,true);
     }
-    // Build the O₂ bonds: σ (a lobe from each atom toward the other) + one π pair (out-of-plane) → a double bond.
-    const nb = bondPairs.length * 4;
-    if(nb === 0){ spawnBondMesh.thinInstanceCount = 0; }
-    else {
-      const bMb=new Float32Array(nb*16), bTap=new Float32Array(nb), bCen=new Float32Array(nb*3), bCol=new Float32Array(nb*3), bOid=new Float32Array(nb), oc=ELEM.O.c;
-      let w=0; const put=(sx,sy,sz,ex,ey,ez,W,cx,cy,cz,oid)=>{ cylTo(sx,sy,sz,ex,ey,ez,bMb,w*16,W); bTap[w]=1;
-        bCen[w*3]=cx;bCen[w*3+1]=cy;bCen[w*3+2]=cz; bCol[w*3]=oc[0];bCol[w*3+1]=oc[1];bCol[w*3+2]=oc[2]; bOid[w]=oid; w++; };
-      for(const [i,j] of bondPairs){ const a=spawned[i], b=spawned[j];
-        let ux=b.x-a.x, uy=b.y-a.y, uz=b.z-a.z; const L=Math.hypot(ux,uy,uz)||1; ux/=L;uy/=L;uz/=L;
-        const f=L*0.55, W=0.34, pz=0.30;   // σ reach and width; π offset out of the sheet
-        put(a.x,a.y,a.z, a.x+ux*f,a.y+uy*f,a.z+uz*f, W, a.x,a.y,a.z, 1000);   // σ from a
-        put(b.x,b.y,b.z, b.x-ux*f,b.y-uy*f,b.z-uz*f, W, b.x,b.y,b.z, 1000);   // σ from b
-        put(a.x,a.y,a.z+pz, a.x+ux*f,a.y+uy*f,a.z+pz, W*0.7, a.x,a.y,a.z, 900);   // π from a (above the sheet)
-        put(b.x,b.y,b.z+pz, b.x-ux*f,b.y-uy*f,b.z+pz, W*0.7, b.x,b.y,b.z, 900);   // π from b
-      }
-      spawnBondMesh.thinInstanceSetBuffer('matrix', bMb,16,true); spawnBondMesh.thinInstanceSetBuffer('taper', bTap,1,true);
-      spawnBondMesh.thinInstanceSetBuffer('ocen', bCen,3,true); spawnBondMesh.thinInstanceSetBuffer('bcol', bCol,3,true); spawnBondMesh.thinInstanceSetBuffer('oid', bOid,1,true);
-      spawnBondMesh.thinInstanceCount = nb;
-    }
+    spawnBondMesh.thinInstanceCount = 0;   // no stretched bonding lobes — a bond is shown by the two atoms' own orbitals overlapping
   };
   const spawnAtom = (sym, x, y, z) => { spawned.push({sym,x,y,z,id:gSpawnId++}); rebuildSpawn(); };
   const clearSpawned = () => { spawned.length = 0; rebuildSpawn(); };
