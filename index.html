@@ -337,8 +337,8 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));                // angular distance from the electron
-  float fil = pow(0.5 + 0.5*sin(ang*8.0 + sin(rad*22.0 - uT*9.0)*2.5 + uT*2.0), 14.0);   // thin wavy filaments
-  return fil * exp(-rad*7.0) * (0.55 + 0.45*sin(uT*22.0 + ang*4.0));   // localised, rapidly flickering
+  float fil = pow(0.5 + 0.5*sin(ang*9.0 + sin(rad*28.0 - uT*16.0)*2.7 + uT*4.0), 18.0);   // thin fast filaments
+  return fil * exp(-rad*9.0) * (0.5 + 0.5*sin(uT*36.0 + ang*5.0));   // localised, rapidly flickering lightning
 }
 void electrons(inout vec3 c){
   vec3 N = normalize(vNrmV);
@@ -346,21 +346,22 @@ void electrons(inout vec3 c){
   float ph = vSeed * 6.2831, t = uT;
   vec3 axA = vec3(cos(ph), sin(ph), 0.0);        // two screen-plane axes → the electrons circle in this plane
   vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
-  float orbit = t*0.9 + ph, R = (nElec > 1.5) ? 0.36 : 0.14;   // slow circular rotation of the pair
+  float orbit = t*0.9 + ph, R = (nElec > 1.5) ? 0.34 : 0.13;   // slow circular rotation of the pair
   vec3 off = R * (cos(orbit)*axA + sin(orbit)*axB);
   float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);   // gentle in/out breathing
-  float gEx = mix(34.0, 18.0, breathe);            // glow expands & contracts as it breathes
+  float gEx = mix(54.0, 34.0, breathe);            // smaller footprint, breathes
   vec3 e1 = normalize(V + off);
   float d1 = max(dot(N, e1), 0.0);
-  float glow = pow(d1, gEx), core = pow(d1, 150.0), bolt = elecBolt(N, e1, axA);
+  float glow = pow(d1, gEx), core = pow(d1, 220.0), bolt = elecBolt(N, e1, axA);
   if(nElec > 1.5){
     vec3 e2 = normalize(V - off);
     float d2 = max(dot(N, e2), 0.0);
-    glow += pow(d2, gEx); core += pow(d2, 150.0); bolt += elecBolt(N, e2, axB);
+    glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  c += vec3(0.30, 0.58, 1.0) * glow * (0.30 + 0.30*breathe);   // breathing blue light (much smaller)
-  c += vec3(0.55, 0.80, 1.0) * bolt * 1.4;                     // electric filaments crackling around it
-  c += vec3(1.0, 1.0, 1.0)   * core * 1.1;                     // small bright core
+  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);           // rapid lightning strobe
+  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe);  // faint smooth glow
+  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1;                    // rapid electric lightning (dominant)
+  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe);         // tiny bright core strobing like lightning
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -484,8 +485,8 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));                // angular distance from the electron
-  float fil = pow(0.5 + 0.5*sin(ang*8.0 + sin(rad*22.0 - uT*9.0)*2.5 + uT*2.0), 14.0);   // thin wavy filaments
-  return fil * exp(-rad*7.0) * (0.55 + 0.45*sin(uT*22.0 + ang*4.0));   // localised, rapidly flickering
+  float fil = pow(0.5 + 0.5*sin(ang*9.0 + sin(rad*28.0 - uT*16.0)*2.7 + uT*4.0), 18.0);   // thin fast filaments
+  return fil * exp(-rad*9.0) * (0.5 + 0.5*sin(uT*36.0 + ang*5.0));   // localised, rapidly flickering lightning
 }
 void electrons(inout vec3 c){
   vec3 N = normalize(vNrmV);
@@ -493,21 +494,22 @@ void electrons(inout vec3 c){
   float ph = vSeed * 6.2831, t = uT;
   vec3 axA = vec3(cos(ph), sin(ph), 0.0);        // two screen-plane axes → the electrons circle in this plane
   vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
-  float orbit = t*0.9 + ph, R = (nElec > 1.5) ? 0.36 : 0.14;   // slow circular rotation of the pair
+  float orbit = t*0.9 + ph, R = (nElec > 1.5) ? 0.34 : 0.13;   // slow circular rotation of the pair
   vec3 off = R * (cos(orbit)*axA + sin(orbit)*axB);
   float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);   // gentle in/out breathing
-  float gEx = mix(34.0, 18.0, breathe);            // glow expands & contracts as it breathes
+  float gEx = mix(54.0, 34.0, breathe);            // smaller footprint, breathes
   vec3 e1 = normalize(V + off);
   float d1 = max(dot(N, e1), 0.0);
-  float glow = pow(d1, gEx), core = pow(d1, 150.0), bolt = elecBolt(N, e1, axA);
+  float glow = pow(d1, gEx), core = pow(d1, 220.0), bolt = elecBolt(N, e1, axA);
   if(nElec > 1.5){
     vec3 e2 = normalize(V - off);
     float d2 = max(dot(N, e2), 0.0);
-    glow += pow(d2, gEx); core += pow(d2, 150.0); bolt += elecBolt(N, e2, axB);
+    glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  c += vec3(0.30, 0.58, 1.0) * glow * (0.30 + 0.30*breathe);   // breathing blue light (much smaller)
-  c += vec3(0.55, 0.80, 1.0) * bolt * 1.4;                     // electric filaments crackling around it
-  c += vec3(1.0, 1.0, 1.0)   * core * 1.1;                     // small bright core
+  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);           // rapid lightning strobe
+  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe);  // faint smooth glow
+  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1;                    // rapid electric lightning (dominant)
+  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe);         // tiny bright core strobing like lightning
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -805,10 +807,18 @@ async function run(fileName){
         orbitLocked = false; return;
       }
       if(e.buttons & 4){ dragZoom(e.movementY || 0); showTips(); return; }   // middle held = zoom
-      // Left-drag rotation: on the FIRST real move (not a click), re-pivot onto the selected atom.
+      // Left-drag rotation: on the FIRST real move (not a click), re-pivot onto the selected atom —
+      // but only if it's still on-screen. If you've zoomed in past it (it left the view), rotate
+      // around the current view instead (and keep it selected, just don't snap back to it).
       if((e.buttons & 1) && orbitLocked && !snappedDrag){
         const dx = scene.pointerX - dnX, dy = scene.pointerY - dnY;
-        if(dx*dx + dy*dy > 9){ cam.setTarget(selCenter.clone()); snappedDrag = true; }   // moved > 3px
+        if(dx*dx + dy*dy > 9){
+          const pl = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());
+          let inView = true;
+          for(let i=0;i<6;i++){ if(pl[i].dotCoordinate(selCenter) < 0){ inView = false; break; } }
+          if(inView) cam.setTarget(selCenter.clone());
+          snappedDrag = true;
+        }
       }
     }
   });
