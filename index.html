@@ -209,10 +209,12 @@ uniform float uT;        // thermal-shake time (0 = still)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
+varying vec3 vWCen;      // instance world centre → identify the selected atom's nucleons
 varying float vFlag;     // instance alpha → 1 for protons, 0 for neutrons
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
+  vWCen = W[3].xyz;
   vec4 cV = view * vec4(shake(W[3].xyz), 1.0);
   vCenterV = cV.xyz;
   vUV = position.xy;
@@ -232,9 +234,12 @@ uniform float fogEnd;
 uniform float isShell;   // 1.0 = translucent vdW shell, 0.0 = solid inner atom
 uniform float bubbleR;   // reveal-sphere radius around the camera (view-space distance)
 uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on protons
+uniform float depthBias;   // nuclei: push toward camera (view units) so they clear their OWN orbitals (0 elsewhere)
+uniform vec3 selCenter;    // the focused atom (its static nucleus is hidden → the spinning highlight shows instead)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
+varying vec3 vWCen;
 varying float vFlag;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));  // raking light from the side (right)
 void main(void){
@@ -250,6 +255,8 @@ void main(void){
   float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside, 1 outside
   if(isShell < 0.5){ if((1.0 - edge) < hsh) discard; }        // core solid inside, dissolves out
   else { if(edge < hsh) discard; }                            // shell solid outside, dissolves in
+  if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
+  posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
   vec4 clip = projection * vec4(posV, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
@@ -1042,12 +1049,14 @@ async function run(fileName){
   const impostorMat = (name, radius, isShell, protonOutline) => {
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT']
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter']
     });
     mat.setFloat('radius', radius);
     mat.setFloat('isShell', isShell);
     mat.setFloat('bubbleR', BUBBLE_R);
     mat.setFloat('protonOutline', protonOutline || 0);
+    mat.setFloat('depthBias', 0);
+    mat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6));
     mat.backFaceCulling = false;
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
@@ -1071,6 +1080,13 @@ async function run(fileName){
 
   // Shared materials (one of each kind for all cells).
   const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0);   // isShell=0; protons are coloured light red directly (no extra red rim)
+  // Every atom's nucleus is visible: bias it toward the camera so it shows on top of its OWN
+  // orbitals, drawn after them (group 1) without writing depth so it can't punch through atoms
+  // that are genuinely in front. selCenter bound live → the focused atom's static nucleus is
+  // hidden here (its spinning highlight nucleus draws instead).
+  const NUC_BIAS = 1.0;
+  nucMatG.setFloat('depthBias', NUC_BIAS); nucMatG.disableDepthWrite = true;
+  nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','world0','world1','world2','world3'],
     uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT']
@@ -1160,6 +1176,7 @@ async function run(fileName){
     if(c.nucM.length){ const m=BABYLON.MeshBuilder.CreatePlane('cn'+k,{size:2},scene); m.material=nucMatG; m.isPickable=false;
       m.thinInstanceSetBuffer('matrix', new Float32Array(c.nucM),16,true);
       m.thinInstanceSetBuffer('instanceColor', new Float32Array(c.nucC),4,true);
+      m.renderingGroupId=1;   // nuclei drawn after the orbitals (biased depth) so they sit on top of their own atom
       m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
     if(c.orbM.length){ const m=BABYLON.MeshBuilder.CreateSphere('co'+k,{segments:3,diameter:1},scene); m.material=orbMatG; m.isPickable=false;
       m.thinInstanceSetBuffer('matrix', new Float32Array(c.orbM),16,true);
@@ -1267,9 +1284,10 @@ async function run(fileName){
     // Nucleons (imp shader, always visible)
     const nucMatC = new BABYLON.ShaderMaterial('chlNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT'] });
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter'] });
     nucMatC.setFloat('radius',NUCLEON_R); nucMatC.setFloat('isShell',0); nucMatC.setFloat('bubbleR',1e9); nucMatC.setFloat('protonOutline',0); nucMatC.backFaceCulling=false;
-    nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    nucMatC.setFloat('depthBias', NUC_BIAS); nucMatC.disableDepthWrite = true;   // same nucleus-on-top-of-own-orbitals treatment
+    nucMatC.onBindObservable.add(()=>{ const eff=nucMatC.getEffect(); if(!eff) return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); eff.setVector3('selCenter', selCenter); });
     let nucN=0; for(let k=0;k<N;k++) nucN += info(chl.el[k]).n;
     const nucK=new Int32Array(nucN), nucOff=new Float32Array(nucN*3), nucCol=new Float32Array(nucN*4), nucMat=new Float32Array(nucN*16);
     { let ni=0; for(let k=0;k<N;k++){ const A=info(chl.el[k]).n, Z=info(chl.el[k]).z;
@@ -1277,7 +1295,7 @@ async function run(fileName){
           nucK[ni]=k; nucOff[ni*3]=fcc[i][0]*SPACING; nucOff[ni*3+1]=fcc[i][1]*SPACING; nucOff[ni*3+2]=fcc[i][2]*SPACING;
           const c=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62]; nucCol[ni*4]=c[0];nucCol[ni*4+1]=c[1];nucCol[ni*4+2]=c[2];nucCol[ni*4+3]=0;
           const o=ni*16; nucMat[o]=1;nucMat[o+5]=1;nucMat[o+10]=1;nucMat[o+15]=1; ni++; } } }
-    const chlNuc=BABYLON.MeshBuilder.CreatePlane('chlNuc',{size:2},scene); chlNuc.material=nucMatC; chlNuc.isPickable=false; chlNuc.alwaysSelectAsActiveMesh=true;
+    const chlNuc=BABYLON.MeshBuilder.CreatePlane('chlNuc',{size:2},scene); chlNuc.material=nucMatC; chlNuc.isPickable=false; chlNuc.alwaysSelectAsActiveMesh=true; chlNuc.renderingGroupId=1;
     chlNuc.thinInstanceSetBuffer('instanceColor',nucCol,4,true); chlNuc.thinInstanceSetBuffer('matrix',nucMat,16,false); chlNuc.thinInstanceCount=nucN;
     // Core orbitals (the non-hybridised inner shells)
     const coreDefs=[];
@@ -1550,12 +1568,15 @@ async function run(fileName){
   const selMat = mkOutlineMat('selMat', new BABYLON.Color3(1,1,1), 0.85, 0.66);                 // selection = white too → reads as a highlight, not a 2nd (blue) orbital
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
-  hl.renderingGroupId = 3;                                     // outlines drawn topmost (above the nucleus pass)
+  hl.renderingGroupId = 4;                                     // outlines drawn topmost (above the nucleus passes)
   // Group 1 = selection stencil mask (keep scene depth, clear stencil); group 2 = nucleus
   // (keep stencil, clear depth); group 3 = outlines (clear depth → never occluded).
-  scene.setRenderingAutoClearDepthStencil(1, true, false, true);
-  scene.setRenderingAutoClearDepthStencil(2, true, true, false);
+  // group 1 = all-atom nuclei (keep scene depth, no clears); 2 = selection stencil mask
+  // (keep depth, clear stencil); 3 = highlighted nucleus (keep stencil); 4 = outlines (clear depth).
+  scene.setRenderingAutoClearDepthStencil(1, false);
+  scene.setRenderingAutoClearDepthStencil(2, true, false, true);
   scene.setRenderingAutoClearDepthStencil(3, true, true, false);
+  scene.setRenderingAutoClearDepthStencil(4, true, true, false);
   const hlBuf = new Float32Array(160*16);   // orbital + bonding lobes
   const orbExtent = e => { let mx=1; for(const sh of econf(e)) mx=Math.max(mx, sh[0]); return mx*SHELL_STEP + 0.2; };
 
@@ -1594,7 +1615,7 @@ async function run(fileName){
      drawn topmost (group 1, depth pre-cleared, no self-occlusion). */
   const selOut = BABYLON.MeshBuilder.CreateSphere('selOut', {diameter:1, segments:8}, scene);
   selOut.material = selMat; selOut.isPickable = false; selOut.setEnabled(false);
-  selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
+  selOut.renderingGroupId = 4;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
   const setSelOut = atom => {
@@ -1618,7 +1639,7 @@ async function run(fileName){
   maskMat.onBindObservable.add(() => { const eff=maskMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
   const selMask = BABYLON.MeshBuilder.CreateSphere('selMask', {diameter:1, segments:8}, scene);
   selMask.material = maskMat; selMask.isPickable = false; selMask.setEnabled(false);
-  selMask.renderingGroupId = 1; selMask.alwaysSelectAsActiveMesh = true;
+  selMask.renderingGroupId = 2; selMask.alwaysSelectAsActiveMesh = true;
   const SC = BABYLON.Constants;
   selMask.onBeforeRenderObservable.add(() => {
     engine.setColorWrite(false);
@@ -1634,7 +1655,7 @@ async function run(fileName){
   selNucMat.setFloat('bubbleR', 1e9);   // always visible (never gated by the reveal bubble)
   selNucMat.depthFunction = BABYLON.Constants.ALWAYS; selNucMat.disableDepthWrite = true;   // depth handled by the stencil gate
   const selNuc = BABYLON.MeshBuilder.CreatePlane('selNuc', {size:2}, scene);
-  selNuc.material=selNucMat; selNuc.isPickable=false; selNuc.setEnabled(false); selNuc.renderingGroupId=2; selNuc.alwaysSelectAsActiveMesh=true;
+  selNuc.material=selNucMat; selNuc.isPickable=false; selNuc.setEnabled(false); selNuc.renderingGroupId=3; selNuc.alwaysSelectAsActiveMesh=true;
   selNuc.onBeforeRenderObservable.add(() => {
     engine.setStencilBuffer(true); engine.setStencilMask(0x00);   // read stencil, don't modify it
     engine.setStencilFunction(BABYLON.Constants.EQUAL); engine.setStencilFunctionReference(1); engine.setStencilFunctionMask(0xFF);
