@@ -374,6 +374,7 @@ uniform float uT;
 uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) or 1 (each bonding lobe)
 uniform float focusId; // negative shows all, bonds/lone pairs are the hybrid/valence group (id 99)
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
+uniform float drawElec; // 1 = draw electrons inline (chlorophyll), 0 = electrons come from the additive bondE pass
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -435,13 +436,13 @@ void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
-  if(focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5 && _h < 0.5) discard;   // focus one orbital → others 50% transparent
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
-  electrons(c, nElec);
+  if(drawElec > 0.5) electrons(c, nElec);                                        // inline electrons for chlorophyll bonds
+  float a = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.32 : 1.0;   // faded lobe → true translucency
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
+  gl_FragColor = vec4(mix(fogColor, c, fog), a);   // main-cell electrons come from the additive bondE pass
 }`;
 
 /* Bonding orbital = one CONE per bond: wide (base) at the more electronegative atom,
@@ -547,6 +548,7 @@ uniform float uT;
 uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) or 1 (each bonding lobe)
 uniform float focusId; // negative shows all, otherwise the selected atom's other subshells go 50% transparent
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
+uniform float drawElec; // 1 = draw electrons inline (chlorophyll / aromatic π), 0 = electrons come from the additive orbE pass
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -613,9 +615,165 @@ void main(void){
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
-  electrons(c, ne);
+  if(drawElec > 0.5) electrons(c, ne);                                          // inline electrons for chlorophyll / aromatic π
+  float a = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.32 : 1.0;   // faded orbital → true translucency (blended, not dithered)
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque
+  gl_FragColor = vec4(mix(fogColor, c, fog), a);   // main-cell electrons come from the additive orbE pass
+}`;
+
+/* ── Electron glow passes (orbE / bondE) ──────────────────────────────────────
+   The electron lightning is drawn as a SEPARATE additive pass over the same lobe
+   geometry, with a small camera-ward depth bias (like the all-atom nuclei) so an
+   atom's electrons sit ON TOP of its own orbitals but are still occluded by other
+   atoms' orbitals in front. Reuses the orb / bond vertex shaders. */
+BABYLON.Effect.ShadersStore['orbEFragmentShader'] = `
+#extension GL_EXT_frag_depth : enable
+precision highp float;
+uniform mat4 projection;
+uniform float bubbleR;
+uniform float uT;
+uniform float nElec;
+uniform float focusId;
+uniform float coneCos;
+uniform float depthBias;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+varying vec3 vCol;
+varying vec3 vLocalDir;
+varying float vSeed;
+varying float vSel;
+varying float vOid;
+varying float vCang;
+float elecBolt(vec3 N, vec3 e, vec3 uref){
+  float d = clamp(dot(N, e), -1.0, 1.0);
+  vec3 tp = N - d*e;
+  vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
+  float ang = atan(dot(tp, w), dot(tp, u));
+  float rad = acos(clamp(d, 0.0, 1.0));
+  float fil = pow(0.5 + 0.5*sin(ang*9.0 + sin(rad*28.0 - uT*16.0)*2.7 + uT*4.0), 18.0);
+  return fil * exp(-rad*9.0) * (0.5 + 0.5*sin(uT*36.0 + ang*5.0));
+}
+vec3 wanderDir(float s){
+  return normalize(vec3(
+    sin(uT*0.73 + s) + 0.7*sin(uT*1.61 + s*2.3),
+    sin(uT*0.91 + s*1.7) + 0.7*sin(uT*1.29 + s*0.6),
+    sin(uT*1.13 + s*0.4) + 0.7*sin(uT*0.53 + s*3.1)));
+}
+vec3 toFront(vec3 w, vec3 V, vec3 fb){
+  float d = clamp(dot(w, V), -1.0, 1.0);
+  vec3 tang = w - d*V; float tl = length(tang);
+  tang = tl > 1e-4 ? tang/tl : fb;
+  float polar = acos(d) * 0.42;
+  return cos(polar)*V + sin(polar)*tang;
+}
+vec3 electronGlow(float ne){
+  vec3 N = normalize(vNrmV);
+  vec3 V = normalize(-vViewPos);
+  float ph = vSeed * 6.2831, t = uT;
+  vec3 axA = vec3(cos(ph), sin(ph), 0.0);
+  vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
+  float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);
+  float gEx = mix(54.0, 34.0, breathe);
+  vec3 e1 = toFront(wanderDir(ph), V, axA);
+  float d1 = max(dot(N, e1), 0.0);
+  float glow = pow(d1, gEx), core = pow(d1, 220.0), bolt = elecBolt(N, e1, axA);
+  if(ne > 1.5){
+    vec3 e2 = toFront(wanderDir(ph + 2.4), V, axB);
+    float d2 = max(dot(N, e2), 0.0);
+    glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
+  }
+  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);
+  vec3 c = vec3(0.0);
+  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe);
+  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1;
+  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe);
+  return c;
+}
+void main(void){
+  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
+  if(coneCos > -0.5 && vCang > coneCos) discard;
+  float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;
+  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.32 : 1.0;
+  vec3 g = electronGlow(ne) * foc;
+  vec3 pv = vViewPos; pv.z -= depthBias;
+  vec4 clip = projection * vec4(pv, 1.0);
+  gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
+  gl_FragColor = vec4(g, 1.0);
+}`;
+BABYLON.Effect.ShadersStore['bondEFragmentShader'] = `
+#extension GL_EXT_frag_depth : enable
+precision highp float;
+uniform mat4 projection;
+uniform float bubbleR;
+uniform float uT;
+uniform float nElec;
+uniform float focusId;
+uniform float coneCos;
+uniform float depthBias;
+varying vec3 vViewPos;
+varying vec3 vNrmV;
+varying vec3 vLocalDir;
+varying float vOid;
+varying float vSeed;
+varying float vSel;
+varying vec3 vBcol;
+varying float vCang;
+float elecBolt(vec3 N, vec3 e, vec3 uref){
+  float d = clamp(dot(N, e), -1.0, 1.0);
+  vec3 tp = N - d*e;
+  vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
+  float ang = atan(dot(tp, w), dot(tp, u));
+  float rad = acos(clamp(d, 0.0, 1.0));
+  float fil = pow(0.5 + 0.5*sin(ang*9.0 + sin(rad*28.0 - uT*16.0)*2.7 + uT*4.0), 18.0);
+  return fil * exp(-rad*9.0) * (0.5 + 0.5*sin(uT*36.0 + ang*5.0));
+}
+vec3 wanderDir(float s){
+  return normalize(vec3(
+    sin(uT*0.73 + s) + 0.7*sin(uT*1.61 + s*2.3),
+    sin(uT*0.91 + s*1.7) + 0.7*sin(uT*1.29 + s*0.6),
+    sin(uT*1.13 + s*0.4) + 0.7*sin(uT*0.53 + s*3.1)));
+}
+vec3 toFront(vec3 w, vec3 V, vec3 fb){
+  float d = clamp(dot(w, V), -1.0, 1.0);
+  vec3 tang = w - d*V; float tl = length(tang);
+  tang = tl > 1e-4 ? tang/tl : fb;
+  float polar = acos(d) * 0.42;
+  return cos(polar)*V + sin(polar)*tang;
+}
+vec3 electronGlow(float ne){
+  vec3 N = normalize(vNrmV);
+  vec3 V = normalize(-vViewPos);
+  float ph = vSeed * 6.2831, t = uT;
+  vec3 axA = vec3(cos(ph), sin(ph), 0.0);
+  vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
+  float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);
+  float gEx = mix(54.0, 34.0, breathe);
+  vec3 e1 = toFront(wanderDir(ph), V, axA);
+  float d1 = max(dot(N, e1), 0.0);
+  float glow = pow(d1, gEx), core = pow(d1, 220.0), bolt = elecBolt(N, e1, axA);
+  if(ne > 1.5){
+    vec3 e2 = toFront(wanderDir(ph + 2.4), V, axB);
+    float d2 = max(dot(N, e2), 0.0);
+    glow += pow(d2, gEx); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
+  }
+  float strobe = 0.55 + 0.45*sin(uT*26.0 + ph*3.0);
+  vec3 c = vec3(0.0);
+  c += vec3(0.25, 0.55, 1.0) * glow * (0.16 + 0.14*breathe);
+  c += vec3(0.55, 0.85, 1.0) * bolt * 2.1;
+  c += vec3(1.0, 1.0, 1.0)   * core * (0.9 * strobe);
+  return c;
+}
+void main(void){
+  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
+  if(coneCos > -0.5 && vCang > coneCos) discard;
+  float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.32 : 1.0;
+  vec3 g = electronGlow(nElec) * foc;
+  vec3 pv = vViewPos; pv.z -= depthBias;
+  vec4 clip = projection * vec4(pv, 1.0);
+  gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
+  gl_FragColor = vec4(g, 1.0);
 }`;
 
 /* Hover/flash highlight: a bright white Fresnel rim (transparent centre) around the nucleus. */
@@ -1318,10 +1476,10 @@ async function run(fileName){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos']
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec']
   });
-  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', CONE_COS);   // atomic orbitals / lone pairs = an electron pair
-  orbMatG.backFaceCulling = true;   // fully opaque → default depth write, correct occlusion
+  orbMatG.setFloat('bubbleR', BUBBLE_R); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', CONE_COS); orbMatG.setFloat('drawElec', 0);   // electrons drawn in the additive orbE pass
+  orbMatG.backFaceCulling = true;   // opaque normally; alpha-blended in focus mode (below)
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
     eff.setFloat('uT', gWaveT);
@@ -1331,9 +1489,9 @@ async function run(fileName){
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos']
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec']
     });
-    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.setFloat('coneCos', CONE_COS); mat.backFaceCulling = true;   // opaque → default depth write
+    mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.setFloat('coneCos', CONE_COS); mat.setFloat('drawElec', 0); mat.backFaceCulling = true;   // electrons via the additive bondE pass
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('uT', gWaveT);
@@ -1345,6 +1503,44 @@ async function run(fileName){
   const bondBondingMat = bondMatG('bondG');    // bonding lobes
   bondBondingMat.setFloat('nElec', 1);         // a σ/π bond = 2 lobes (one per atom), one electron each
   const bondLPMat      = bondMatG('lobeLPG');  // lone-pair lobes (nElec stays 2 → the lone pair)
+
+  // True-transparency for faded orbitals: opaque normally, alpha-blended (not dithered) while a
+  // focus is active, and depth-write off then so the focused lobe stays visible through the fade.
+  for(const m of [orbMatG, bondBondingMat, bondLPMat]){
+    m.alphaMode = BABYLON.Constants.ALPHA_COMBINE;
+    m.needAlphaBlending = () => gFocusId >= 0;
+  }
+  scene.onBeforeRenderObservable.add(() => {
+    const blend = gFocusId >= 0;
+    orbMatG.disableDepthWrite = blend; bondBondingMat.disableDepthWrite = blend; bondLPMat.disableDepthWrite = blend;
+  });
+
+  // Electron glow pass (additive, depth-biased toward the camera) — the electron analogue of the
+  // all-atom nuclei: an atom's electrons sit ON TOP of its own orbitals but are occluded by others.
+  const ELEC_BIAS = 1.6;
+  const orbElecMat = new BABYLON.ShaderMaterial('orbE', scene, { vertex:'orb', fragment:'orbE' }, {
+    attributes: ['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
+    uniforms: ['view','projection','bubbleR','uT','nElec','selCenter','focusId','coneCos','depthBias']
+  });
+  orbElecMat.setFloat('bubbleR', BUBBLE_R); orbElecMat.setFloat('nElec', 2); orbElecMat.setFloat('coneCos', CONE_COS); orbElecMat.setFloat('depthBias', ELEC_BIAS);
+  orbElecMat.alphaMode = BABYLON.Constants.ALPHA_ADD; orbElecMat.needAlphaBlending = () => true;
+  orbElecMat.disableDepthWrite = true; orbElecMat.backFaceCulling = true;
+  orbElecMat.onBindObservable.add(() => { const eff = orbElecMat.getEffect(); if(!eff) return;
+    eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); });
+  const bondElecMat = (nm, ne) => {
+    const m = new BABYLON.ShaderMaterial(nm, scene, { vertex:'bond', fragment:'bondE' }, {
+      attributes: ['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],
+      uniforms: ['view','projection','bubbleR','uT','nElec','selCenter','focusId','coneCos','depthBias']
+    });
+    m.setFloat('bubbleR', BUBBLE_R); m.setFloat('nElec', ne); m.setFloat('coneCos', CONE_COS); m.setFloat('depthBias', ELEC_BIAS);
+    m.alphaMode = BABYLON.Constants.ALPHA_ADD; m.needAlphaBlending = () => true;
+    m.disableDepthWrite = true; m.backFaceCulling = true;
+    m.onBindObservable.add(() => { const eff = m.getEffect(); if(!eff) return;
+      eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); });
+    return m;
+  };
+  const bondBondElecMat = bondElecMat('bondEbond', 1);
+  const bondLPElecMat   = bondElecMat('bondElp', 2);
 
   // Global atom bounds → grid dimensions.
   let bMiX=Infinity,bMiY=Infinity,bMiZ=Infinity,bMaX=-Infinity,bMaY=-Infinity,bMaZ=-Infinity;
@@ -1410,26 +1606,28 @@ async function run(fileName){
       m.thinInstanceSetBuffer('instanceColor', new Float32Array(c.nucC),4,true);
       m.renderingGroupId=1;   // nuclei drawn after the orbitals (biased depth) so they sit on top of their own atom
       m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
-    if(c.orbM.length){ const m=BABYLON.MeshBuilder.CreateSphere('co'+k,{segments:3,diameter:1},scene); m.material=orbMatG; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.orbM),16,true);
-      m.thinInstanceSetBuffer('ocol', new Float32Array(c.orbCol),3,true);
-      m.thinInstanceSetBuffer('ocen', new Float32Array(c.orbCen),3,true);
-      m.thinInstanceSetBuffer('oid', new Float32Array(c.orbOid),1,true);
-      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
-    if(c.boM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cb'+k,{segments:3,diameter:1},scene); m.material=bondBondingMat; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.boM),16,true);
-      m.thinInstanceSetBuffer('taper', new Float32Array(c.boT),1,true);
-      m.thinInstanceSetBuffer('ocen', new Float32Array(c.boCen),3,true);
-      m.thinInstanceSetBuffer('bcol', new Float32Array(c.boCol),3,true);
-      m.thinInstanceSetBuffer('oid', new Float32Array(c.boOid),1,true);
-      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
-    if(c.lpM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cl'+k,{segments:3,diameter:1},scene); m.material=bondLPMat; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true);
-      m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
-      m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true);
-      m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true);
-      m.thinInstanceSetBuffer('oid', new Float32Array(c.lpOid),1,true);
-      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    // Twin electron mesh (shares the lobe geometry + thin-instance buffers) → additive glow pass in group 1.
+    const twinElec = (base, elecMat, buffers) => { const t=BABYLON.MeshBuilder.CreateSphere('ce'+base,{segments:3,diameter:1},scene);
+      t.material=elecMat; t.isPickable=false; t.renderingGroupId=1; t.alwaysSelectAsActiveMesh=true;
+      for(const [name,buf,stride] of buffers) t.thinInstanceSetBuffer(name, buf, stride, true); meshes.push(t); };
+    if(c.orbM.length){ const mtx=new Float32Array(c.orbM), col=new Float32Array(c.orbCol), cen=new Float32Array(c.orbCen), oid=new Float32Array(c.orbOid);
+      const m=BABYLON.MeshBuilder.CreateSphere('co'+k,{segments:3,diameter:1},scene); m.material=orbMatG; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', mtx,16,true); m.thinInstanceSetBuffer('ocol', col,3,true);
+      m.thinInstanceSetBuffer('ocen', cen,3,true); m.thinInstanceSetBuffer('oid', oid,1,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m);
+      twinElec('o'+k, orbElecMat, [['matrix',mtx,16],['ocol',col,3],['ocen',cen,3],['oid',oid,1]]); }
+    if(c.boM.length){ const mtx=new Float32Array(c.boM), tap=new Float32Array(c.boT), cen=new Float32Array(c.boCen), col=new Float32Array(c.boCol), oid=new Float32Array(c.boOid);
+      const m=BABYLON.MeshBuilder.CreateSphere('cb'+k,{segments:3,diameter:1},scene); m.material=bondBondingMat; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', mtx,16,true); m.thinInstanceSetBuffer('taper', tap,1,true);
+      m.thinInstanceSetBuffer('ocen', cen,3,true); m.thinInstanceSetBuffer('bcol', col,3,true); m.thinInstanceSetBuffer('oid', oid,1,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m);
+      twinElec('b'+k, bondBondElecMat, [['matrix',mtx,16],['taper',tap,1],['ocen',cen,3],['bcol',col,3],['oid',oid,1]]); }
+    if(c.lpM.length){ const mtx=new Float32Array(c.lpM), tap=new Float32Array(c.lpT), cen=new Float32Array(c.lpCen), col=new Float32Array(c.lpCol), oid=new Float32Array(c.lpOid);
+      const m=BABYLON.MeshBuilder.CreateSphere('cl'+k,{segments:3,diameter:1},scene); m.material=bondLPMat; m.isPickable=false;
+      m.thinInstanceSetBuffer('matrix', mtx,16,true); m.thinInstanceSetBuffer('taper', tap,1,true);
+      m.thinInstanceSetBuffer('ocen', cen,3,true); m.thinInstanceSetBuffer('bcol', col,3,true); m.thinInstanceSetBuffer('oid', oid,1,true);
+      m.alwaysSelectAsActiveMesh=true; meshes.push(m);
+      twinElec('l'+k, bondLPElecMat, [['matrix',mtx,16],['taper',tap,1],['ocen',cen,3],['bcol',col,3],['oid',oid,1]]); }
     for(const m of meshes) m.setEnabled(false);
     cellList.push({ cx,cy,cz, meshes, on:false });
     await yield_();
@@ -1480,8 +1678,8 @@ async function run(fileName){
        overlap side-on to form the delocalised π. Drawn with the orbital shader. */
     const pMat = new BABYLON.ShaderMaterial('aromPMat', scene, 'orb', {
       attributes:['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos'] });
-    pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.setFloat('coneCos', -1.0); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron
+      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'] });
+    pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.setFloat('coneCos', -1.0); pMat.setFloat('drawElec', 1); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron (drawn inline)
     pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
@@ -1510,8 +1708,8 @@ async function run(fileName){
     for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.0 + rnd((i+1)*2.7)*1.6; }
     const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
-      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos'].concat(extra||[]) });
-      mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.backFaceCulling = true;
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'].concat(extra||[]) });
+      mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // chlorophyll keeps inline electrons
       mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('uT', gWaveT);
         eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
