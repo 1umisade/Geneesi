@@ -288,6 +288,7 @@ attribute vec4 world3;
 attribute float taper;     // per-lobe: widen the far end by bond polarity (0 = uniform ellipsoid)
 attribute vec3 ocen;       // this lobe's atom centre → compare to the selected atom
 attribute vec3 bcol;       // per-instance element colour (so bonds combine across elements per cell)
+attribute float oid;       // orbital id (hybrid = 1000+i, π = 900, lone pair = 2000+i) → focus filter
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;
@@ -295,6 +296,7 @@ uniform float uT;          // thermal-shake time
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
+varying float vOid;
 varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
@@ -316,6 +318,7 @@ void main(void){
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vBcol = bcol;
+  vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
 }`;
@@ -334,6 +337,7 @@ varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
 varying float vCang;
+varying float vOid;
 varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
@@ -390,7 +394,7 @@ void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
-  if(focusId >= 0.0 && vSel > 0.5 && abs(99.0 - focusId) > 0.5 && _h < 0.5) discard;   // focusing a non-hybrid subshell → dim bonds/lone pairs
+  if(focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5 && _h < 0.5) discard;   // focus one orbital → others 50% transparent
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
@@ -897,7 +901,7 @@ async function run(fileName){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], colBuf = [],
+  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [],
         sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
@@ -905,11 +909,15 @@ async function run(fileName){
     wBuf[e]   = new Float32Array(halfCount[e]);                // per-lobe width (electronegativity)
     knobBuf[e] = new Uint8Array(halfCount[e]);                 // 1 = small back-knob → skipped by the selection outline
     cylAtBuf[e] = new Int32Array(halfCount[e]).fill(-1);       // per-lobe owning atom index (element-local) → picking
+    cylOidBuf[e] = new Float32Array(halfCount[e]);             // per-lobe orbital id (hybrid = 1000+i, π = 900) → focus filter
     cenBuf[e] = new Float32Array(halfCount[e]*3);              // bonding lobe's atom centre (selection test)
     lpBuf[e]  = new Float32Array(atomCount[e]*lonePairs(e)*16); // lone-pair lobes (translucent)
     lpCenBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)*3);
+    lpOidBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)); // per-lobe orbital id (lone pair = 2000+i)
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
   }
+  const hybCnt = [];   // running hybrid-orbital count per atom → each σ (+ its knob) gets a distinct id
+  for(let e=0;e<nEl;e++) hybCnt[e] = new Uint16Array(atomCount[e]);
   const _m = new BABYLON.Matrix(), _q = new BABYLON.Quaternion(),
         _s = new BABYLON.Vector3(), _p = new BABYLON.Vector3(), _ax = new BABYLON.Vector3();
   const LOBE_W = 0.42;                 // hybrid-orbital lobe width (Å)
@@ -1025,23 +1033,24 @@ async function run(fileName){
       const w1 = 1.0, w2 = 1.0;   // symmetric lobes (no electronegativity-driven taper)
       const bx=x2-x1, by=y2-y1, bz=z2-z1, bdir=nrm([bx,by,bz]);
       const ai1 = kci[a1], ai2 = kci[a2];
-      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el, ai, knob) => {
+      const halfLobe = (sx,sy,sz, ex,ey,ez, cx,cy,cz, wid, tap, el, ai, oid, knob) => {
         const i = cylIdx[el]++;
         cylTo(sx,sy,sz, ex,ey,ez, cylBuf[el], i*16, wid);
         wBuf[el][i] = tap;
         cylAtBuf[el][i] = ai;
+        cylOidBuf[el][i] = oid;
         if(knob) knobBuf[el][i] = 1;
         cenBuf[el][i*3]=cx; cenBuf[el][i*3+1]=cy; cenBuf[el][i*3+2]=cz;
       };
       // σ bond: overlapping hybrid lobes along the axis. Hydrogen contributes its own 1s orbital
       // (drawn separately), so it gets NO σ lobe — its 1s overlaps the partner's hybrid instead.
-      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1, ai1);
-      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2, ai2);
-      // …each hybrid gets a small back lobe (the textbook sp knob). Hydrogen uses a pure 1s
-      // (it doesn't hybridise), so it gets no knob.
+      // Each atom's σ (+ its back-knob) is one distinct hybrid orbital → id 1000 + hybrid#.
+      let oidH1=-1, oidH2=-1;
+      if(EL_LIST[e1]!=='H'){ oidH1 = 1000 + hybCnt[e1][ai1]++; halfLobe(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, x1,y1,z1, undefined, w1, e1, ai1, oidH1); }
+      if(EL_LIST[e2]!=='H'){ oidH2 = 1000 + hybCnt[e2][ai2]++; halfLobe(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, x2,y2,z2, undefined, w2, e2, ai2, oidH2); }
       const kL=0.24, kW=LOBE_W*0.5;
-      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1, ai1, true);
-      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2, ai2, true);
+      if(EL_LIST[e1]!=='H') halfLobe(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, x1,y1,z1, kW, 1.0, e1, ai1, oidH1, true);
+      if(EL_LIST[e2]!=='H') halfLobe(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, x2,y2,z2, kW, 1.0, e2, ai2, oidH2, true);
       // π direction = the bond-plane normal (from either atom), projected ⊥ to the bond axis.
       let pnrm = pn[a1] || pn[a2];
       if(pn[a1] && pn[a2]){ const s = (pn[a1][0]*pn[a2][0]+pn[a1][1]*pn[a2][1]+pn[a1][2]*pn[a2][2])<0?-1:1;
@@ -1057,8 +1066,8 @@ async function run(fileName){
         const pp = pi===0 ? per1 : per2;
         for(const sgn of [1,-1]){
           const gx=pp[0]*d*sgn, gy=pp[1]*d*sgn, gz=pp[2]*d*sgn;
-          halfLobe(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, x1,y1,z1, pw, 1.0, e1, ai1);
-          halfLobe(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, x2,y2,z2, pw, 1.0, e2, ai2);
+          halfLobe(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, x1,y1,z1, pw, 1.0, e1, ai1, 900);
+          halfLobe(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, x2,y2,z2, pw, 1.0, e2, ai2, 900);
         }
       }
     }
@@ -1066,10 +1075,12 @@ async function run(fileName){
       const e=m.el[k], lp=lonePairs(e);
       if(lp===0 || bd[k].length===0) continue;
       const ax=m.x[k]+ox, ay=m.y[k]+oy, az=m.z[k]+oz;
+      let lpi=0;
       for(const d of lonePairDirs(bd[k], lp)){
         const li=lpIdx[e]++;
         cylTo(ax,ay,az, ax+d[0]*LP_LEN, ay+d[1]*LP_LEN, az+d[2]*LP_LEN, lpBuf[e], li*16);
         lpCenBuf[e][li*3]=ax; lpCenBuf[e][li*3+1]=ay; lpCenBuf[e][li*3+2]=az;
+        lpOidBuf[e][li] = 2000 + lpi++;   // each lone pair is its own orbital
       }
     }
   }
@@ -1179,15 +1190,15 @@ async function run(fileName){
         // Valence s + p of a bonded atom are consumed into the sp/sp2/sp3 hybrids → shown as the bonding
         // orbitals + lone pairs, so drop the pure atomic versions (leave a zero, i.e. invisible, matrix).
         const hybridised = isBonded && maxNe > 1 && sh[0] === maxNe && ty <= 1;   // keep H's sole 1s (no inner core to fall back on)
-        const oid = hybridised ? 99 : subId(sh[0], ty);
+        // Fine per-orbital id: n*100 + type*10 + sub (sub picks pₓ/p_y/p_z within a p subshell).
         if(ty === 0){                                     // s → sphere
           if(!hybridised) sphereMat(cx,cy,cz, R*0.72, orbBuf[e], w*16);
-          oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; orbIdBuf[e][w]=oid; put(); w++;
+          oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; orbIdBuf[e][w]=sh[0]*100 + ty*10; put(); w++;
         } else {                                          // p/d/f → elongated lobes (dumbbell / cloverleaf)
-          const Lw = R*0.34;
+          const Lw = R*0.34; let k=0;
           for(const d of OTMPL[ty]){
             if(!hybridised) cylTo(cx,cy,cz, cx+d[0]*R, cy+d[1]*R, cz+d[2]*R, orbBuf[e], w*16, Lw);
-            oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; orbIdBuf[e][w]=oid; put(); w++;
+            oc[w*3]=cr; oc[w*3+1]=cg; oc[w*3+2]=cb; orbIdBuf[e][w]=sh[0]*100 + ty*10 + Math.floor(k/2); put(); w++; k++;
           }
         }
       }
@@ -1254,7 +1265,7 @@ async function run(fileName){
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
-      attributes: ['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],
+      attributes: ['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],
       uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos']
     });
     mat.setFloat('bubbleR', BUBBLE_R); mat.setFloat('nElec', 2); mat.setFloat('coneCos', CONE_COS); mat.backFaceCulling = true;   // opaque → default depth write
@@ -1287,7 +1298,7 @@ async function run(fileName){
     return (ix*gny+iy)*gnz+iz;
   };
   const cells = new Map();
-  const getCell = k => { let c=cells.get(k); if(!c){ c={ nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[], lpM:[],lpT:[],lpCen:[],lpCol:[] }; cells.set(k,c);} return c; };
+  const getCell = k => { let c=cells.get(k); if(!c){ c={ nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
 
   for(let e=0;e<nEl;e++){
@@ -1312,13 +1323,13 @@ async function run(fileName){
     { const cen=cenBuf[e];
       for(let i=0;i<cylIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
         pushN(c.boM, cylBuf[e], i*16, 16); c.boT.push(wBuf[e][i]); pushN(c.boCen, cen, i*3, 3);
-        c.boCol.push(ec[0],ec[1],ec[2]);
+        c.boCol.push(ec[0],ec[1],ec[2]); c.boOid.push(cylOidBuf[e][i]);
       } }
     // Lone-pair lobes.
     { const cen=lpCenBuf[e];
       for(let i=0;i<lpIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
         pushN(c.lpM, lpBuf[e], i*16, 16); c.lpT.push(1.0); pushN(c.lpCen, cen, i*3, 3);
-        c.lpCol.push(ec[0],ec[1],ec[2]);
+        c.lpCol.push(ec[0],ec[1],ec[2]); c.lpOid.push(lpOidBuf[e][i]);
       } }
     await yield_();
   }
@@ -1345,12 +1356,14 @@ async function run(fileName){
       m.thinInstanceSetBuffer('taper', new Float32Array(c.boT),1,true);
       m.thinInstanceSetBuffer('ocen', new Float32Array(c.boCen),3,true);
       m.thinInstanceSetBuffer('bcol', new Float32Array(c.boCol),3,true);
+      m.thinInstanceSetBuffer('oid', new Float32Array(c.boOid),1,true);
       m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
     if(c.lpM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cl'+k,{segments:3,diameter:1},scene); m.material=bondLPMat; m.isPickable=false;
       m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true);
       m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
       m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true);
       m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true);
+      m.thinInstanceSetBuffer('oid', new Float32Array(c.lpOid),1,true);
       m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
     for(const m of meshes) m.setEnabled(false);
     cellList.push({ cx,cy,cz, meshes, on:false });
@@ -1477,9 +1490,9 @@ async function run(fileName){
     const TOT = bondN + lpN;
     const bMat=new Float32Array(TOT*16), bTap=new Float32Array(TOT), bCol=new Float32Array(TOT*3), bCen=new Float32Array(TOT*3);
     const chlBonds=BABYLON.MeshBuilder.CreateSphere('chlBonds',{segments:6,diameter:1},scene);
-    chlBonds.material=mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','world0','world1','world2','world3'],['opacity']); chlBonds.material.setFloat('nElec', 1);
+    chlBonds.material=mkMat('chlBondMat','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']); chlBonds.material.setFloat('nElec', 1);
     chlBonds.isPickable=false; chlBonds.alwaysSelectAsActiveMesh=true;
-    chlBonds.thinInstanceSetBuffer('taper',bTap,1,false); chlBonds.thinInstanceSetBuffer('bcol',bCol,3,false); chlBonds.thinInstanceSetBuffer('ocen',bCen,3,false); chlBonds.thinInstanceSetBuffer('matrix',bMat,16,false); chlBonds.thinInstanceCount=TOT;
+    chlBonds.thinInstanceSetBuffer('taper',bTap,1,false); chlBonds.thinInstanceSetBuffer('bcol',bCol,3,false); chlBonds.thinInstanceSetBuffer('ocen',bCen,3,false); chlBonds.thinInstanceSetBuffer('oid',new Float32Array(TOT),1,true); chlBonds.thinInstanceSetBuffer('matrix',bMat,16,false); chlBonds.thinInstanceCount=TOT;
 
     // Chlorophyll centre → gate rendering on camera proximity (hide the detail when zoomed out).
     let chlCx=0,chlCy=0,chlCz=0; for(let k=0;k<N;k++){ chlCx+=rest[k*3]; chlCy+=rest[k*3+1]; chlCz+=rest[k*3+2]; } chlCx/=N;chlCy/=N;chlCz/=N;
@@ -1759,24 +1772,25 @@ async function run(fileName){
       const o=n*16; for(let j=0;j<16;j++) buf[o+j]=ob[s+j]; n++;
     }
     const cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
-    const bondsOK = (foc < 0 || foc === 99);    // bonds + lone pairs are the hybrid/valence group
     // Copy a lobe's matrix, widening it by `tap` (the fill shader scales the lobe's x/z by taper → the outline must too).
     const copyLobe = (src, s, tap) => { const o=n*16;
       for(let j=0;j<16;j++) buf[o+j]=src[s+j];
       buf[o]*=tap; buf[o+1]*=tap; buf[o+2]*=tap; buf[o+8]*=tap; buf[o+9]*=tap; buf[o+10]*=tap;   // scale local x & z axes
       n++;
     };
-    const cb=cylBuf[e], ce=cenBuf[e], wb=wBuf[e], kf=knobBuf[e];   // bonding lobes (σ/knob/π) with per-lobe taper
-    if(cb && bondsOK) for(let i=0;i<cylIdx[e] && n<OUT_MAX;i++){
+    const cb=cylBuf[e], ce=cenBuf[e], wb=wBuf[e], kf=knobBuf[e], co=cylOidBuf[e];   // bonding lobes (σ/knob/π)
+    if(cb) for(let i=0;i<cylIdx[e] && n<OUT_MAX;i++){
       if(kf[i]) continue;                                // skip the small back-knobs → clean outline (no central scribble)
       const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
       if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
+      if(foc >= 0 && Math.abs(co[i] - foc) > 0.5) continue;   // focus filter (per orbital)
       copyLobe(cb, i*16, wb[i]);
     }
-    const lb=lpBuf[e], le=lpCenBuf[e];                   // lone pairs (taper = 1)
-    if(lb && bondsOK) for(let i=0;i<lpIdx[e] && n<OUT_MAX;i++){
+    const lb=lpBuf[e], le=lpCenBuf[e], lo=lpOidBuf[e];   // lone pairs (taper = 1)
+    if(lb) for(let i=0;i<lpIdx[e] && n<OUT_MAX;i++){
       const dx=le[i*3]-cx, dy=le[i*3+1]-cy, dz=le[i*3+2]-cz;
       if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
+      if(foc >= 0 && Math.abs(lo[i] - foc) > 0.5) continue;   // focus filter (per orbital)
       copyLobe(lb, i*16, 1.0);
     }
     return n;
@@ -1942,24 +1956,43 @@ async function run(fileName){
   const sup = c => String(c).replace(/[0-9]/g, d => '⁰¹²³⁴⁵⁶⁷⁸⁹'[+d]);
   // Which focus id does a subshell map to? Its own atomic orbital if that lobe is really drawn,
   // otherwise 99 (it was hybridised → represented by the bonds + lone pairs).
-  const subshellTarget = (atom, n, ty) => {
-    const e=atom.e, cnt=orbCount(e), ob=orbBuf[e], oidb=orbIdBuf[e], base=atom.idx*cnt, mb=atom.idx*cnt*16, oid=n*4+ty;
-    for(let i=0;i<cnt;i++){ if(oidb[base+i]!==oid) continue; const s=mb+i*16;
-      if(ob[s]*ob[s]+ob[s+1]*ob[s+1]+ob[s+2]*ob[s+2] > 1e-9) return oid; }
-    return 99;
+  // Enumerate the selected atom's INDIVIDUAL orbitals (distinct focus ids) by scanning its lobes.
+  const collectOrbitals = atom => {
+    const e = atom.e, idx = atom.idx, list = [], seen = new Set();
+    const add = oid => { if(!seen.has(oid)){ seen.add(oid); list.push(oid); } };
+    const cnt = orbCount(e), ob = orbBuf[e], oidb = orbIdBuf[e], mb = idx*cnt*16, ob0 = idx*cnt;
+    for(let i=0;i<cnt;i++){ const s=mb+i*16;
+      if(ob[s]*ob[s]+ob[s+1]*ob[s+1]+ob[s+2]*ob[s+2] < 1e-9) continue; add(oidb[ob0+i]); }   // atomic orbitals
+    const cs=cylAtStart[e], cl=cylAtList[e], co=cylOidBuf[e], kf=knobBuf[e];
+    for(let p=cs[idx]; p<cs[idx+1]; p++){ const li=cl[p]; if(kf[li]) continue; add(co[li]); }  // hybrids + π
+    const le=lpCenBuf[e], lo=lpOidBuf[e], cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    for(let i=0;i<lpIdx[e];i++){ const dx=le[i*3]-cx,dy=le[i*3+1]-cy,dz=le[i*3+2]-cz; if(dx*dx+dy*dy+dz*dz>1e-4) continue; add(lo[i]); }  // lone pairs
+    list.sort((a,b)=>a-b);
+    return list;
+  };
+  const orbLabel = (oid, hyb) => {
+    if(oid >= 2000) return 'lp';                       // lone pair
+    if(oid >= 1000) return hyb || 'sp³';               // hybrid orbital
+    if(oid === 900) return 'π';                        // π orbital
+    const n = Math.floor(oid/100), type = Math.floor((oid%100)/10), sub = oid%10;
+    if(type === 1) return n + 'p' + 'xyz'[sub];        // 2pₓ / 2p_y / 2p_z
+    if(type >= 2) return n + 'spdf'[type] + (sub>0 ? '·'+(sub+1) : '');
+    return n + 's';
   };
   const hideConfig = () => { econfPanel.style.display='none'; econfPanel.innerHTML=''; };
   const hybLabel = {2:'sp',3:'sp²',4:'sp³',5:'sp³d',6:'sp³d²'};
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
     econfPanel.innerHTML = '';
-    const items = [], parts = [];
-    for(const [n,ty] of econf(e)){ const cnt = Math.min(capOf[ty], Z); Z -= cnt; if(cnt<=0) continue;
-      items.push([n,ty,cnt]); parts.push(n + subL[ty] + sup(cnt)); }
-    // steric number = σ bonds + lone pairs → hybridisation (only for bonded p-block atoms)
     const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
     const bonds = bondCntEA[e][atom.idx], sn = bonds + lonePairs(e);
     const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
+    // Hybrid-aware notation: once the valence s + p have merged, show the sp-hybrids, not 2s/2p.
+    const parts = [];
+    for(const [n,ty] of econf(e)){ const cnt = Math.min(capOf[ty], Z); Z -= cnt; if(cnt<=0) continue;
+      const isHyb = hyb && n===maxN && ty<=1;
+      if(!isHyb) parts.push(n + subL[ty] + sup(cnt)); }
+    if(hyb) parts.push('(' + hyb + ')' + sup(sn));
 
     const title = document.createElement('div');
     title.textContent = EL_LIST[e] + (hyb ? '  ·  ' + hyb + ' hybridised' : '');
@@ -1972,18 +2005,16 @@ async function run(fileName){
     const chips = [];
     const paint = () => { for(const ch of chips){ const on = (gFocusId>=0 && +ch.dataset.t===gFocusId);
       ch.style.background = on ? 'rgba(90,180,255,0.9)' : 'rgba(40,90,140,0.5)'; ch.style.color = on ? '#012' : '#dff'; } };
-    for(const [n,ty,cnt] of items){
+    for(const oid of collectOrbitals(atom)){
       const chip = document.createElement('button');
-      chip.textContent = n + subL[ty] + sup(cnt);
-      const tgt = subshellTarget(atom, n, ty);
-      chip.dataset.t = tgt;
-      chip.title = (tgt === 99) ? (hyb ? hyb + ' hybrid (bonds + lone pairs)' : 'valence (bonds + lone pairs)') : 'atomic '+n+subL[ty];
-      chip.style.cssText = 'font-family:inherit;font-size:15px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 9px;cursor:pointer;';
+      chip.textContent = orbLabel(oid, hyb);
+      chip.dataset.t = oid;
+      chip.style.cssText = 'font-family:inherit;font-size:14px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 8px;cursor:pointer;';
       chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
       chips.push(chip); row.appendChild(chip);
     }
     const hint = document.createElement('div');
-    hint.textContent = 'click a subshell to isolate it';
+    hint.textContent = 'click an orbital to isolate it';
     hint.style.cssText = 'font-size:10px;color:#6ac;margin-top:7px;';
     econfPanel.appendChild(title); econfPanel.appendChild(notation); econfPanel.appendChild(row); econfPanel.appendChild(hint);
     econfPanel.style.display = 'block';
