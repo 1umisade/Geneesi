@@ -46,6 +46,30 @@ body.dark-mode .zt:active{box-shadow:0 1px 0 #6d5f52}
 body.dark-mode .ztlabel{color:#cbb89b}
 body.dark-mode #speedbox{color:#cbb89b}
 body.dark-mode #econf{background:rgba(42,33,27,0.82)!important;border-color:#6d5f52!important}
+/* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
+#br-stack{position:absolute;right:14px;bottom:14px;z-index:25;display:flex;flex-direction:column;
+  align-items:flex-end;gap:10px;pointer-events:none}
+#br-stack>*{pointer-events:auto}
+#eltable{font-family:'Courier New',monospace;background:rgba(6,14,26,0.72);color:#cfe;
+  border:1px solid #2a6;border-radius:8px;padding:8px 9px;user-select:none;max-width:272px}
+#eltable .elhdr{font-size:11px;color:#8fe;letter-spacing:.5px;margin-bottom:6px;
+  display:flex;justify-content:space-between;align-items:center;gap:10px}
+#eltable .elclear{font-family:inherit;font-size:10px;color:#bcd;background:rgba(40,90,140,0.4);
+  border:1px solid #397;border-radius:5px;padding:2px 7px;cursor:pointer}
+#eltable .elgrid{display:grid;grid-template-columns:repeat(6,34px);gap:4px}
+.elbtn{font-family:inherit;font-size:13px;font-weight:bold;color:#eef;background:rgba(40,90,140,0.35);
+  border:1px solid #2a5070;border-radius:5px;padding:4px 0;cursor:pointer;display:flex;
+  flex-direction:column;align-items:center;gap:2px;transition:background .12s,border-color .12s}
+.elbtn:hover{background:rgba(60,120,180,0.5)}
+.elbtn .eldot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,0.3)}
+.elbtn.on{background:rgba(90,180,255,0.92);color:#012;border-color:#bdf;box-shadow:0 0 0 2px rgba(90,180,255,0.4)}
+body.dark-mode #eltable{background:rgba(42,33,27,0.86);border-color:#6d5f52;color:#eadfce}
+body.dark-mode #eltable .elhdr{color:#d9c496}
+body.dark-mode #eltable .elclear{background:#3a312b;border-color:#6d5f52;color:#cbb89b}
+body.dark-mode .elbtn{background:#3a312b;border-color:#6d5f52;color:#eadfce}
+body.dark-mode .elbtn:hover{background:#4a4038}
+body.dark-mode .elbtn.on{background:#eadfce;color:#2b211b;border-color:#eadfce;box-shadow:0 0 0 2px rgba(234,223,206,0.4)}
+#c.spawning{cursor:crosshair}
 </style>
 </head>
 <body>
@@ -805,6 +829,7 @@ async function run(fileName){
 
   /* Count atoms + bond-halves per element (for typed-array sizing) */
   const nEl = EL_LIST.length;
+  let gSpawnPlaneZ = 0, gSpawnBounds = null;   // fixed z-plane + x/y bounds where hand-spawned atoms live (set with the inner box)
   const atomCount = new Uint32Array(nEl), halfCount = new Uint32Array(nEl);
   for(const m of mols){
     if(m===chl) continue;   // chlorophyll is rendered separately (animated), not in the static build
@@ -890,7 +915,9 @@ async function run(fileName){
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
-        if(mdx*mdx + mdy*mdy < 9 && selCenter.x < 1e5 && !pickAtom()){   // a click on empty space → clear the selection
+        const isTap = mdx*mdx + mdy*mdy < 9;
+        if(isTap && spawnEl && !pickAtom()){ spawnAtPointer(); }         // armed element + tap on empty space → drop an atom
+        else if(isTap && selCenter.x < 1e5 && !pickAtom()){              // a click on empty space → clear the selection
           selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false); orbitLocked = false;
           selAtom = null; gFocusId = -1; hideConfig();
         }
@@ -1685,6 +1712,17 @@ async function run(fileName){
     const box=BABYLON.MeshBuilder.CreateLineSystem('cbox',{lines:E.map(e=>[new BABYLON.Vector3(...V[e[0]]), new BABYLON.Vector3(...V[e[1]])])},scene);
     box.color=new BABYLON.Color3(0.42,0.5,0.6); box.alpha=0.5; box.isPickable=false;
 
+    // Inner reference cage, centred on the molecule. Its mid-Z plane is the flat 2-D
+    // sheet onto which hand-spawned atoms are dropped (all share this z).
+    const gcx=(gMiX+gMaX)/2, gcy=(gMiY+gMaY)/2, gcz=(gMiZ+gMaZ)/2;
+    const iw=(gMaX-gMiX)*0.28+6, ih=(gMaY-gMiY)*0.28+6, id=(gMaZ-gMiZ)*0.28+6;
+    const iV=[[gcx-iw,gcy-ih,gcz-id],[gcx+iw,gcy-ih,gcz-id],[gcx+iw,gcy-ih,gcz+id],[gcx-iw,gcy-ih,gcz+id],
+              [gcx-iw,gcy+ih,gcz-id],[gcx+iw,gcy+ih,gcz-id],[gcx+iw,gcy+ih,gcz+id],[gcx-iw,gcy+ih,gcz+id]];
+    const ibox=BABYLON.MeshBuilder.CreateLineSystem('cboxInner',{lines:E.map(e=>[new BABYLON.Vector3(...iV[e[0]]), new BABYLON.Vector3(...iV[e[1]])])},scene);
+    ibox.color=new BABYLON.Color3(0.62,0.55,0.4); ibox.alpha=0.55; ibox.isPickable=false;
+    gSpawnPlaneZ = gcz;
+    gSpawnBounds = {x0:gcx-iw, x1:gcx+iw, y0:gcy-ih, y1:gcy+ih};
+
     const NW=260, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };
     const wc=new Float32Array(NW*3), wv=new Float32Array(NW*3), wh1=new Float32Array(NW*3), wh2=new Float32Array(NW*3);
     for(let i=0;i<NW;i++){
@@ -1986,10 +2024,118 @@ async function run(fileName){
   let selAtom = null;
   const econfPanel = document.createElement('div');
   econfPanel.id = 'econf';
-  econfPanel.style.cssText = 'position:absolute;right:14px;bottom:14px;z-index:25;display:none;pointer-events:auto;'
+  econfPanel.style.cssText = 'display:none;pointer-events:auto;'
     + 'font-family:\"Courier New\",monospace;background:rgba(6,14,26,0.72);color:#bfe;'
     + 'border:1px solid #2a6;border-radius:8px;padding:10px 12px;max-width:300px;user-select:none;';
-  document.body.appendChild(econfPanel);
+  // Bottom-right stack: hybridisation panel on top, the spawn element table below.
+  const brStack = document.createElement('div'); brStack.id = 'br-stack';
+  brStack.appendChild(econfPanel);
+  document.body.appendChild(brStack);
+
+  // ── Atom spawner ───────────────────────────────────────────────────────────
+  // Click an element in the table to arm it, then left-click empty space to drop a
+  // space-filling atom onto the fixed z-plane (gSpawnPlaneZ) — a flat 2-D sheet.
+  const spawned = [];                    // {sym,x,y,z}
+  const spawnMeshes = new Map();         // sym -> {mesh, mb, cap, count}
+  const spawnMat = rad => {
+    const m = new BABYLON.ShaderMaterial('spwMat'+rad, scene, 'imp',
+      {attributes:['position','instanceColor','world0','world1','world2','world3'],
+       uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos']});
+    m.setFloat('radius',rad); m.setFloat('isShell',0); m.setFloat('bubbleR',1e9);
+    m.setFloat('protonOutline',0); m.setFloat('coneCos',-1.0); m.backFaceCulling=false;
+    m.onBindObservable.add(()=>{ const eff=m.getEffect(); if(!eff) return;
+      eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);
+      eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    return m;
+  };
+  const spawnMeshFor = sym => {
+    let rec = spawnMeshes.get(sym); if(rec) return rec;
+    const el = ELEM[sym] || ELEM.FB, cap = 64;
+    const mesh = BABYLON.MeshBuilder.CreatePlane('spw_'+sym,{size:2},scene);
+    mesh.material = spawnMat(el.vr*FILL_SCALE); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+    const cb = new Float32Array(cap*4);
+    for(let i=0;i<cap;i++){ cb[i*4]=el.c[0]; cb[i*4+1]=el.c[1]; cb[i*4+2]=el.c[2]; cb[i*4+3]=0; }
+    mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
+    const mb = new Float32Array(cap*16);
+    mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=0;
+    rec = {mesh, mb, cb, cap, count:0}; spawnMeshes.set(sym,rec); return rec;
+  };
+  const spawnAtom = (sym, x, y, z) => {
+    const rec = spawnMeshFor(sym), el = ELEM[sym] || ELEM.FB;
+    if(rec.count >= rec.cap){                                 // grow buffers
+      const nc = rec.cap*2, mb = new Float32Array(nc*16), cb = new Float32Array(nc*4);
+      mb.set(rec.mb);
+      for(let i=0;i<nc;i++){ cb[i*4]=el.c[0]; cb[i*4+1]=el.c[1]; cb[i*4+2]=el.c[2]; cb[i*4+3]=0; }
+      rec.mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
+      rec.mesh.thinInstanceSetBuffer('matrix',mb,16,false);
+      rec.mb=mb; rec.cb=cb; rec.cap=nc;
+    }
+    const o = rec.count*16;
+    rec.mb[o]=1; rec.mb[o+5]=1; rec.mb[o+10]=1; rec.mb[o+15]=1;
+    rec.mb[o+12]=x; rec.mb[o+13]=y; rec.mb[o+14]=z;
+    rec.count++; rec.mesh.thinInstanceCount=rec.count; rec.mesh.thinInstanceBufferUpdated('matrix');
+    spawned.push({sym,x,y,z});
+  };
+  const clearSpawned = () => {
+    for(const rec of spawnMeshes.values()){ rec.count=0; rec.mesh.thinInstanceCount=0; }
+    spawned.length = 0;
+  };
+  // Drop the armed atom where the cursor ray meets the z-plane, clamped to the inner cage.
+  const spawnAtPointer = () => {
+    if(!spawnEl) return;
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const dz = ray.direction.z; if(Math.abs(dz) < 1e-6) return;   // looking parallel to the sheet
+    const t = (gSpawnPlaneZ - ray.origin.z)/dz; if(t <= 0) return;
+    let x = ray.origin.x + t*ray.direction.x, y = ray.origin.y + t*ray.direction.y;
+    if(gSpawnBounds){ x=Math.max(gSpawnBounds.x0,Math.min(gSpawnBounds.x1,x));
+                      y=Math.max(gSpawnBounds.y0,Math.min(gSpawnBounds.y1,y)); }
+    spawnAtom(spawnEl, x, y, gSpawnPlaneZ);
+  };
+
+  // ── Element table (spawn palette) ──────────────────────────────────────────
+  let spawnEl = null;
+  const canvasEl = document.getElementById('c');
+  const SPAWN_ELS = ['H','C','N','O','P','S','CL','NA','K','CA','MG','FE','MN','ZN','CU','CO'];
+  const elBtns = new Map();
+  const setSpawnEl = sym => {
+    spawnEl = (spawnEl === sym) ? null : sym;
+    for(const [s,b] of elBtns) b.classList.toggle('on', s === spawnEl);
+    canvasEl.classList.toggle('spawning', !!spawnEl);
+  };
+  {
+    const eltable = document.createElement('div'); eltable.id = 'eltable';
+    const hdr = document.createElement('div'); hdr.className = 'elhdr';
+    const hlab = document.createElement('span'); hlab.textContent = 'spawn atom';
+    const clr = document.createElement('button'); clr.className = 'elclear'; clr.textContent = 'clear';
+    clr.onclick = clearSpawned;
+    hdr.appendChild(hlab); hdr.appendChild(clr);
+    const grid = document.createElement('div'); grid.className = 'elgrid';
+    for(const sym of SPAWN_ELS){
+      const el = ELEM[sym] || ELEM.FB;
+      const b = document.createElement('button'); b.className = 'elbtn';
+      const dot = document.createElement('span'); dot.className = 'eldot';
+      dot.style.background = 'rgb('+Math.round(el.c[0]*255)+','+Math.round(el.c[1]*255)+','+Math.round(el.c[2]*255)+')';
+      const lab = document.createElement('span'); lab.textContent = sym.charAt(0) + sym.slice(1).toLowerCase();
+      b.appendChild(dot); b.appendChild(lab);
+      b.onclick = () => setSpawnEl(sym);
+      elBtns.set(sym, b); grid.appendChild(b);
+    }
+    eltable.appendChild(hdr); eltable.appendChild(grid);
+    brStack.appendChild(eltable);
+  }
+
+  // ── Camera: swing perpendicular to the spawn plane (view the 2-D sheet head-on) ──
+  const viewPerp = () => {
+    let best = null, bd = Infinity;                            // nearest raw alpha looking along ±Z
+    for(const base of [Math.PI/2, -Math.PI/2]){
+      const v = base + 2*Math.PI*Math.round((cam.alpha - base)/(2*Math.PI));
+      const d = Math.abs(v - cam.alpha); if(d < bd){ bd = d; best = v; }
+    }
+    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
+    BABYLON.Animation.CreateAndStartAnimation('perpA', cam, 'alpha', 60, 26, cam.alpha, best, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('perpB', cam, 'beta', 60, 26, cam.beta, Math.PI/2, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+  };
   const capOf = [2,6,10,14], subL = ['s','p','d','f'];
   const sup = c => String(c).replace(/[0-9]/g, d => '⁰¹²³⁴⁵⁶⁷⁸⁹'[+d]);
   // Which focus id does a subshell map to? Its own atomic orbital if that lobe is really drawn,
@@ -2078,9 +2224,11 @@ async function run(fileName){
     BABYLON.Animation.CreateAndStartAnimation('centerR', cam, 'radius', 60, 22,       // keep scale
       cam.radius, keepR, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
-  canvas.addEventListener('dblclick', centerOnAtom);                                // desktop
+  // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
+  const onDouble = () => { if(pickAtom()) centerOnAtom(); else viewPerp(); };
+  canvas.addEventListener('dblclick', onDouble);                                    // desktop
   scene.onPointerObservable.add(p => {
-    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ centerOnAtom(); return; }   // touch double-tap
+    if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
     if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
       const now = performance.now();
       if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
