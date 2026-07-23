@@ -337,19 +337,20 @@ void electrons(inout vec3 c){
   float ph = vSeed * 6.2831, t = uT;
   vec3 axA = vec3(cos(ph), sin(ph), 0.0);        // two screen-plane axes → the electrons circle in this plane
   vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
-  float orbit = t*1.1 + ph, R = (nElec > 1.5) ? 0.40 : 0.15;   // pair orbits wider than a lone bonding electron
+  float orbit = t*0.9 + ph, R = (nElec > 1.5) ? 0.36 : 0.14;   // slow circular rotation of the pair
   vec3 off = R * (cos(orbit)*axA + sin(orbit)*axB);
+  float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);   // gentle in/out breathing
+  float gEx = mix(34.0, 18.0, breathe);            // glow expands & contracts as it breathes
   vec3 e1 = normalize(V + off);
   float d1 = max(dot(N, e1), 0.0);
-  float core = pow(d1, 70.0), mid = pow(d1, 16.0), spread = pow(d1, 3.5);   // small core, wide spread-out light
+  float glow = pow(d1, gEx), core = pow(d1, 150.0);   // small footprint now
   if(nElec > 1.5){
     vec3 e2 = normalize(V - off);
     float d2 = max(dot(N, e2), 0.0);
-    core += pow(d2, 70.0); mid += pow(d2, 16.0); spread += pow(d2, 3.5);
+    glow += pow(d2, gEx); core += pow(d2, 150.0);
   }
-  c += vec3(0.20, 0.48, 1.0) * spread * 0.30;   // broad spread-out blue light
-  c += vec3(0.50, 0.72, 1.0) * mid * 0.65;      // mid glow
-  c += vec3(1.0, 1.0, 1.0)   * core * 1.25;     // small bright core
+  c += vec3(0.30, 0.58, 1.0) * glow * (0.30 + 0.30*breathe);   // breathing blue light (much smaller)
+  c += vec3(1.0, 1.0, 1.0)   * core * 1.1;                     // small bright core
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -473,19 +474,20 @@ void electrons(inout vec3 c){
   float ph = vSeed * 6.2831, t = uT;
   vec3 axA = vec3(cos(ph), sin(ph), 0.0);        // two screen-plane axes → the electrons circle in this plane
   vec3 axB = vec3(-sin(ph), cos(ph), 0.0);
-  float orbit = t*1.1 + ph, R = (nElec > 1.5) ? 0.40 : 0.15;   // pair orbits wider than a lone bonding electron
+  float orbit = t*0.9 + ph, R = (nElec > 1.5) ? 0.36 : 0.14;   // slow circular rotation of the pair
   vec3 off = R * (cos(orbit)*axA + sin(orbit)*axB);
+  float breathe = 0.5 + 0.5*sin(t*1.5 + ph*2.0);   // gentle in/out breathing
+  float gEx = mix(34.0, 18.0, breathe);            // glow expands & contracts as it breathes
   vec3 e1 = normalize(V + off);
   float d1 = max(dot(N, e1), 0.0);
-  float core = pow(d1, 70.0), mid = pow(d1, 16.0), spread = pow(d1, 3.5);   // small core, wide spread-out light
+  float glow = pow(d1, gEx), core = pow(d1, 150.0);   // small footprint now
   if(nElec > 1.5){
     vec3 e2 = normalize(V - off);
     float d2 = max(dot(N, e2), 0.0);
-    core += pow(d2, 70.0); mid += pow(d2, 16.0); spread += pow(d2, 3.5);
+    glow += pow(d2, gEx); core += pow(d2, 150.0);
   }
-  c += vec3(0.20, 0.48, 1.0) * spread * 0.30;   // broad spread-out blue light
-  c += vec3(0.50, 0.72, 1.0) * mid * 0.65;      // mid glow
-  c += vec3(1.0, 1.0, 1.0)   * core * 1.25;     // small bright core
+  c += vec3(0.30, 0.58, 1.0) * glow * (0.30 + 0.30*breathe);   // breathing blue light (much smaller)
+  c += vec3(1.0, 1.0, 1.0)   * core * 1.1;                     // small bright core
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
