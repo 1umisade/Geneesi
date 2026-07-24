@@ -247,6 +247,9 @@ uniform mat4 view;
 uniform mat4 projection;
 uniform float radius;
 uniform float uT;        // thermal-shake time (0 = still)
+#ifdef MACROMOVE
+uniform vec3 macroOffset;
+#endif
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -256,7 +259,11 @@ vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vWCen = W[3].xyz;
-  vec4 cV = view * vec4(shake(W[3].xyz), 1.0);
+  vec3 wc = shake(W[3].xyz);
+#ifdef MACROMOVE
+  wc += macroOffset;
+#endif
+  vec4 cV = view * vec4(wc, 1.0);
   vCenterV = cV.xyz;
   vUV = position.xy;
   vColor = instanceColor.rgb;
@@ -334,6 +341,9 @@ uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;
 uniform float uT;          // thermal-shake time
+#ifdef MACROMOVE
+uniform vec3 macroOffset;
+#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -349,6 +359,9 @@ void main(void){
   vec3 pos = vec3(position.x*wsc, position.y, position.z*wsc);
   vec3 nrm = normal;
   vec4 wp = W * vec4(pos, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MACROMOVE
+  wp.xyz += macroOffset;
+#endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vLocalDir = normalize(position);                 // direction on the unit lobe → where the electrons ride
@@ -515,6 +528,9 @@ uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;    // focused atom centre (or far away = none selected)
 uniform float uT;          // thermal-shake time
+#ifdef MACROMOVE
+uniform vec3 macroOffset;  // whole-macromolecule drag offset (only movable materials define this)
+#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -527,6 +543,9 @@ vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MACROMOVE
+  wp.xyz += macroOffset;
+#endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vLocalDir = normalize(position);                 // direction on the unit lobe → where the electrons ride
@@ -1135,6 +1154,9 @@ async function run(fileName){
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         const isTap = mdx*mdx + mdy*mdy < 9;
+        if(isTap && !spawnEl && wholeInView()){                          // zoomed out → select/deselect the whole macromolecule
+          if(pickAtom()) selectPSII(); else deselectMacro(); return;
+        }
         if(isTap && spawnEl && !pickAtom()){ spawnAtPointer(); }         // armed element + tap on empty space → drop an atom
         else if(isTap && selCenter.x < 1e5 && !pickAtom()){              // a click on empty space → clear the selection
           selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false); hideSelElec(); orbitLocked = false;
@@ -1494,11 +1516,13 @@ async function run(fileName){
   for(let e=0;e<nEl;e++){ bondCntEA[e] = new Uint8Array(atomCount[e]);
     for(let a=0;a<atomCount[e];a++) bondCntEA[e][a] = (bondDirEA[e][a]||[]).length; }
   bondDirEA.length = 0;   // done with bond directions
-  const impostorMat = (name, radius, isShell, protonOutline) => {
-    const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', {
+  const impostorMat = (name, radius, isShell, protonOutline, movable) => {
+    const opts = {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos']
-    });
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroOffset'] : [])
+    };
+    if(movable) opts.defines = ['#define MACROMOVE'];   // this nucleus follows the PSII drag offset
+    const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
     mat.setFloat('radius', radius);
     mat.setFloat('isShell', isShell);
     mat.setFloat('bubbleR', BUBBLE_R);
@@ -1513,11 +1537,13 @@ async function run(fileName){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
+      if(movable) eff.setVector3('macroOffset', gPsiiOffset);
     });
     return mat;
   };
 
   const selCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);   // focused atom centre (far = none) → its orbitals go transparent
+  const gPsiiOffset = new BABYLON.Vector3(0, 0, 0);        // whole-PSII drag offset (moved via the macromolecule gizmo)
   setLbl('Uploading to GPU…'); await yield_();
   /* ── Spatial culling ──────────────────────────────────────────────────────
      Bin every inner-core instance (nucleons, orbitals, bonds, lone pairs) into a
@@ -1528,7 +1554,10 @@ async function run(fileName){
      every cell (nucleon colour, orbital ocol, bond bcol). */
 
   // Shared materials (one of each kind for all cells).
-  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0);   // isShell=0; protons are coloured light red directly (no extra red rim)
+  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0, true);   // isShell=0; movable (follows PSII drag). Spawn nuclei use a separate non-movable material.
+  const spawnNucMat = impostorMat('spawnNuc', NUCLEON_R, 0.0, 0.0, false);   // spawned-atom nuclei — never move with PSII
+  spawnNucMat.setFloat('depthBias', 1.0); spawnNucMat.disableDepthWrite = true; spawnNucMat.setFloat('bubbleR', 1e9); spawnNucMat.setFloat('coneCos', -1.0);
+  spawnNucMat.onBindObservable.add(() => { const eff=spawnNucMat.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   // Every atom's nucleus is visible: bias it toward the camera so it shows on top of its OWN
   // orbitals, drawn after them (group 1) without writing depth so it can't punch through atoms
   // that are genuinely in front. selCenter bound live → the focused atom's static nucleus is
@@ -1539,26 +1568,28 @@ async function run(fileName){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec']
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','macroOffset'],
+    defines: ['#define MACROMOVE']   // PSII orbitals follow the drag offset
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // always fully revealed → no screen-door band
   orbMatG.backFaceCulling = true;
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
     eff.setFloat('uT', gWaveT);
-    eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
+    eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setVector3('macroOffset', gPsiiOffset);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec']
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','macroOffset'],
+      defines: ['#define MACROMOVE']   // PSII bonds follow the drag offset
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('uT', gWaveT);
-      eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
+      eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setVector3('macroOffset', gPsiiOffset);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     });
     return mat;
@@ -1985,6 +2016,8 @@ async function run(fileName){
     scene.fogEnd   = ar + modelR*0.6;
     const zoom = fitRadius / Math.max(0.01, ar);
     if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
+    if(gMacroSel && !wholeInView()) deselectMacro();   // zoomed back in → drop the macromolecule selection, atoms become selectable
+
     // Spatial culling: enable only the grid cells that are BOTH inside the camera reveal-bubble
     // AND inside the view frustum (the cone the camera is actually looking at) → cells behind
     // the camera or off to the sides never load.
@@ -1994,14 +2027,16 @@ async function run(fileName){
     const cR = cellHalfDiag;
     const COS_CONE = 0.92;   // ~23° half-angle: only a narrow cone straight ahead reveals orbitals (sides stay vdW)
     const nearR2 = (1.7*cR)*(1.7*cR);   // camera inside/adjacent to a cell → never cull it (else a zoomed-in atom vanishes at some orbit angles, leaving only its outline)
+    const moX=gPsiiOffset.x, moY=gPsiiOffset.y, moZ=gPsiiOffset.z;   // PSII drag offset → cells' actual world pos
     for(const cell of cellList){
-      const vx=cell.cx-cp.x, vy=cell.cy-cp.y, vz=cell.cz-cp.z, d2=vx*vx+vy*vy+vz*vz;
+      const wcx=cell.cx+moX, wcy=cell.cy+moY, wcz=cell.cz+moZ;
+      const vx=wcx-cp.x, vy=wcy-cp.y, vz=wcz-cp.z, d2=vx*vx+vy*vy+vz*vz;
       // Show everything: NO distance limit. Only skip cells that are fully OFF-SCREEN (behind the
       // camera / outside the view). Nothing in view is ever hidden by distance now.
       let want = true;
       if(d2 > nearR2){
         for(let p=0;p<6;p++){ const pl=fplanes[p];
-          if(pl.normal.x*cell.cx + pl.normal.y*cell.cy + pl.normal.z*cell.cz + pl.d < -cR){ want=false; break; }
+          if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ want=false; break; }
         }
       }
       if(want !== cell.on){ cell.on = want; for(const m of cell.meshes) m.setEnabled(want); }
@@ -2197,19 +2232,45 @@ async function run(fileName){
   // (The selected nucleus no longer tumbles — it stays fixed relative to its atom. setSelNuc places
   //  its nucleons once; the imp shader still gives them the same subtle thermal jitter as everything else.)
 
+  // ── Macromolecule (PSII) selection + move gizmo ──────────────────────────────
+  // When zoomed out far enough that the whole PSII fits, a left-click selects the MACROMOLECULE
+  // (white bounding box) and a position gizmo lets you drag the whole protein around.
+  const psiiCenter = new BABYLON.Vector3((bMiX+bMaX)/2, (bMiY+bMaY)/2, (bMiZ+bMaZ)/2);
+  const mBoxV = [[bMiX,bMiY,bMiZ],[bMaX,bMiY,bMiZ],[bMaX,bMiY,bMaZ],[bMiX,bMiY,bMaZ],[bMiX,bMaY,bMiZ],[bMaX,bMaY,bMiZ],[bMaX,bMaY,bMaZ],[bMiX,bMaY,bMaZ]];
+  const mBoxE = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  const psiiSelBox = BABYLON.MeshBuilder.CreateLineSystem('psiiSelBox', {lines: mBoxE.map(e=>[new BABYLON.Vector3(...mBoxV[e[0]]), new BABYLON.Vector3(...mBoxV[e[1]])])}, scene);
+  psiiSelBox.color = new BABYLON.Color3(1,1,1); psiiSelBox.isPickable = false; psiiSelBox.setEnabled(false); psiiSelBox.renderingGroupId = 3;
+  const macroGizmoNode = new BABYLON.TransformNode('macroGizmo', scene);
+  macroGizmoNode.position.copyFrom(psiiCenter);
+  const gizmoLayer = new BABYLON.UtilityLayerRenderer(scene);
+  const posGizmo = new BABYLON.PositionGizmo(gizmoLayer);
+  posGizmo.scaleRatio = 3; posGizmo.attachedNode = null;
+  posGizmo.onDragObservable.add(() => {
+    gPsiiOffset.copyFrom(macroGizmoNode.position.subtract(psiiCenter));   // the offset the shaders + picker use
+    psiiSelBox.position.copyFrom(gPsiiOffset);
+  });
+  let gMacroSel = false;
+  const wholeInView = () => cam.radius >= fitRadius * 0.85;   // zoomed out enough that the whole PSII fits the viewport
+  const selectPSII = () => { gMacroSel = true; psiiSelBox.position.copyFrom(gPsiiOffset); psiiSelBox.setEnabled(true);
+    macroGizmoNode.position.copyFrom(psiiCenter.add(gPsiiOffset)); posGizmo.attachedNode = macroGizmoNode; };
+  const deselectMacro = () => { if(!gMacroSel) return; gMacroSel = false; psiiSelBox.setEnabled(false); posGizmo.attachedNode = null; };
+
   // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
   // ray-vs-ellipsoid against its actual orbital lobes → the hitbox traces the lobes exactly.
   const _pkInv = new BABYLON.Matrix(), _pkM = new BABYLON.Matrix();
   const _pkLo = new BABYLON.Vector3(), _pkLd = new BABYLON.Vector3();
   const pickAtom = () => {
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    // hox/hoy/hoz = ray origin used by hitLobe. Protein atoms live in the moved PSII frame, so we test
+    // them with the ray shifted into PSII-local space (origin - offset); spawned atoms use world space.
+    let hox = ray.origin.x, hoy = ray.origin.y, hoz = ray.origin.z;
     const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
     const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
     // Ray vs one lobe (unit sphere r=0.5 in its local space). Returns the hit distance or -1.
     const hitLobe = (buf, off) => {
       BABYLON.Matrix.FromArrayToRef(buf, off, _pkM);
       _pkM.invertToRef(_pkInv);
-      BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(ox, oy, oz, _pkInv, _pkLo);
+      BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(hox, hoy, hoz, _pkInv, _pkLo);
       BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, _pkLd);
       const A2 = _pkLd.x*_pkLd.x + _pkLd.y*_pkLd.y + _pkLd.z*_pkLd.z;
       const B2 = 2*(_pkLo.x*_pkLd.x + _pkLo.y*_pkLd.y + _pkLo.z*_pkLd.z);
@@ -2222,15 +2283,18 @@ async function run(fileName){
       return t;
     };
     const cp = cam.position;                                     // only atoms whose orbitals actually render (inside the bubble) are pickable
+    // Shift the ray + camera into PSII-local space so the protein's baked (un-offset) coords test right.
+    hox = ox - gPsiiOffset.x; hoy = oy - gPsiiOffset.y; hoz = oz - gPsiiOffset.z;
+    const pcx = cp.x - gPsiiOffset.x, pcy = cp.y - gPsiiOffset.y, pcz = cp.z - gPsiiOffset.z;
     let bestT = Infinity, bE = -1, bA = -1;
     for(let e=0;e<nEl;e++){
       const hr = Math.max(orbExtent(e), 2.6), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];   // reach covers σ-lobe tips too
       const oc = orbCount(e), ob = orbBuf[e], cb = cylBuf[e], cs = cylAtStart[e], cl = cylAtList[e];
       const bub2 = (BUBBLE_R + hr) * (BUBBLE_R + hr);
       for(let a=0;a<cnt;a++){
-        const cxp = sb[a*16+12]-cp.x, cyp = sb[a*16+13]-cp.y, czp = sb[a*16+14]-cp.z;
+        const cxp = sb[a*16+12]-pcx, cyp = sb[a*16+13]-pcy, czp = sb[a*16+14]-pcz;
         if(cxp*cxp + cyp*cyp + czp*czp > bub2) continue;         // atom outside the reveal bubble → its orbitals aren't drawn
-        const px = sb[a*16+12]-ox, py = sb[a*16+13]-oy, pz = sb[a*16+14]-oz;
+        const px = sb[a*16+12]-hox, py = sb[a*16+13]-hoy, pz = sb[a*16+14]-hoz;
         const tca = px*dx + py*dy + pz*dz;
         if(tca <= 0) continue;                                   // atom behind the camera
         const d2 = px*px+py*py+pz*pz - tca*tca;
@@ -2309,7 +2373,7 @@ async function run(fileName){
   const spawnMeshFor = sym => {
     let rec = spawnMeshes.get(sym); if(rec) return rec;
     const nuc = BABYLON.MeshBuilder.CreatePlane('spwN_'+sym,{size:2},scene);
-    nuc.material = nucMatG; nuc.isPickable=false; nuc.alwaysSelectAsActiveMesh=true; nuc.renderingGroupId=1;
+    nuc.material = spawnNucMat; nuc.isPickable=false; nuc.alwaysSelectAsActiveMesh=true; nuc.renderingGroupId=1;
     const orb = BABYLON.MeshBuilder.CreateSphere('spwO_'+sym,{segments:3,diameter:1},scene);
     orb.material = orbSpawnMat; orb.isPickable=false; orb.alwaysSelectAsActiveMesh=true;   // always-shown orbitals, inline electrons, stable phase
     rec = { nuc, orb }; spawnMeshes.set(sym, rec); return rec;
