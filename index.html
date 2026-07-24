@@ -1147,15 +1147,17 @@ async function run(fileName){
       showTips();
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;
         if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it instead of rotating
+        if(gMacroSel && wholeInView() && !gizmoDragging && pickPSII()){ macroDrag = true; _mdHas = false; cam.detachControl(); dragging = false; return; }   // left-drag the selected protein → move it
         dragging = true; snappedDrag = false; }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
+      if(macroDrag){ macroDrag = false; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0, 2]; return; }   // finished dragging the protein
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0, 2]; return; }   // finished moving a spawned atom
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         const isTap = mdx*mdx + mdy*mdy < 9;
         if(isTap && !spawnEl && wholeInView()){                          // zoomed out → select/deselect the whole macromolecule
-          if(pickAtom()) selectPSII(); else deselectMacro(); return;
+          if(pickPSII()) selectPSII(); else deselectMacro(); return;
         }
         if(isTap && spawnEl && !pickAtom()){ spawnAtPointer(); }         // armed element + tap on empty space → drop an atom
         else if(isTap && selCenter.x < 1e5 && !pickAtom()){              // a click on empty space → clear the selection
@@ -1165,6 +1167,7 @@ async function run(fileName){
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
+      if(macroDrag){ macroDragMove(); return; }               // dragging the whole protein
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
       if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)){   // right-drag / ctrl+drag = pan → stop orbiting the selection
         orbitLocked = false; return;
@@ -1367,15 +1370,16 @@ async function run(fileName){
         per1 = nrm([pnrm[0]-dt*bdir[0], pnrm[1]-dt*bdir[1], pnrm[2]-dt*bdir[2]]); }
       else per1 = nrm(crs([bx,by,bz], Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
       const per2 = nrm(crs([bx,by,bz], per1));
-      const pw = LOBE_W*0.42, pf = 0.6, d = LOBE_W*1.0;
+      const pw = LOBE_W*0.42, pR = 0.62;   // p-orbital lobe width + reach (Å)
       const aromatic = aromSet.has(bkey(a1,a2));   // aromatic ring → the delocalised π is shown as a torus, not localized lobes
+      // A double/triple bond's π is the unhybridised p orbital on each atom → draw it as a real p
+      // dumbbell (two lobes ±⊥ to the bond). The two atoms' parallel p lobes overlap side-on = the π.
       for(let pi=0; pi<bo-1 && !aromatic; pi++){
         const pp = pi===0 ? per1 : per2;
-        for(const sgn of [1,-1]){
-          const gx=pp[0]*d*sgn, gy=pp[1]*d*sgn, gz=pp[2]*d*sgn;
-          halfLobe(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, x1,y1,z1, pw, 1.0, e1, ai1, 900);
-          halfLobe(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, x2,y2,z2, pw, 1.0, e2, ai2, 900);
-        }
+        if(EL_LIST[e1]!=='H'){ halfLobe(x1,y1,z1, x1+pp[0]*pR,y1+pp[1]*pR,z1+pp[2]*pR, x1,y1,z1, pw, 1.0, e1, ai1, 900);
+                               halfLobe(x1,y1,z1, x1-pp[0]*pR,y1-pp[1]*pR,z1-pp[2]*pR, x1,y1,z1, pw, 1.0, e1, ai1, 900); }
+        if(EL_LIST[e2]!=='H'){ halfLobe(x2,y2,z2, x2+pp[0]*pR,y2+pp[1]*pR,z2+pp[2]*pR, x2,y2,z2, pw, 1.0, e2, ai2, 900);
+                               halfLobe(x2,y2,z2, x2-pp[0]*pR,y2-pp[1]*pR,z2-pp[2]*pR, x2,y2,z2, pw, 1.0, e2, ai2, 900); }
       }
     }
     for(let k=0;k<m.na;k++){                          // non-bonding (lone-pair) orbitals → separate translucent buffer
@@ -2249,11 +2253,46 @@ async function run(fileName){
     gPsiiOffset.copyFrom(macroGizmoNode.position.subtract(psiiCenter));   // the offset the shaders + picker use
     psiiSelBox.position.copyFrom(gPsiiOffset);
   });
-  let gMacroSel = false;
+  let gMacroSel = false, gMacroHover = false, gizmoDragging = false;
   const wholeInView = () => cam.radius >= fitRadius * 0.85;   // zoomed out enough that the whole PSII fits the viewport
-  const selectPSII = () => { gMacroSel = true; psiiSelBox.position.copyFrom(gPsiiOffset); psiiSelBox.setEnabled(true);
-    macroGizmoNode.position.copyFrom(psiiCenter.add(gPsiiOffset)); posGizmo.attachedNode = macroGizmoNode; };
-  const deselectMacro = () => { if(!gMacroSel) return; gMacroSel = false; psiiSelBox.setEnabled(false); posGizmo.attachedNode = null; };
+  // Ray vs the PSII bounding box (in its moved frame) → true if the cursor is over the protein.
+  const pickPSII = () => {
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const o=[ray.origin.x,ray.origin.y,ray.origin.z], d=[ray.direction.x,ray.direction.y,ray.direction.z];
+    const lo=[bMiX+gPsiiOffset.x, bMiY+gPsiiOffset.y, bMiZ+gPsiiOffset.z], hi=[bMaX+gPsiiOffset.x, bMaY+gPsiiOffset.y, bMaZ+gPsiiOffset.z];
+    let tmin=-1e30, tmax=1e30;
+    for(let i=0;i<3;i++){ if(Math.abs(d[i])<1e-9){ if(o[i]<lo[i]||o[i]>hi[i]) return false; }
+      else { let t1=(lo[i]-o[i])/d[i], t2=(hi[i]-o[i])/d[i]; if(t1>t2){const t=t1;t1=t2;t2=t;} if(t1>tmin)tmin=t1; if(t2<tmax)tmax=t2; } }
+    return tmax >= Math.max(tmin, 0);
+  };
+  const followGizmo = () => { macroGizmoNode.position.copyFrom(psiiCenter.add(gPsiiOffset)); psiiSelBox.position.copyFrom(gPsiiOffset); };
+  const showMacroBox = () => { psiiSelBox.position.copyFrom(gPsiiOffset); psiiSelBox.setEnabled(true); };
+  const selectPSII = () => { gMacroSel = true; showMacroBox(); followGizmo(); posGizmo.attachedNode = macroGizmoNode; };
+  const deselectMacro = () => { gMacroSel = false; posGizmo.attachedNode = null; if(!gMacroHover) psiiSelBox.setEnabled(false); };
+  // Hover feedback: zoomed out + cursor over the protein → show the white box (like atom hover).
+  const macroHover = () => {
+    if(!wholeInView()){ gMacroHover=false; if(!gMacroSel) psiiSelBox.setEnabled(false); return false; }
+    gMacroHover = pickPSII();
+    if(gMacroHover) showMacroBox(); else if(!gMacroSel) psiiSelBox.setEnabled(false);
+    return gMacroHover;
+  };
+  posGizmo.onDragStartObservable.add(()=>{ gizmoDragging=true; });
+  posGizmo.onDragEndObservable.add(()=>{ gizmoDragging=false; });
+  // Free-move the selected PSII by left-dragging: project the cursor onto the plane through the
+  // PSII centre facing the camera, and translate the offset by the drag delta.
+  let macroDrag=false; const _mdPrev=new BABYLON.Vector3(); let _mdHas=false;
+  const macroPlanePoint = () => {
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const n = cam.getForwardRay(1).direction, c = psiiCenter.add(gPsiiOffset);
+    const denom = BABYLON.Vector3.Dot(ray.direction, n); if(Math.abs(denom)<1e-6) return null;
+    const t = BABYLON.Vector3.Dot(c.subtract(ray.origin), n)/denom; if(t<0) return null;
+    return ray.origin.add(ray.direction.scale(t));
+  };
+  const macroDragMove = () => {
+    const p = macroPlanePoint(); if(!p) return;
+    if(_mdHas){ gPsiiOffset.addInPlace(p.subtract(_mdPrev)); followGizmo(); }
+    _mdPrev.copyFrom(p); _mdHas=true;
+  };
 
   // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
   // ray-vs-ellipsoid against its actual orbital lobes → the hitbox traces the lobes exactly.
@@ -2660,6 +2699,8 @@ async function run(fileName){
       const now = performance.now();
       if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
       hoverT = now;
+      if(wholeInView()){ macroHover(); hl.setEnabled(false); return; }   // zoomed out → hover the whole protein (white box), not atoms
+      if(gMacroHover){ gMacroHover=false; if(!gMacroSel) psiiSelBox.setEnabled(false); }
       const a = pickAtom();
       // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
       if(a && BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a);
