@@ -996,6 +996,62 @@ void main(void){
   gl_FragColor = vec4(c.rgb * (1.0 - strength*occ), 1.0);
 }`;
 
+/* ── Painterly / comic-book post-process ───────────────────────────────────
+   Screen-space pass that turns the finished frame into a Telltale / LoL-splash
+   look: flat "watercolor" colour bands with a soft bleed, a warm painted grade,
+   and a black ink outline (Sobel edge) drawn over everything. Runs after the
+   scene renders, so it needs no changes to the many custom impostor shaders. */
+BABYLON.Effect.ShadersStore['painterlyPixelShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform vec2 texel;      // (1/width, 1/height)
+uniform float edgeAmt;   // ink line strength
+uniform float bands;     // posterise levels per channel
+uniform float paperAmt;  // paper-grain amount
+float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main(void){
+  vec3 c = texture2D(textureSampler, vUV).rgb;
+
+  // Watercolour soft fill: weighted cross blur → colour bleeds a little.
+  vec3 blur = c * 2.0;
+  blur += texture2D(textureSampler, vUV + texel*vec2( 1.4, 0.0)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2(-1.4, 0.0)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2( 0.0, 1.4)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2( 0.0,-1.4)).rgb;
+  blur /= 6.0;
+
+  // Posterise into flat painted bands.
+  vec3 p = floor(blur * bands + 0.5) / bands;
+
+  // Painted grade: ease saturation down, warm the whites, gentle S-contrast.
+  float lum = luma(p);
+  p = mix(vec3(lum), p, 0.88);
+  p *= vec3(1.04, 1.0, 0.93);
+  p = clamp((p - 0.5) * 1.08 + 0.5, 0.0, 1.0);
+
+  // Ink outline: Sobel on luminance of the sharp (un-blurred) image.
+  float tl=luma(texture2D(textureSampler,vUV+texel*vec2(-1.,-1.)).rgb);
+  float tc=luma(texture2D(textureSampler,vUV+texel*vec2( 0.,-1.)).rgb);
+  float tr=luma(texture2D(textureSampler,vUV+texel*vec2( 1.,-1.)).rgb);
+  float ml=luma(texture2D(textureSampler,vUV+texel*vec2(-1., 0.)).rgb);
+  float mr=luma(texture2D(textureSampler,vUV+texel*vec2( 1., 0.)).rgb);
+  float bl=luma(texture2D(textureSampler,vUV+texel*vec2(-1., 1.)).rgb);
+  float bc=luma(texture2D(textureSampler,vUV+texel*vec2( 0., 1.)).rgb);
+  float br=luma(texture2D(textureSampler,vUV+texel*vec2( 1., 1.)).rgb);
+  float gx = -tl - 2.0*ml - bl + tr + 2.0*mr + br;
+  float gy = -tl - 2.0*tc - tr + bl + 2.0*bc + br;
+  float g  = sqrt(gx*gx + gy*gy) * edgeAmt;
+  float ink = smoothstep(0.30, 0.65, g);
+  vec3 col = mix(p, vec3(0.03, 0.03, 0.045), ink);
+
+  // Static paper grain (per-2px, no time → no shimmer).
+  float n = fract(sin(dot(floor(vUV/texel*0.5), vec2(12.9898, 78.233))) * 43758.5453);
+  col += (n - 0.5) * paperAmt;
+
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
@@ -2739,6 +2795,22 @@ async function run(fileName){
   // channel, which the transparent shell now uses for blending (the two can't coexist).
   // FXAA + supersampling still smooth the edges.
   new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);
+  // Painterly / comic-book grade — runs last, over the anti-aliased frame. Toggle with "P".
+  let painterlyOn = true;
+  const painterly = new BABYLON.PostProcess('painterly', 'painterly',
+    ['texel', 'edgeAmt', 'bands', 'paperAmt'], null, 1.0, cam);
+  painterly.onApply = eff => {
+    eff.setFloat2('texel', 1 / engine.getRenderWidth(), 1 / engine.getRenderHeight());
+    eff.setFloat('edgeAmt', 1.5);    // ink line strength
+    eff.setFloat('bands', 6.0);      // flat colour bands per channel
+    eff.setFloat('paperAmt', 0.05);  // paper grain
+  };
+  window.addEventListener('keydown', e => {
+    if(e.key === 'p' || e.key === 'P'){
+      painterlyOn = !painterlyOn;
+      if(painterlyOn) cam.attachPostProcess(painterly); else cam.detachPostProcess(painterly);
+    }
+  });
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
 }
