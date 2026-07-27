@@ -248,7 +248,7 @@ uniform mat4 projection;
 uniform float radius;
 uniform float uT;        // thermal-shake time (0 = still)
 #ifdef MACROMOVE
-uniform vec3 macroOffset;
+uniform mat4 macroXform; uniform vec3 macroCenter;
 #endif
 varying vec2 vUV;
 varying vec3 vCenterV;
@@ -261,7 +261,7 @@ void main(void){
   vWCen = W[3].xyz;
   vec3 wc = shake(W[3].xyz);
 #ifdef MACROMOVE
-  wc += macroOffset;
+  wc = (macroXform * vec4(wc - macroCenter, 1.0)).xyz;
 #endif
   vec4 cV = view * vec4(wc, 1.0);
   vCenterV = cV.xyz;
@@ -342,7 +342,7 @@ uniform mat4 projection;
 uniform vec3 selCenter;
 uniform float uT;          // thermal-shake time
 #ifdef MACROMOVE
-uniform vec3 macroOffset;
+uniform mat4 macroXform; uniform vec3 macroCenter;
 #endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
@@ -360,7 +360,7 @@ void main(void){
   vec3 nrm = normal;
   vec4 wp = W * vec4(pos, 1.0); wp.xyz += shakeOff(W[3].xyz);
 #ifdef MACROMOVE
-  wp.xyz += macroOffset;
+  wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
 #endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
@@ -529,7 +529,7 @@ uniform mat4 projection;
 uniform vec3 selCenter;    // focused atom centre (or far away = none selected)
 uniform float uT;          // thermal-shake time
 #ifdef MACROMOVE
-uniform vec3 macroOffset;  // whole-macromolecule drag offset (only movable materials define this)
+uniform mat4 macroXform; uniform vec3 macroCenter;  // whole-macromolecule drag offset (only movable materials define this)
 #endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
@@ -544,7 +544,7 @@ void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
 #ifdef MACROMOVE
-  wp.xyz += macroOffset;
+  wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
 #endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
@@ -1523,7 +1523,7 @@ async function run(fileName){
   const impostorMat = (name, radius, isShell, protonOutline, movable) => {
     const opts = {
       attributes: ['position','instanceColor','world0','world1','world2','world3'],
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroOffset'] : [])
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter'] : [])
     };
     if(movable) opts.defines = ['#define MACROMOVE'];   // this nucleus follows the PSII drag offset
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
@@ -1541,7 +1541,7 @@ async function run(fileName){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      if(movable) eff.setVector3('macroOffset', gPsiiOffset);
+      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); }
     });
     return mat;
   };
@@ -1572,7 +1572,7 @@ async function run(fileName){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','macroOffset'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','macroXform','macroCenter'],
     defines: ['#define MACROMOVE']   // PSII orbitals follow the drag offset
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // always fully revealed → no screen-door band
@@ -1580,20 +1580,20 @@ async function run(fileName){
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
     eff.setFloat('uT', gWaveT);
-    eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setVector3('macroOffset', gPsiiOffset);
+    eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','macroOffset'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','macroXform','macroCenter'],
       defines: ['#define MACROMOVE']   // PSII bonds follow the drag offset
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('uT', gWaveT);
-      eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setVector3('macroOffset', gPsiiOffset);
+      eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     });
     return mat;
@@ -2031,9 +2031,10 @@ async function run(fileName){
     const cR = cellHalfDiag;
     const COS_CONE = 0.92;   // ~23° half-angle: only a narrow cone straight ahead reveals orbitals (sides stay vdW)
     const nearR2 = (1.7*cR)*(1.7*cR);   // camera inside/adjacent to a cell → never cull it (else a zoomed-in atom vanishes at some orbit angles, leaving only its outline)
-    const moX=gPsiiOffset.x, moY=gPsiiOffset.y, moZ=gPsiiOffset.z;   // PSII drag offset → cells' actual world pos
+    const M=macroGizmoNode.getWorldMatrix().m, cx0=psiiCenter.x, cy0=psiiCenter.y, cz0=psiiCenter.z;   // full PSII transform (rotation+translation)
     for(const cell of cellList){
-      const wcx=cell.cx+moX, wcy=cell.cy+moY, wcz=cell.cz+moZ;
+      const lx=cell.cx-cx0, ly=cell.cy-cy0, lz=cell.cz-cz0;
+      const wcx=M[0]*lx+M[4]*ly+M[8]*lz+M[12], wcy=M[1]*lx+M[5]*ly+M[9]*lz+M[13], wcz=M[2]*lx+M[6]*ly+M[10]*lz+M[14];
       const vx=wcx-cp.x, vy=wcy-cp.y, vz=wcz-cp.z, d2=vx*vx+vy*vy+vz*vz;
       // Show everything: NO distance limit. Only skip cells that are fully OFF-SCREEN (behind the
       // camera / outside the view). Nothing in view is ever hidden by distance now.
@@ -2240,20 +2241,25 @@ async function run(fileName){
   // When zoomed out far enough that the whole PSII fits, a left-click selects the MACROMOLECULE
   // (white bounding box) and a position gizmo lets you drag the whole protein around.
   const psiiCenter = new BABYLON.Vector3((bMiX+bMaX)/2, (bMiY+bMaY)/2, (bMiZ+bMaZ)/2);
-  const mBoxV = [[bMiX,bMiY,bMiZ],[bMaX,bMiY,bMiZ],[bMaX,bMiY,bMaZ],[bMiX,bMiY,bMaZ],[bMiX,bMaY,bMiZ],[bMaX,bMaY,bMiZ],[bMaX,bMaY,bMaZ],[bMiX,bMaY,bMaZ]];
-  const mBoxE = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-  const psiiSelBox = BABYLON.MeshBuilder.CreateLineSystem('psiiSelBox', {lines: mBoxE.map(e=>[new BABYLON.Vector3(...mBoxV[e[0]]), new BABYLON.Vector3(...mBoxV[e[1]])])}, scene);
-  psiiSelBox.color = new BABYLON.Color3(1,1,1); psiiSelBox.isPickable = false; psiiSelBox.setEnabled(false); psiiSelBox.renderingGroupId = 3;
+  // White glow-outline around the whole protein's SILHOUETTE (HighlightLayer), shown on hover/select.
+  const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 1.4, blurVerticalSize: 1.4, mainTextureRatio: 0.5 });
+  psiiHL.innerGlow = false; psiiHL.outerGlow = true;
+  for(const cell of cellList) for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
+  psiiHL.isEnabled = false;   // only rendered while hovering/selecting the macromolecule
+  const setOutline = on => { if(psiiHL.isEnabled !== on) psiiHL.isEnabled = on; };
   const macroGizmoNode = new BABYLON.TransformNode('macroGizmo', scene);
   macroGizmoNode.position.copyFrom(psiiCenter);
   const gizmoLayer = new BABYLON.UtilityLayerRenderer(scene);
   const posGizmo = new BABYLON.PositionGizmo(gizmoLayer);
-  posGizmo.scaleRatio = 3; posGizmo.attachedNode = null;
-  posGizmo.onDragObservable.add(() => {
-    gPsiiOffset.copyFrom(macroGizmoNode.position.subtract(psiiCenter));   // the offset the shaders + picker use
-    psiiSelBox.position.copyFrom(gPsiiOffset);
-  });
+  posGizmo.scaleRatio = 0.6; posGizmo.attachedNode = null;   // 5× smaller than before
+  posGizmo.onDragObservable.add(() => { gPsiiOffset.copyFrom(macroGizmoNode.position.subtract(psiiCenter)); });
+  const rotGizmo = new BABYLON.RotationGizmo(gizmoLayer);
+  rotGizmo.scaleRatio = 0.6; rotGizmo.attachedNode = null;
   let gMacroSel = false, gMacroHover = false, gizmoDragging = false;
+  for(const g of [posGizmo, rotGizmo]){
+    g.onDragStartObservable.add(()=>{ gizmoDragging=true; });
+    g.onDragEndObservable.add(()=>{ gizmoDragging=false; });
+  }
   const wholeInView = () => cam.radius >= fitRadius * 0.85;   // zoomed out enough that the whole PSII fits the viewport
   // Ray vs the PSII bounding box (in its moved frame) → true if the cursor is over the protein.
   const pickPSII = () => {
@@ -2265,19 +2271,16 @@ async function run(fileName){
       else { let t1=(lo[i]-o[i])/d[i], t2=(hi[i]-o[i])/d[i]; if(t1>t2){const t=t1;t1=t2;t2=t;} if(t1>tmin)tmin=t1; if(t2<tmax)tmax=t2; } }
     return tmax >= Math.max(tmin, 0);
   };
-  const followGizmo = () => { macroGizmoNode.position.copyFrom(psiiCenter.add(gPsiiOffset)); psiiSelBox.position.copyFrom(gPsiiOffset); };
-  const showMacroBox = () => { psiiSelBox.position.copyFrom(gPsiiOffset); psiiSelBox.setEnabled(true); };
-  const selectPSII = () => { gMacroSel = true; showMacroBox(); followGizmo(); posGizmo.attachedNode = macroGizmoNode; };
-  const deselectMacro = () => { gMacroSel = false; posGizmo.attachedNode = null; if(!gMacroHover) psiiSelBox.setEnabled(false); };
-  // Hover feedback: zoomed out + cursor over the protein → show the white box (like atom hover).
+  const followGizmo = () => { macroGizmoNode.position.copyFrom(psiiCenter.add(gPsiiOffset)); };
+  const selectPSII = () => { gMacroSel = true; setOutline(true); followGizmo(); posGizmo.attachedNode = macroGizmoNode; rotGizmo.attachedNode = macroGizmoNode; };
+  const deselectMacro = () => { gMacroSel = false; posGizmo.attachedNode = null; rotGizmo.attachedNode = null; if(!gMacroHover) setOutline(false); };
+  // Hover feedback: zoomed out + cursor over the protein → white silhouette outline (like atom hover).
   const macroHover = () => {
-    if(!wholeInView()){ gMacroHover=false; if(!gMacroSel) psiiSelBox.setEnabled(false); return false; }
+    if(!wholeInView()){ gMacroHover=false; if(!gMacroSel) setOutline(false); return false; }
     gMacroHover = pickPSII();
-    if(gMacroHover) showMacroBox(); else if(!gMacroSel) psiiSelBox.setEnabled(false);
+    setOutline(gMacroHover || gMacroSel);
     return gMacroHover;
   };
-  posGizmo.onDragStartObservable.add(()=>{ gizmoDragging=true; });
-  posGizmo.onDragEndObservable.add(()=>{ gizmoDragging=false; });
   // Free-move the selected PSII by left-dragging: project the cursor onto the plane through the
   // PSII centre facing the camera, and translate the offset by the drag delta.
   let macroDrag=false; const _mdPrev=new BABYLON.Vector3(); let _mdHas=false;
@@ -2700,7 +2703,7 @@ async function run(fileName){
       if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
       hoverT = now;
       if(wholeInView()){ macroHover(); hl.setEnabled(false); return; }   // zoomed out → hover the whole protein (white box), not atoms
-      if(gMacroHover){ gMacroHover=false; if(!gMacroSel) psiiSelBox.setEnabled(false); }
+      if(gMacroHover){ gMacroHover=false; if(!gMacroSel) setOutline(false); }
       const a = pickAtom();
       // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
       if(a && BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a);
