@@ -401,16 +401,17 @@ const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
 float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
-  float spd = fr * 11.0;                               // arc/wave speed grows with orbital energy (0 J = frozen)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
-  float rad = acos(clamp(d, 0.0, 1.0));
-  float shell = pow(0.5 + 0.5*sin(rad*30.0 - uT*spd), 3.0);                                    // expanding electric shells
-  float fil = pow(0.5 + 0.5*sin(ang*13.0 + sin(rad*24.0 - uT*spd)*3.4 + uT*spd*0.4), 7.0);     // writhing arc filaments
-  float crackle = 0.55 + 0.45*sin(uT*spd*2.4 + ang*8.0 + rad*13.0);                            // high-freq electric crackle
-  return (fil*1.7 + shell*0.55) * crackle * exp(-rad*5.0);
+  float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
+  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
+  float wig = fr * 0.22;
+  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
+  return wave * exp(-rad*4.0);
 }
 // A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
 vec3 wanderDir(float s){
@@ -442,10 +443,11 @@ void electrons(inout vec3 c, float ne, float bri){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  // Steady electric radiation (no on/off flash) so every atom's electrons show at once.
-  vec3 eout = vec3(0.30, 0.55, 1.0) * glow * 0.15
-            + vec3(0.60, 0.90, 1.0) * bolt * 2.4
-            + vec3(1.0, 1.0, 1.0)   * core * 0.9;
+  // Steady baby-blue point-waves (no on/off flash) so every atom's electrons show at once.
+  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
+  vec3 eout = bb * glow * 0.16
+            + bb * bolt * 2.7
+            + vec3(0.82, 0.93, 1.0) * core * 0.85;
   c += eout * bri;
 }
 void main(void){
@@ -584,16 +586,17 @@ const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
 float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
-  float spd = fr * 11.0;                               // arc/wave speed grows with orbital energy (0 J = frozen)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
-  float rad = acos(clamp(d, 0.0, 1.0));
-  float shell = pow(0.5 + 0.5*sin(rad*30.0 - uT*spd), 3.0);                                    // expanding electric shells
-  float fil = pow(0.5 + 0.5*sin(ang*13.0 + sin(rad*24.0 - uT*spd)*3.4 + uT*spd*0.4), 7.0);     // writhing arc filaments
-  float crackle = 0.55 + 0.45*sin(uT*spd*2.4 + ang*8.0 + rad*13.0);                            // high-freq electric crackle
-  return (fil*1.7 + shell*0.55) * crackle * exp(-rad*5.0);
+  float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
+  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
+  float wig = fr * 0.22;
+  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
+  return wave * exp(-rad*4.0);
 }
 // A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
 vec3 wanderDir(float s){
@@ -625,10 +628,11 @@ void electrons(inout vec3 c, float ne, float bri){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  // Steady electric radiation (no on/off flash) so every atom's electrons show at once.
-  vec3 eout = vec3(0.30, 0.55, 1.0) * glow * 0.15
-            + vec3(0.60, 0.90, 1.0) * bolt * 2.4
-            + vec3(1.0, 1.0, 1.0)   * core * 0.9;
+  // Steady baby-blue point-waves (no on/off flash) so every atom's electrons show at once.
+  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
+  vec3 eout = bb * glow * 0.16
+            + bb * bolt * 2.7
+            + vec3(0.82, 0.93, 1.0) * core * 0.85;
   c += eout * bri;
 }
 void main(void){
@@ -718,16 +722,17 @@ varying float vOid;
 varying float vCang;
 float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
-  float spd = fr * 11.0;                               // arc/wave speed grows with orbital energy (0 J = frozen)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
-  float rad = acos(clamp(d, 0.0, 1.0));
-  float shell = pow(0.5 + 0.5*sin(rad*30.0 - uT*spd), 3.0);                                    // expanding electric shells
-  float fil = pow(0.5 + 0.5*sin(ang*13.0 + sin(rad*24.0 - uT*spd)*3.4 + uT*spd*0.4), 7.0);     // writhing arc filaments
-  float crackle = 0.55 + 0.45*sin(uT*spd*2.4 + ang*8.0 + rad*13.0);                            // high-freq electric crackle
-  return (fil*1.7 + shell*0.55) * crackle * exp(-rad*5.0);
+  float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
+  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
+  float wig = fr * 0.22;
+  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
+  return wave * exp(-rad*4.0);
 }
 vec3 wanderDir(float s){
   return normalize(vec3(
@@ -757,9 +762,10 @@ vec3 electronGlow(float ne){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  return vec3(0.30, 0.55, 1.0) * glow * 0.15
-       + vec3(0.60, 0.90, 1.0) * bolt * 2.4
-       + vec3(1.0, 1.0, 1.0)   * core * 0.9;
+  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
+  return bb * glow * 0.16
+       + bb * bolt * 2.7
+       + vec3(0.82, 0.93, 1.0) * core * 0.85;
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -793,16 +799,17 @@ varying vec3 vBcol;
 varying float vCang;
 float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
-  float spd = fr * 11.0;                               // arc/wave speed grows with orbital energy (0 J = frozen)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
-  float rad = acos(clamp(d, 0.0, 1.0));
-  float shell = pow(0.5 + 0.5*sin(rad*30.0 - uT*spd), 3.0);                                    // expanding electric shells
-  float fil = pow(0.5 + 0.5*sin(ang*13.0 + sin(rad*24.0 - uT*spd)*3.4 + uT*spd*0.4), 7.0);     // writhing arc filaments
-  float crackle = 0.55 + 0.45*sin(uT*spd*2.4 + ang*8.0 + rad*13.0);                            // high-freq electric crackle
-  return (fil*1.7 + shell*0.55) * crackle * exp(-rad*5.0);
+  float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
+  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
+  float wig = fr * 0.22;
+  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
+  return wave * exp(-rad*4.0);
 }
 vec3 wanderDir(float s){
   return normalize(vec3(
@@ -832,9 +839,10 @@ vec3 electronGlow(float ne){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  return vec3(0.30, 0.55, 1.0) * glow * 0.15
-       + vec3(0.60, 0.90, 1.0) * bolt * 2.4
-       + vec3(1.0, 1.0, 1.0)   * core * 0.9;
+  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
+  return bb * glow * 0.16
+       + bb * bolt * 2.7
+       + vec3(0.82, 0.93, 1.0) * core * 0.85;
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
