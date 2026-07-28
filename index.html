@@ -1291,7 +1291,7 @@ async function run(){
   let iMinX=Infinity,iMaxX=-Infinity,iMinZ=Infinity,iMaxZ=-Infinity;
   for(const c of integ){ iMinX=Math.min(iMinX,c.x); iMaxX=Math.max(iMaxX,c.x); iMinZ=Math.min(iMinZ,c.z); iMaxZ=Math.max(iMaxZ,c.z); }
   const memCenX = (iMinX+iMaxX)/2, memCenZ = (iMinZ+iMaxZ)/2;
-  const memHalfX = (iMaxX-iMinX)/2 + 220, memHalfZ = (iMaxZ-iMinZ)/2 + 180;   // + margin so complexes sit inside the sheet
+  const memHalfX = (iMaxX-iMinX)/2 + 900, memHalfZ = 620;   // huge sheet extending well past the complexes → far edge fogs out toward the horizon
 
   /* Count atoms + bond-halves per element (for typed-array sizing) */
   const nEl = EL_LIST.length;
@@ -2187,7 +2187,7 @@ async function run(){
     // RECTANGULAR bilayer spanning the embedded complexes (wide in X, shallow in Z). Tile spacing S
     // is raised as needed to keep the total lipid count bounded (TARGET_LIPIDS) so a very wide
     // membrane doesn't explode into millions of lobes.
-    const TARGET_LIPIDS = 3000;
+    const TARGET_LIPIDS = 6000;   // more tiles for the bigger sheet (only near+in-view blocks render, far ones fog out)
     const tileArea = (4*memHalfX*memHalfZ) / Math.max(1, TARGET_LIPIDS/2);
     const S = Math.max(Math.max(xr,zr)*0.9, Math.sqrt(tileArea), 8);
     const Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
@@ -2494,6 +2494,11 @@ async function run(){
     const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
     const REVEAL2 = REVEAL_DIST*REVEAL_DIST;
     const M=macroGizmoNode.getWorldMatrix().m, cx0=psiiCenter.x, cy0=psiiCenter.y, cz0=psiiCenter.z;   // full PSII transform (rotation+translation)
+    // Membrane extras: far-cull the huge sheet (only render where it's visible; the rest fogs out),
+    // and when viewing SIDE-ON, hide the lipids in FRONT of the model plane → cross-cut view.
+    const memZ=bilayerCen.z, memY=bilayerCen.y, dzc=cp.z-memZ, dyc=cp.y-memY;
+    const sideView = Math.abs(dzc) > Math.abs(dyc)*0.9 + 60, cutSign = dzc>=0 ? 1 : -1;
+    const memFar = scene.fogEnd*1.15, memFar2 = memFar*memFar;
     for(const cell of cellList){
       const cR = cell.r;
       let wcx, wcy, wcz;
@@ -2506,6 +2511,10 @@ async function run(){
         for(let p=0;p<6;p++){ const pl=fplanes[p];
           if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ vis=false; break; }
         }
+      }
+      if(!cell.macro && vis){                            // membrane-only culls
+        if(d2 > memFar2) vis = false;                    // far edge fogs out → skip
+        else if(sideView && (cell.cz - memZ)*cutSign > 0) vis = false;   // front half → cross-cut
       }
       const near = vis && d2 < REVEAL2;                   // close enough for electrons + nuclei
       const wantOrb = vis && !gVdw;                       // orbital lobes: in view, orbital mode
