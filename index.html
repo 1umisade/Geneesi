@@ -293,7 +293,7 @@ uniform mat4 macroXform; uniform vec3 macroCenter;
 #endif
 #ifdef MODELMOVE
 attribute float modelId;         // which loaded model this instance belongs to (index into modelOff)
-uniform vec3 modelOff[24];       // per-model drag offset (for repositioning complexes)
+uniform mat4 modelXform[24];     // per-model transform (rotate around centre + translate) for repositioning
 uniform vec3 modelCol[24];       // per-model pastel colour
 uniform float colorMode;         // 1 = colour by model (pastel), 0 = by element
 #endif
@@ -311,7 +311,7 @@ void main(void){
   base += tileOff;
 #endif
 #ifdef MODELMOVE
-  base += modelOff[int(modelId + 0.5)];
+  base = (modelXform[int(modelId + 0.5)] * vec4(base, 1.0)).xyz;
 #endif
   vWCen = base;
   vec3 wc = shake(base);
@@ -409,7 +409,7 @@ uniform float uT;          // thermal-shake time
 uniform mat4 macroXform; uniform vec3 macroCenter;
 #endif
 #ifdef MODELMOVE
-attribute float modelId; uniform vec3 modelOff[24];
+attribute float modelId; uniform mat4 modelXform[24];
 uniform vec3 modelCol[24]; uniform float colorMode;
 #endif
 varying vec3 vViewPos;
@@ -428,7 +428,7 @@ void main(void){
   vec3 nrm = normal;
   vec4 wp = W * vec4(pos, 1.0); wp.xyz += shakeOff(W[3].xyz);
 #ifdef MODELMOVE
-  wp.xyz += modelOff[int(modelId + 0.5)];
+  wp.xyz = (modelXform[int(modelId + 0.5)] * vec4(wp.xyz, 1.0)).xyz;
 #endif
 #ifdef MACROMOVE
   wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
@@ -621,7 +621,7 @@ uniform float uT;          // thermal-shake time
 uniform mat4 macroXform; uniform vec3 macroCenter;  // whole-macromolecule drag offset (only movable materials define this)
 #endif
 #ifdef MODELMOVE
-attribute float modelId; uniform vec3 modelOff[24];
+attribute float modelId; uniform mat4 modelXform[24];
 uniform vec3 modelCol[24]; uniform float colorMode;
 #endif
 varying vec3 vViewPos;
@@ -637,7 +637,7 @@ void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
 #ifdef MODELMOVE
-  wp.xyz += modelOff[int(modelId + 0.5)];
+  wp.xyz = (modelXform[int(modelId + 0.5)] * vec4(wp.xyz, 1.0)).xyz;
 #endif
 #ifdef MACROMOVE
   wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
@@ -1629,7 +1629,10 @@ async function run(){
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gVdw = true;            // graphics mode: true = space-filling vdW spheres (default), false = orbitals
   const MAX_MODELS = 24;
-  const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model drag offset (bound as modelOff[] in the movable materials)
+  const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model translation offset (for picking + the label)
+  const gModelXform = new Float32Array(MAX_MODELS*16);   // per-model full transform (rotate around centre + translate) → bound as modelXform[]
+  const gModelQuat = new Float32Array(MAX_MODELS*4);     // per-model rotation quaternion (x,y,z,w)
+  for(let i=0;i<MAX_MODELS;i++){ gModelXform[i*16]=1; gModelXform[i*16+5]=1; gModelXform[i*16+10]=1; gModelXform[i*16+15]=1; gModelQuat[i*4+3]=1; }   // identity
   let gColorMode = false;                             // false = colour by element, true = one pastel per model
   const gModelCol = new Float32Array(MAX_MODELS*3);   // per-model pastel colour (bound as modelCol[])
   { const N = Math.max(1, mols.length);               // spread hues → a distinct pastel per model
@@ -1751,7 +1754,7 @@ async function run(){
   const impostorMat = (name, radius, isShell, protonOutline, movable) => {
     const opts = {
       attributes: ['position','instanceColor','world0','world1','world2','world3'].concat(movable ? ['modelId'] : []),
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelOff','modelCol','colorMode'] : [])
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelXform','modelCol','colorMode'] : [])
     };
     if(movable) opts.defines = ['#define MACROMOVE','#define MODELMOVE'];   // follows the PSII gizmo AND its own per-model drag
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
@@ -1769,7 +1772,7 @@ async function run(){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setArray3('modelOff', gModelOff); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); }
+      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); }
     });
     return mat;
   };
@@ -1800,27 +1803,27 @@ async function run(){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelOff','modelCol','colorMode'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // always fully revealed → no screen-door band
   orbMatG.backFaceCulling = true;
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
-    eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setArray3('modelOff', gModelOff);
+    eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelOff','modelCol','colorMode'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode'],
       defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
-      eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setArray3('modelOff', gModelOff); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
+      eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     });
@@ -1897,13 +1900,13 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelOff','modelCol','colorMode'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
   vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false;
   vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
-    eff.setFloat('uT',gWaveT); eff.setArray3('modelOff', gModelOff); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
+    eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
@@ -2708,27 +2711,45 @@ async function run(){
   // ── Per-model move: double-click a complex → position gizmo on it; drag to reposition. A label
   //    shows its live world centre (x,y,z) so the exact placement numbers can be read straight off. ──
   const modelNode = new BABYLON.TransformNode('modelMove', scene);
+  modelNode.rotationQuaternion = BABYLON.Quaternion.Identity();
   const modelGizmo = new BABYLON.PositionGizmo(gizmoLayer);
-  modelGizmo.scaleRatio = 1.2; modelGizmo.attachedNode = null;
-  modelGizmo.onDragStartObservable.add(()=>{ gizmoDragging=true; });
-  modelGizmo.onDragEndObservable.add(()=>{ gizmoDragging=false; });
+  const modelRotGizmo = new BABYLON.RotationGizmo(gizmoLayer);
+  modelGizmo.scaleRatio = 1.2; modelRotGizmo.scaleRatio = 1.2;
+  modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
+  for(const g of [modelGizmo, modelRotGizmo]){
+    g.onDragStartObservable.add(()=>{ gizmoDragging=true; });
+    g.onDragEndObservable.add(()=>{ gizmoDragging=false; });
+  }
   let gSelModel = -1;
   const modelLabel = document.createElement('div'); modelLabel.className='mlbl';
   modelLabel.style.pointerEvents='none'; modelLabel.style.display='none'; modelLabel.style.zIndex='30'; document.body.appendChild(modelLabel);
+  const _tmpR = new BABYLON.Matrix();
+  const applyModelTransform = () => {   // rebuild the model's transform + offset from the gizmo node
+    if(gSelModel<0) return; const mi=mInfo[gSelModel];
+    gModelOff[gSelModel*3]   = modelNode.position.x - mi.cx;
+    gModelOff[gSelModel*3+1] = modelNode.position.y - mi.cy;
+    gModelOff[gSelModel*3+2] = modelNode.position.z - mi.cz;
+    const q = modelNode.rotationQuaternion || BABYLON.Quaternion.Identity();
+    gModelQuat[gSelModel*4]=q.x; gModelQuat[gSelModel*4+1]=q.y; gModelQuat[gSelModel*4+2]=q.z; gModelQuat[gSelModel*4+3]=q.w;
+    q.toRotationMatrix(_tmpR);   // world = Translate(-centre) · Rotate(q) · Translate(nodePos) → rotate about the model centre
+    const B = BABYLON.Matrix.Translation(-mi.cx,-mi.cy,-mi.cz).multiply(_tmpR).multiply(BABYLON.Matrix.Translation(modelNode.position.x, modelNode.position.y, modelNode.position.z));
+    B.copyToArray(gModelXform, gSelModel*16);
+    refreshModelLabel();
+  };
   const refreshModelLabel = () => {
     if(gSelModel<0){ modelLabel.style.display='none'; return; }
     const mi=mInfo[gSelModel], wx=mi.cx+gModelOff[gSelModel*3], wy=mi.cy+gModelOff[gSelModel*3+1], wz=mi.cz+gModelOff[gSelModel*3+2];
-    modelLabel.textContent = mi.name+'   x '+Math.round(wx)+'  y '+Math.round(wy)+'  z '+Math.round(wz);
+    const e = (modelNode.rotationQuaternion || BABYLON.Quaternion.Identity()).toEulerAngles(), D=180/Math.PI;
+    modelLabel.textContent = mi.name+'   x '+Math.round(wx)+' y '+Math.round(wy)+' z '+Math.round(wz)
+      +'   rot '+Math.round(e.x*D)+'° '+Math.round(e.y*D)+'° '+Math.round(e.z*D)+'°';
     modelLabel._w = new BABYLON.Vector3(wx,wy,wz);
   };
   const selectModel = mid => { gSelModel = mid; const mi=mInfo[mid];
     modelNode.position.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]);
-    modelGizmo.attachedNode = modelNode; refreshModelLabel(); };
-  modelGizmo.onDragObservable.add(() => { if(gSelModel<0) return; const mi=mInfo[gSelModel];
-    gModelOff[gSelModel*3]   = modelNode.position.x - mi.cx;
-    gModelOff[gSelModel*3+1] = modelNode.position.y - mi.cy;
-    gModelOff[gSelModel*3+2] = modelNode.position.z - mi.cz;
-    refreshModelLabel(); });
+    modelNode.rotationQuaternion = new BABYLON.Quaternion(gModelQuat[mid*4], gModelQuat[mid*4+1], gModelQuat[mid*4+2], gModelQuat[mid*4+3]);
+    modelGizmo.attachedNode = modelNode; modelRotGizmo.attachedNode = modelNode; refreshModelLabel(); };
+  modelGizmo.onDragObservable.add(applyModelTransform);
+  modelRotGizmo.onDragObservable.add(applyModelTransform);
   const pickModelAtCursor = () => {   // accurate: nearest model whose CURRENT bounding box the cursor ray enters
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const o=ray.origin, d=ray.direction; let best=-1, bt=Infinity;
