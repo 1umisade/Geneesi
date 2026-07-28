@@ -98,6 +98,23 @@ body.dark-mode{
 #speed::-moz-range-thumb{width:48px;height:48px;border:0;border-radius:0;cursor:pointer;
   background:url('./mona_knob_48.png') center/48px 48px no-repeat}
 #speedbox{padding-bottom:19px}   /* room for the oversized knob so it isn't clipped at the window edge */
+/* ── UI gizmo panel: move/rotate handles for the selected complex, docked above the speed slider ── */
+#gizmo-ui{position:fixed;left:16px;bottom:96px;z-index:26;display:none;width:154px;
+  font-family:'Courier New',monospace;color:var(--ink);background:var(--paper);
+  border:3px solid var(--brown);border-radius:16px;box-shadow:0 4px 0 var(--brown);
+  padding:8px 10px;user-select:none;-webkit-user-select:none}
+#gizmo-ui .giz-title{font-size:11px;font-weight:bold;color:var(--brown);margin-bottom:6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#gizmo-ui .giz-pads{display:flex;gap:8px}
+#gizmo-ui .giz-pad{flex:1;height:54px;border:2.5px solid var(--brown);border-radius:12px;background:#e7d4ac;
+  cursor:grab;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;touch-action:none}
+#gizmo-ui .giz-pad.active{cursor:grabbing;background:var(--sage);color:var(--sageink)}
+#gizmo-ui .giz-pad span{font-size:20px;line-height:1;pointer-events:none}
+#gizmo-ui .giz-pad label{font-size:9px;font-weight:bold;pointer-events:none}
+#gizmo-ui .giz-btns{display:flex;gap:5px;margin-top:7px}
+#gizmo-ui .giz-btns button{flex:1;font-family:inherit;font-size:10px;font-weight:bold;color:var(--ink);
+  background:var(--paper);border:2px solid var(--brown);border-radius:8px;padding:4px 2px;cursor:pointer}
+#gizmo-ui .giz-btns button:active{background:var(--sage);color:var(--sageink)}
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
 #br-stack{position:absolute;right:14px;bottom:14px;z-index:25;display:flex;flex-direction:column;
   align-items:flex-end;gap:12px;pointer-events:none}
@@ -1574,8 +1591,11 @@ async function run(){
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.15; cam.inertia = 0.85; cam.panningSensibility = 20;   // minZ up from 0.02 → far better depth precision (kills z-fighting stripes)
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
-  cam.inputs.attached.pointers.buttons = [0, 2];          // middle button freed for drag-zoom (left=rotate, right=pan)
+  // ONLY the left button drives Babylon's camera input (rotation). The right button is handled by
+  // our own grab-pan below and is deliberately NOT in this list, so right-drag can never rotate.
+  cam.inputs.attached.pointers.buttons = [0];
   canvas.addEventListener('mousedown', e => { if(e.button === 1) e.preventDefault(); });   // block middle-click autoscroll
+  canvas.addEventListener('contextmenu', e => e.preventDefault());   // right-drag pans → suppress the context menu
   // Show the zoom tips while dragging; keep them 2 s after release (or after a tap).
   const tips = document.getElementById('zoomtips');
   let hideTimer = null;
@@ -1584,6 +1604,19 @@ async function run(){
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
   let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
   let dnX = 0, dnY = 0, snappedDrag = false;   // drag-start pointer pos + whether this drag already re-pivoted
+  let panning = false, panDepth = 1, modelDrag = -1;   // right-drag grab-pan state + which complex a left-drag is moving
+  /* Grab-pan: translate the pivot so the world point under the cursor stays glued to it. Moving the
+     ArcRotateCamera target shifts the whole camera (position follows), and one screen pixel maps to a
+     fixed world distance at a given depth — so scaling the pixel delta by the world-per-pixel at the
+     grabbed depth keeps that point exactly under the cursor. panDepth is the depth of whatever was
+     under the cursor when the pan began (a complex if one was hit, else the pivot distance). */
+  const worldPerPixelAt = R => { const Hcss = Math.max(1, canvas.clientHeight);
+    return cam.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA
+      ? (cam.orthoTop - cam.orthoBottom) / Hcss
+      : 2 * Math.abs(R) * Math.tan(cam.fov / 2) / Hcss; };
+  const panBy = (dxPx, dyPx) => { const wpp = worldPerPixelAt(panDepth);
+    const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
+    cam.target.addInPlace(right.scale(-dxPx * wpp)).addInPlace(up.scale(dyPx * wpp)); };
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
   // floor, the pivot dollies forward along the view instead of the radius going negative.
   const zoomBy = delta => {                 // delta < 0 = closer
@@ -1610,38 +1643,32 @@ async function run(){
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
       showTips();
+      if(e.button === 2){   // RIGHT = grab-pan only (never rotates). Anchor the depth to whatever is under the cursor.
+        panning = true; dragging = true;
+        pickModelAtCursor(); panDepth = isFinite(_modelPickT) ? _modelPickT : Math.abs(cam.radius);
+        return;
+      }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;
         if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it instead of rotating
-        if(gMacroSel && wholeInView() && !gizmoDragging && pickPSII()){ macroDrag = true; _mdHas = false; cam.detachControl(); dragging = false; return; }   // left-drag the selected protein → move it
+        // Left-drag on the ALREADY-SELECTED complex moves it (selection itself is double-click only).
+        if(!spawnEl && gSelModel >= 0 && pickModelAtCursor() === gSelModel){ startModelDrag(gSelModel); return; }
         dragging = true; snappedDrag = false; }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
-      if(macroDrag){ macroDrag = false; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0, 2]; return; }   // finished dragging the protein
-      if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0, 2]; return; }   // finished moving a spawned atom
+      if(e.button === 2){ panning = false; return; }
+      if(modelDrag >= 0){ endModelDrag(); return; }             // finished moving a complex
+      if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0]; return; }   // finished moving a spawned atom
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         const isTap = mdx*mdx + mdy*mdy < 9;
-        if(isTap && spawnEl){ if(!pickAtom()) spawnAtPointer(); return; }  // armed element + tap on empty space → drop an atom
-        if(isTap){
-          // Three range tiers: CLOSE → the individual atom · MEDIUM → the whole ETC cofactor
-          // (chlorophyll, heme, quinone, Tyr Z …) · FAR → the whole complex.
-          const a = pickAtom();
-          if(a){ clearEtcSel(); centerOnAtom(a); }                          // CLOSE: an atom inside the reveal bubble
-          else {
-            const gi = pickEtcGroup();
-            if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); }  // MEDIUM: a whole cofactor molecule
-            else { const mid = pickModelAtCursor();
-              if(mid>=0 && _modelPickT > BUBBLE_R){ clearAtomSel(); clearEtcSel(); selectModel(mid); }   // FAR: the whole complex
-              else { clearAtomSel(); clearEtcSel(); deselectModel(); }       // empty space → clear
-            }
-          }
-        }
+        if(isTap && spawnEl){ if(!pickAtom()) spawnAtPointer(); }   // armed element + tap on empty space → drop an atom
+        // A plain single click no longer selects — selection is double-click (see onDouble).
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
-      if(macroDrag){ macroDragMove(); return; }               // dragging the whole protein
+      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // right-drag grab-pan
+      if(modelDrag >= 0){ modelDragMove(); return; }           // dragging the selected complex
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
-      if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)) return;   // right-drag / ctrl+drag = pan (the selection stays the pivot)
       if(e.buttons & 4){ dragZoom(e.movementY || 0); showTips(); return; }   // middle held = zoom
       // Left-drag rotation ALWAYS orbits the current selection (atom or whole complex): on the first
       // real move of a drag, re-pivot onto it — even if it's off-screen or you've dollied past it.
@@ -3226,12 +3253,70 @@ async function run(){
   const selectModel = mid => { gSelModel = mid; const mi=mInfo[mid];
     modelNode.position.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]);
     modelNode.rotationQuaternion = new BABYLON.Quaternion(gModelQuat[mid*4], gModelQuat[mid*4+1], gModelQuat[mid*4+2], gModelQuat[mid*4+3]);
-    modelGizmo.attachedNode = modelNode; modelRotGizmo.attachedNode = modelNode; refreshModelLabel();
+    refreshModelLabel(); showGizmoUI(mid);                 // the move/rotate handles live in the UI panel now (not on the model)
     highlightModel(mid);                                   // thick sage silhouette on the selected complex
     orbitLocked = true;                                    // camera orbits the complex you picked
     orbitCenter.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]); };
-  modelGizmo.onDragObservable.add(applyModelTransform);
-  modelRotGizmo.onDragObservable.add(applyModelTransform);
+  // Direct left-drag on the selected complex moves it in the camera plane (mirrors the UI move pad).
+  const _mdPlanePt = () => { const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const n = cam.getForwardRay(1).direction, c = modelNode.position;
+    const denom = BABYLON.Vector3.Dot(ray.direction, n); if(Math.abs(denom) < 1e-6) return null;
+    return ray.origin.add(ray.direction.scale(BABYLON.Vector3.Dot(c.subtract(ray.origin), n) / denom)); };
+  const _mdPrevPt = new BABYLON.Vector3(); let _mdHasPt = false;
+  const startModelDrag = mid => { modelDrag = mid; _mdHasPt = false; snapshotModel(mid); cam.detachControl(); dragging = false; };
+  const modelDragMove = () => { const q = _mdPlanePt(); if(!q) return;
+    if(_mdHasPt){ modelNode.position.addInPlace(q.subtract(_mdPrevPt)); applyModelTransform(); }
+    _mdPrevPt.copyFrom(q); _mdHasPt = true; };
+  const endModelDrag = () => { if(modelDrag < 0) return; modelDrag = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0]; };
+
+  /* ── UI gizmo panel (sits in the corner above the speed slider, NOT on the model) ───────────────
+     Two drag pads drive the SELECTED complex: "kierrä" rotates it about the camera's own axes,
+     "siirrä" slides it in the camera plane; the ▲/▼ buttons nudge it along world-Y and "nollaa"
+     resets it. Everything routes through modelNode + applyModelTransform, exactly like the old 3-D
+     gizmo did, so undo (snapshot per gesture) and the live coord label keep working unchanged. */
+  const rotateModelWorld = (axisVec, ang) => {
+    const q = BABYLON.Quaternion.RotationAxis(axisVec, ang);
+    modelNode.rotationQuaternion = q.multiply(modelNode.rotationQuaternion || BABYLON.Quaternion.Identity());
+    applyModelTransform();
+  };
+  const moveModel = worldDelta => { modelNode.position.addInPlace(worldDelta); applyModelTransform(); };
+  const gizUI = document.createElement('div'); gizUI.id = 'gizmo-ui';
+  gizUI.innerHTML =
+    '<div class="giz-title"></div>'
+    + '<div class="giz-pads">'
+    + '<div class="giz-pad" id="giz-rot"><span>⟳</span><label>kierrä</label></div>'
+    + '<div class="giz-pad" id="giz-move"><span>✥</span><label>siirrä</label></div>'
+    + '</div>'
+    + '<div class="giz-btns"><button id="giz-up">▲Y</button><button id="giz-dn">▼Y</button><button id="giz-reset">nollaa</button></div>';
+  document.body.appendChild(gizUI);
+  const showGizmoUI = mid => { gizUI.querySelector('.giz-title').textContent = mInfo[mid].name; gizUI.style.display = 'block'; };
+  const hideGizmoUI = () => { gizUI.style.display = 'none'; };
+  const bindPad = (el, onDrag) => {
+    let last = null;
+    el.addEventListener('pointerdown', ev => { ev.preventDefault(); ev.stopPropagation();
+      if(gSelModel < 0) return; snapshotModel(gSelModel); last = {x:ev.clientX, y:ev.clientY};
+      try { el.setPointerCapture(ev.pointerId); } catch(_){} el.classList.add('active'); });
+    el.addEventListener('pointermove', ev => { if(!last) return; ev.stopPropagation();
+      const dx = ev.clientX - last.x, dy = ev.clientY - last.y; last = {x:ev.clientX, y:ev.clientY}; onDrag(dx, dy); });
+    const up = ev => { if(!last) return; last = null; el.classList.remove('active'); try { el.releasePointerCapture(ev.pointerId); } catch(_){} };
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  };
+  bindPad(gizUI.querySelector('#giz-rot'), (dx, dy) => { const k = 0.012;
+    rotateModelWorld(cam.getDirection(BABYLON.Axis.Y),  dx * k);    // horizontal drag → yaw about the view-up
+    rotateModelWorld(cam.getDirection(BABYLON.Axis.X),  dy * k); });// vertical drag → pitch about the view-right
+  bindPad(gizUI.querySelector('#giz-move'), (dx, dy) => {
+    const wpp = worldPerPixelAt(BABYLON.Vector3.Distance(cam.position, modelNode.position));
+    moveModel(cam.getDirection(BABYLON.Axis.X).scale(dx * wpp).add(cam.getDirection(BABYLON.Axis.Y).scale(-dy * wpp))); });
+  const nudgeY = dir => { if(gSelModel < 0) return; snapshotModel(gSelModel); moveModel(new BABYLON.Vector3(0, dir * 8, 0)); };
+  gizUI.querySelector('#giz-up').addEventListener('click', () => nudgeY(1));
+  gizUI.querySelector('#giz-dn').addEventListener('click', () => nudgeY(-1));
+  gizUI.querySelector('#giz-reset').addEventListener('click', () => { if(gSelModel < 0) return; snapshotModel(gSelModel);
+    const mid = gSelModel, mi = mInfo[mid];
+    gModelOff[mid*3] = gModelOff[mid*3+1] = gModelOff[mid*3+2] = 0;
+    gModelQuat[mid*4] = gModelQuat[mid*4+1] = gModelQuat[mid*4+2] = 0; gModelQuat[mid*4+3] = 1;
+    rebuildModelXform(mid);
+    modelNode.position.set(mi.cx, mi.cy, mi.cz); modelNode.rotationQuaternion = BABYLON.Quaternion.Identity();
+    refreshModelLabel(); highlightModel(mid); });
   // Rebuild a model's baked transform matrix straight from gModelOff/gModelQuat (used by undo, which
   // may target a model that isn't the currently-selected one, so it can't go through modelNode).
   const rebuildModelXform = mid => { const mi=mInfo[mid];
@@ -3759,8 +3844,8 @@ async function run(){
     selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false);
     hideSelElec(); orbitLocked = false; orbitCenter.set(1e6,1e6,1e6); selAtom = null; gFocusId = -1; hideConfig();
   };
-  // Clear the current MODEL selection (detach the move/rotate gizmos, drop the sage halo + label).
-  const deselectModel = () => { gSelModel = -1; modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
+  // Clear the current MODEL selection (hide the UI gizmo panel, drop the sage halo + label).
+  const deselectModel = () => { gSelModel = -1; hideGizmoUI();
     modelLabel.style.display = 'none'; highlightModel(-1); };
   const centerOnAtom = (a) => {
     if(!a) a = pickAtom(); if(!a) return;
@@ -3786,7 +3871,18 @@ async function run(){
   };
   // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
   // Double-click → select the nearest complex for moving (gizmo + live coord label).
-  const onDouble = () => { const mid = pickModelAtCursor(); if(mid>=0) selectModel(mid); else viewPerp(); };
+  // DOUBLE-click is the only thing that SELECTS. Same three range tiers as before: CLOSE → the atom,
+  // MEDIUM → the whole ETC cofactor, FAR → the whole complex; empty space clears + swings perpendicular.
+  const onDouble = () => {
+    if(spawnEl) return;
+    const a = pickAtom();
+    if(a){ clearEtcSel(); centerOnAtom(a); return; }
+    const gi = pickEtcGroup();
+    if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
+    const mid = pickModelAtCursor();
+    if(mid >= 0 && _modelPickT > BUBBLE_R){ clearAtomSel(); clearEtcSel(); selectModel(mid); return; }
+    clearAtomSel(); clearEtcSel(); deselectModel(); viewPerp();
+  };
   canvas.addEventListener('dblclick', onDouble);                                    // desktop
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
