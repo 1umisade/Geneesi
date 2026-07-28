@@ -81,13 +81,13 @@ body.dark-mode{
 /* Speed slider — same palette as the loading bar (.ptr tan track + #4a3320 border + #82a058 fill) */
 #speed{-webkit-appearance:none;appearance:none;height:10px;box-sizing:border-box;border-radius:99px;
   background:#e7d4ac;border:2.5px solid #4a3320;outline:none}
-/* Knob = the 48×48 Mona cell-face. Sized 48px, so it is pulled up by (48−10)/2 = 19px to stay
-   centred on the 10px track, and the track needs 48px of vertical room around it. */
+/* Knob = the 48×48 Mona image, used as-is (square, uncropped). Sized 48px, so it is pulled up by
+   (48−10)/2 = 19px to stay centred on the 10px track. */
 #speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:48px;height:48px;border:0;
-  border-radius:50%;cursor:pointer;margin-top:-19px;
+  border-radius:0;cursor:pointer;margin-top:-19px;
   background:url('./mona_knob_48.png') center/48px 48px no-repeat}
 #speed::-moz-range-track{height:10px;box-sizing:border-box;border-radius:99px;background:#e7d4ac;border:2.5px solid #4a3320}
-#speed::-moz-range-thumb{width:48px;height:48px;border:0;border-radius:50%;cursor:pointer;
+#speed::-moz-range-thumb{width:48px;height:48px;border:0;border-radius:0;cursor:pointer;
   background:url('./mona_knob_48.png') center/48px 48px no-repeat}
 #speedbox{padding-bottom:19px}   /* room for the oversized knob so it isn't clipped at the window edge */
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
@@ -469,11 +469,6 @@ uniform float coneCos;     // reveal only atoms within this cosine of the view a
 #ifdef MEMFADE
 uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane fade away
 #endif
-#ifdef ETCHOLE
-uniform sampler2D etcDepth;   // R = view depth of the nearest ETC cofactor surface (huge = none)
-uniform vec2 etcRes;          // 1 / render-target size
-uniform float etcHole;        // 1 = carve the shafts, 0 = off
-#endif
 uniform float selModel;    // index of the SELECTED complex (−1 = none) → its atoms get a sage rim
 uniform vec3 selCol;       // that rim's colour (sage)
 varying vec2 vUV;
@@ -503,12 +498,6 @@ void main(void){
   float reveal = (1.0 - edge) * inCone;                       // 1 = orbitals/nuclei show here, 0 = vdW shell
   alpha *= (isShell < 0.5) ? reveal : (1.0 - reveal);         // core fades IN where revealed, shell fades OUT
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
-#ifdef ETCHOLE
-  if(etcHole > 0.5){   // anything in front of a cofactor is an occluder → drop it, opening the shaft
-    float cd = texture2D(etcDepth, gl_FragCoord.xy * etcRes).r;
-    if(cd < 1.0e7 && posV.z < cd - 0.3) discard;
-  }
-#endif
   if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
   posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
   vec4 clip = projection * vec4(posV, 1.0);
@@ -529,28 +518,6 @@ void main(void){
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
-}`;
-
-/* ETC cofactor depth mask. Pairs with the 'imp' VERTEX shader: renders ONLY the cofactor spheres
-   into an off-screen target, storing the view-space depth of the nearest cofactor surface per pixel
-   (cleared to a huge value = "no cofactor down this ray"). Every other material then samples it and
-   drops any fragment sitting in FRONT of that depth — which hides everything between the camera and
-   a cofactor, carving a clean shaft to all of them at once, at one texture fetch per fragment. */
-BABYLON.Effect.ShadersStore['etcdFragmentShader'] = `
-#extension GL_EXT_frag_depth : enable
-precision highp float;
-uniform mat4 projection;
-varying vec2 vUV;
-varying vec3 vCenterV;
-varying float vRad;
-void main(void){
-  float r2 = dot(vUV, vUV);
-  if(r2 > 1.0) discard;
-  float zc = sqrt(1.0 - r2);
-  vec3 posV = vCenterV + vec3(vUV, -zc) * vRad;
-  vec4 clip = projection * vec4(posV, 1.0);
-  gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;   // real sphere depth → the RTT keeps the NEAREST cofactor
-  gl_FragColor = vec4(posV.z, 0.0, 0.0, 1.0);
 }`;
 
 /* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
@@ -647,11 +614,6 @@ uniform float drawElec; // 1 = draw electrons inline (chlorophyll), 0 = electron
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
-#ifdef ETCHOLE
-uniform sampler2D etcDepth;   // R = view depth of the nearest ETC cofactor surface (huge = none)
-uniform vec2 etcRes;          // 1 / render-target size
-uniform float etcHole;        // 1 = carve the shafts, 0 = off
-#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -730,12 +692,6 @@ void main(void){
   alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the bubble
   if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
   if(alpha < 0.004) discard;
-#ifdef ETCHOLE
-  if(etcHole > 0.5){   // anything in front of a cofactor is an occluder → drop it, opening the shaft
-    float cd = texture2D(etcDepth, gl_FragCoord.xy * etcRes).r;
-    if(cd < 1.0e7 && vViewPos.z < cd - 0.3) discard;
-  }
-#endif
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices) with a lifted ambient floor so shadows aren't crushed
@@ -900,11 +856,6 @@ uniform float drawElec; // 1 = draw electrons inline (chlorophyll / aromatic π)
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
-#ifdef ETCHOLE
-uniform sampler2D etcDepth;   // R = view depth of the nearest ETC cofactor surface (huge = none)
-uniform vec2 etcRes;          // 1 / render-target size
-uniform float etcHole;        // 1 = carve the shafts, 0 = off
-#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -983,12 +934,6 @@ void main(void){
   alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the camera sphere
   if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
   if(alpha < 0.004) discard;
-#ifdef ETCHOLE
-  if(etcHole > 0.5){   // anything in front of a cofactor is an occluder → drop it, opening the shaft
-    float cd = texture2D(etcDepth, gl_FragCoord.xy * etcRes).r;
-    if(cd < 1.0e7 && vViewPos.z < cd - 0.3) discard;
-  }
-#endif
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices register) with a lifted ambient floor
@@ -1946,21 +1891,11 @@ async function run(){
   let gBubbleR = 1e9;         // reveal only within this camera distance (1e9 = everywhere)
   let gShell   = 0;           // vdW spheres: 1 = act as shells that hide inside the reveal, 0 = always solid
   let gEtc = false, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later)
-  let etcDepthRT = null;                 // off-screen cofactor depth mask → the "tunnel" carve (built with the overlay)
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
   let etcSel = -1;                       // index into etcGroups of the selected cofactor (−1 = none)
-  // Bound by every material that can OCCLUDE a cofactor. Feeds the mask + the on/off switch to the
-  // ETCHOLE branch, which drops fragments lying between the camera and any cofactor.
-  const bindEtcHole = eff => {
-    if(etcDepthRT && gEtc){
-      eff.setTexture('etcDepth', etcDepthRT);
-      eff.setFloat2('etcRes', 1/Math.max(1,engine.getRenderWidth()), 1/Math.max(1,engine.getRenderHeight()));
-      eff.setFloat('etcHole', 1);
-    } else eff.setFloat('etcHole', 0);
-  };
   const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut: [cutZ, cutSign, strength] (bound as memCut[])
-  const MEM_FADE_S = 2.5;      // seconds the membrane takes to fade fully out / back in
+  const MEM_FADE_S = 1.0;      // seconds the membrane takes to fade fully out / back in
   let memCutOn = false;        // latched threshold state (hysteresis) driving that fade
   const MAX_MODELS = 24;
   const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model translation offset (for picking + the label)
@@ -2018,7 +1953,6 @@ async function run(){
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
-      if(etcDepthRT) etcDepthRT.refreshRate = gEtc ? 1 : 0;   // only pay for the depth mask while carving
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
@@ -2147,8 +2081,8 @@ async function run(){
       attributes: ['position','instanceColor','world0','world1','world2','world3'].concat(movable ? ['modelId'] : []),
       uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelXform','modelCol','colorMode'] : [])
     };
-    if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE','#define ETCHOLE'];   // follows the PSII gizmo AND its own per-model drag; can occlude a cofactor
-      opts.uniforms = opts.uniforms.concat(['etcDepth','etcRes','etcHole','selModel','selCol']); opts.samplers = ['etcDepth']; }
+    if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE'];   // follows the PSII gizmo AND its own per-model drag
+      opts.uniforms = opts.uniforms.concat(['selModel','selCol']); }
     else opts.uniforms = opts.uniforms.concat(['selModel','selCol']);
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
     mat.setFloat('radius', radius);
@@ -2165,7 +2099,7 @@ async function run(){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); bindEtcHole(eff); }
+      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); }
       eff.setFloat('selModel', movable ? gSelModel : -1); eff.setColor3('selCol', SAGE);
     });
     return realAlpha(mat);
@@ -2202,9 +2136,8 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','etcDepth','etcRes','etcHole','selModel','selCol'],
-    samplers: ['etcDepth'],
-    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define ETCHOLE']   // drag offset + per-model move; electrons only up close
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1); realAlpha(orbMatG);   // always fully revealed; blended fades
   orbMatG.backFaceCulling = true;
@@ -2214,14 +2147,13 @@ async function run(){
     eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-    bindEtcHole(eff); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','etcDepth','etcRes','etcHole','selModel','selCol'],
-      samplers: ['etcDepth'],
-      defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define ETCHOLE']   // drag offset + per-model move; electrons only up close
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+      defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
@@ -2230,7 +2162,7 @@ async function run(){
       eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-      bindEtcHole(eff); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+      eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
     });
     return realAlpha(mat);
   };
@@ -2307,28 +2239,25 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','etcDepth','etcRes','etcHole','selModel','selCol'],
-    samplers:['etcDepth'],
-    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHOLE'] });
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
   vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false; realAlpha(vdwMat);
   vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → vdW spheres become shells that hide inside the close cone
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); bindEtcHole(eff);
-    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); });
+    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','memCut','etcDepth','etcRes','etcHole','selModel'],
-    samplers:['etcDepth'],
-    defines:['#define IMPRAD','#define MEMFADE','#define ETCHOLE'] });   // MEMFADE = membrane cross-cut fade
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','memCut','selModel'],
+    defines:['#define IMPRAD','#define MEMFADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane vdW spheres become shells too
-    eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); bindEtcHole(eff); });
+    eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -2352,35 +2281,10 @@ async function run(){
     etcOverlay.thinInstanceSetBuffer('instanceColor', new Float32Array(etcC),4,true);
     etcOverlay.thinInstanceSetBuffer('instR', new Float32Array(etcR),1,true);
     etcOverlay.thinInstanceSetBuffer('modelId', mdlBuf(etcM),1,true);
-    // Cofactors render IN PLACE at their true depth (no more draw-on-top): the tunnel carved by the
-    // depth mask is what makes them visible. Their spheres are 1.15× the normal radius, so where an
-    // atom is BOTH a cofactor and a regular atom the overlay's surface is nearer and wins the depth
-    // test cleanly (no z-fighting with the element-coloured sphere underneath).
-    etcOverlay.renderingGroupId = 0;
-    scene.setRenderingAutoClearDepthStencil(3, true, true, true);   // group 3 = outlines, still cleared → topmost
+    etcOverlay.renderingGroupId = 3;                               // last group…
+    scene.setRenderingAutoClearDepthStencil(3, true, true, true);   // …with its depth cleared first → always on top
     etcOverlay.setEnabled(gEtc);
-    /* Cofactor depth mask. Renders ONLY the cofactor spheres, storing each pixel's nearest cofactor
-       view-depth; every occluder material samples it and discards fragments in front of that depth.
-       One fetch per fragment, so the cost is independent of how many cofactors there are. */
-    if(engine.getCaps().textureFloatRender || engine.getCaps().textureHalfFloatRender){
-      const useFloat = engine.getCaps().textureFloatRender;
-      etcDepthRT = new BABYLON.RenderTargetTexture('etcDepthRT',
-        { width: engine.getRenderWidth(), height: engine.getRenderHeight() }, scene, false, true,
-        useFloat ? BABYLON.Constants.TEXTURETYPE_FLOAT : BABYLON.Constants.TEXTURETYPE_HALF_FLOAT,
-        false, BABYLON.Constants.TEXTURE_NEAREST_SAMPLINGMODE, true);
-      etcDepthRT.clearColor = new BABYLON.Color4(1e8, 0, 0, 1);   // 1e8 = "no cofactor along this ray"
-      etcDepthRT.renderList = [etcOverlay];
-      const etcDepthMat = new BABYLON.ShaderMaterial('etcDepthMat', scene, { vertex:'imp', fragment:'etcd' }, {
-        attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','uT','isShell','bubbleR','protonOutline','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode'],
-        defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
-      etcDepthMat.setFloat('radius',1.0); etcDepthMat.backFaceCulling=false;
-      etcDepthMat.onBindObservable.add(()=>{ const eff=etcDepthMat.getEffect(); if(!eff)return;
-        eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setFloat('colorMode',0);
-        eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
-      etcDepthRT.setMaterialForRendering(etcOverlay, etcDepthMat);
-      etcDepthRT.refreshRate = gEtc ? 1 : 0;
-      scene.customRenderTargets.push(etcDepthRT);
+    {
       /* Group the cofactor atoms into whole MOLECULES (one chlorophyll, one heme, one Tyr Z …).
          Grouping is by the mol2 residue instance (subst_id, made unique per model), which is exact —
          geometric clustering merged neighbouring chlorophylls, whose phytol tails interdigitate to
@@ -2400,7 +2304,6 @@ async function run(){
         for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
         g.r = Math.sqrt(r2) + 2.0; }
       etcGroupPos = { gx, gy, gz };
-      engine.onResizeObservable.add(()=>{ if(etcDepthRT) etcDepthRT.resize({ width: engine.getRenderWidth(), height: engine.getRenderHeight() }); });
     }
   }
 
@@ -2739,15 +2642,14 @@ async function run(){
     const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
     const mkLipMat = (nm, shader, attrs, extra) => {
       const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs,
-        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','memCut','etcDepth','etcRes','etcHole','selModel'].concat(extra||[]),
-        samplers:['etcDepth'],
-        defines:['#define ELECGATE','#define MEMFADE','#define ETCHOLE'] });   // ELECGATE isolates elecR, MEMFADE = the cross-cut fade
+        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','memCut','selModel'].concat(extra||[]),
+        defines:['#define ELECGATE','#define MEMFADE'] });   // ELECGATE isolates elecR, MEMFADE = the cross-cut fade
       mat.setFloat('bubbleR',1e9); mat.setFloat('nElec',2); mat.setFloat('coneCos',-1.0);
       mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true; mat.setFloat('selModel', -1);   // orbitals always, electrons only up close
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane orbitals only inside the close forward cone
         eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setArray3('memCut', gCut);
-        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); bindEtcHole(eff); });
+        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return realAlpha(mat);
     };
     const lipCoreMat = mkLipMat('lipCoreMat','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
@@ -3018,7 +2920,7 @@ async function run(){
       : (fy < 0.30 && elevAbs < elevLim);
     memCutOn = wantCut;
     const step = Math.min(engine.getDeltaTime(), 50) / (MEM_FADE_S * 1000);
-    gCut[2] += Math.max(-step, Math.min(step, (wantCut ? 1 : 0) - gCut[2]));   // 2.5 s linear fade to full-on / full-off
+    gCut[2] += Math.max(-step, Math.min(step, (wantCut ? 1 : 0) - gCut[2]));   // 1 s linear fade to full-on / full-off
     if(gCut[2] < 0.001) gCut[2] = 0; else if(gCut[2] > 0.999) gCut[2] = 1;
     gCut[0] = bilayerCen.z;                                          // cut plane (membrane centre z)
     gCut[1] = (cp.z - bilayerCen.z) >= 0 ? 1 : -1;                   // which side is toward the camera
