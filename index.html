@@ -432,14 +432,13 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
-  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
-  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
-  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
-  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
-  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
-  return wave * exp(-rad*3.5);
+  // A wave that TRAVELS around the ring: bright crests march around the circle over time via the
+  // azimuthal phase (m·ang − ω·t + spiral) while the concentric rings breathe outward. m (crests
+  // around the ring) rises with orbital energy — the moving, phase-shifting ripple, not a static bloom.
+  float m = 3.0 + fr * 9.0;
+  float rings  = 0.5 + 0.5*sin(rad*20.0 - uT*2.5);          // concentric rings, slow outward breath
+  float travel = 0.6 + 0.4*sin(ang*m - uT*4.0 + rad*6.0);   // bright crests march AROUND the circle
+  return rings * travel * exp(-rad*3.4);
 }
 // A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
 vec3 wanderDir(float s){
@@ -630,14 +629,13 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
-  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
-  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
-  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
-  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
-  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
-  return wave * exp(-rad*3.5);
+  // A wave that TRAVELS around the ring: bright crests march around the circle over time via the
+  // azimuthal phase (m·ang − ω·t + spiral) while the concentric rings breathe outward. m (crests
+  // around the ring) rises with orbital energy — the moving, phase-shifting ripple, not a static bloom.
+  float m = 3.0 + fr * 9.0;
+  float rings  = 0.5 + 0.5*sin(rad*20.0 - uT*2.5);          // concentric rings, slow outward breath
+  float travel = 0.6 + 0.4*sin(ang*m - uT*4.0 + rad*6.0);   // bright crests march AROUND the circle
+  return rings * travel * exp(-rad*3.4);
 }
 // A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
 vec3 wanderDir(float s){
@@ -776,14 +774,13 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
-  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
-  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
-  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
-  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
-  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
-  return wave * exp(-rad*3.5);
+  // A wave that TRAVELS around the ring: bright crests march around the circle over time via the
+  // azimuthal phase (m·ang − ω·t + spiral) while the concentric rings breathe outward. m (crests
+  // around the ring) rises with orbital energy — the moving, phase-shifting ripple, not a static bloom.
+  float m = 3.0 + fr * 9.0;
+  float rings  = 0.5 + 0.5*sin(rad*20.0 - uT*2.5);          // concentric rings, slow outward breath
+  float travel = 0.6 + 0.4*sin(ang*m - uT*4.0 + rad*6.0);   // bright crests march AROUND the circle
+  return rings * travel * exp(-rad*3.4);
 }
 vec3 wanderDir(float s){
   return normalize(vec3(
@@ -854,14 +851,13 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
-  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
-  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
-  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
-  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
-  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
-  return wave * exp(-rad*3.5);
+  // A wave that TRAVELS around the ring: bright crests march around the circle over time via the
+  // azimuthal phase (m·ang − ω·t + spiral) while the concentric rings breathe outward. m (crests
+  // around the ring) rises with orbital energy — the moving, phase-shifting ripple, not a static bloom.
+  float m = 3.0 + fr * 9.0;
+  float rings  = 0.5 + 0.5*sin(rad*20.0 - uT*2.5);          // concentric rings, slow outward breath
+  float travel = 0.6 + 0.4*sin(ang*m - uT*4.0 + rad*6.0);   // bright crests march AROUND the circle
+  return rings * travel * exp(-rad*3.4);
 }
 vec3 wanderDir(float s){
   return normalize(vec3(
