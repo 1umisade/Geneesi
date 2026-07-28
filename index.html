@@ -249,6 +249,9 @@ attribute vec4 world0;
 attribute vec4 world1;
 attribute vec4 world2;
 attribute vec4 world3;
+#ifdef IMPRAD
+attribute float instR;   // per-instance radius multiplier (vdW LOD spheres — one mesh, mixed elements)
+#endif
 uniform mat4 view;
 uniform mat4 projection;
 uniform float radius;
@@ -264,6 +267,7 @@ varying vec3 vCenterV;
 varying vec3 vColor;
 varying vec3 vWCen;      // instance world centre → identify the selected atom's nucleons
 varying float vFlag;     // instance alpha → 1 for protons, 0 for neutrons
+varying float vRad;      // per-instance radius (= uniform radius unless IMPRAD scales it)
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -281,7 +285,12 @@ void main(void){
   vUV = position.xy;
   vColor = instanceColor.rgb;
   vFlag = instanceColor.a;
-  vec3 cornerV = cV.xyz + vec3(position.xy * radius, 0.0);
+  float rad = radius;
+#ifdef IMPRAD
+  rad *= instR;
+#endif
+  vRad = rad;
+  vec3 cornerV = cV.xyz + vec3(position.xy * rad, 0.0);
   gl_Position = projection * vec4(cornerV, 1.0);
 }`;
 BABYLON.Effect.ShadersStore['impFragmentShader'] = `
@@ -303,13 +312,14 @@ varying vec3 vCenterV;
 varying vec3 vColor;
 varying vec3 vWCen;
 varying float vFlag;
+varying float vRad;      // per-instance radius (vdW LOD)
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));  // raking light from the side (right)
 void main(void){
   float r2 = dot(vUV, vUV);
   if(r2 > 1.0) discard;
   float zc = sqrt(1.0 - r2);
   vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
-  vec3 posV = vCenterV + n * radius;
+  vec3 posV = vCenterV + n * vRad;
   float dist = length(vCenterV);           // atom-centre distance from the camera
   // Screen-door cross-fade across an 8-unit band at the bubble edge, so vdW shells
   // dissolve away to reveal the orbitals inside (and cores dissolve in).
@@ -1734,17 +1744,19 @@ async function run(fileName){
     return (ix*gny+iy)*gnz+iz;
   };
   const cells = new Map();
-  const getCell = k => { let c=cells.get(k); if(!c){ c={ nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
+  const getCell = k => { let c=cells.get(k); if(!c){ c={ sphM:[],sphC:[],sphR:[], nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
 
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const sb=sphBuf[e], A=info(e).n, ec=info(e).c;
+    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE;
     // Nucleons — A per atom, contiguous → bin by the atom centre.
+    // Also collect ONE space-filling vdW sphere per atom (the far-away / zoomed-out LOD).
     const nb=nucBuf[e], nc=nucColBuf[e];
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
+      pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
     }
     // Orbitals — bin by orbCenBuf (each lobe's atom centre).
     const oc=orbCount(e);
@@ -1770,6 +1782,30 @@ async function run(fileName){
     await yield_();
   }
 
+  // vdW space-filling sphere material — the low-detail LOD shown for cells that are far from the
+  // camera / when zoomed out (one sphere per atom, per-instance radius via IMPRAD). Follows the
+  // PSII drag like the orbitals do (MACROMOVE).
+  const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
+    attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter'],
+    defines:['#define IMPRAD','#define MACROMOVE'] });
+  vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('bubbleR',1e9);
+  vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
+  vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false;
+  vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
+    eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
+    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+  // Non-moving variant for the membrane spheres (the lipid bilayer isn't part of the PSII gizmo).
+  const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
+    attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'],
+    defines:['#define IMPRAD'] });
+  vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('bubbleR',1e9);
+  vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
+  vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false;
+  vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
+    eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+
   // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
   const cellList = [];
   for(const [k,c] of cells){
@@ -1793,8 +1829,14 @@ async function run(fileName){
       m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true); m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
       m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true); m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.lpOid),1,true);
       m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    let sphere=null;
+    if(c.sphM.length){ sphere=BABYLON.MeshBuilder.CreatePlane('cs'+k,{size:2},scene); sphere.material=vdwMat; sphere.isPickable=false;
+      sphere.thinInstanceSetBuffer('matrix', new Float32Array(c.sphM),16,true);
+      sphere.thinInstanceSetBuffer('instanceColor', new Float32Array(c.sphC),4,true);
+      sphere.thinInstanceSetBuffer('instR', new Float32Array(c.sphR),1,true);
+      sphere.renderingGroupId=1; sphere.alwaysSelectAsActiveMesh=true; sphere.setEnabled(false); }
     for(const m of meshes) m.setEnabled(false);
-    cellList.push({ cx,cy,cz, meshes, on:false });
+    cellList.push({ cx,cy,cz, meshes, sphere, macro:true, r:0.5*Math.hypot(CELL,CELL,CELL), detail:false, sphereOn:false });
     await yield_();
   }
   cells.clear();
@@ -2044,29 +2086,6 @@ async function run(fileName){
       return {core, bond};
     };
     const T = [buildLobes(tPos[0]), buildLobes(tPos[1])];
-    const tiles = G*G;   // tiles per leaflet
-    let coreTot=0, bondTot=0;
-    for(const t of T){ coreTot += (t.core.m.length/16)*tiles; bondTot += (t.bond.m.length/16)*tiles; }
-    const coreM=new Float32Array(coreTot*16), coreCol=new Float32Array(coreTot*3), coreCen=new Float32Array(coreTot*3), coreOid=new Float32Array(coreTot);
-    const bM=new Float32Array(bondTot*16), bTap=new Float32Array(bondTot), bCol=new Float32Array(bondTot*3), bCen=new Float32Array(bondTot*3), bOid=new Float32Array(bondTot);
-    let ci=0, bi=0;
-    for(let gi=0;gi<G;gi++) for(let gj=0;gj<G;gj++){
-      const ox=bilayerCen.x+gi*S-half, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-half;
-      for(let leaf=0;leaf<2;leaf++){ const t=T[leaf], cn=t.core.m.length/16, bn=t.bond.m.length/16;
-        for(let i=0;i<cn;i++){ const o=ci*16, s=i*16;
-          for(let j=0;j<16;j++) coreM[o+j]=t.core.m[s+j];
-          coreM[o+12]+=ox; coreM[o+13]+=oy; coreM[o+14]+=oz;
-          coreCol[ci*3]=t.core.col[i*3]; coreCol[ci*3+1]=t.core.col[i*3+1]; coreCol[ci*3+2]=t.core.col[i*3+2];
-          coreCen[ci*3]=t.core.cen[i*3]+ox; coreCen[ci*3+1]=t.core.cen[i*3+1]+oy; coreCen[ci*3+2]=t.core.cen[i*3+2]+oz;
-          coreOid[ci]=t.core.oid[i]; ci++; }
-        for(let i=0;i<bn;i++){ const o=bi*16, s=i*16;
-          for(let j=0;j<16;j++) bM[o+j]=t.bond.m[s+j];
-          bM[o+12]+=ox; bM[o+13]+=oy; bM[o+14]+=oz;
-          bTap[bi]=t.bond.tap[i]; bOid[bi]=t.bond.oid[i];
-          bCol[bi*3]=t.bond.col[i*3]; bCol[bi*3+1]=t.bond.col[i*3+1]; bCol[bi*3+2]=t.bond.col[i*3+2];
-          bCen[bi*3]=t.bond.cen[i*3]+ox; bCen[bi*3+1]=t.bond.cen[i*3+1]+oy; bCen[bi*3+2]=t.bond.cen[i*3+2]+oz;
-          bi++; } }
-    }
     await yield_();
     const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
     const mkLipMat = (nm, shader, attrs, extra) => {
@@ -2080,19 +2099,57 @@ async function run(fileName){
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return mat;
     };
-    const lipCore = BABYLON.MeshBuilder.CreateSphere('lipCore',{segments:6,diameter:1},scene);
-    lipCore.material = mkLipMat('lipCoreMat','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
-    lipCore.isPickable=false; lipCore.alwaysSelectAsActiveMesh=true;
-    lipCore.thinInstanceSetBuffer('ocol',coreCol,3,true); lipCore.thinInstanceSetBuffer('ocen',coreCen,3,true);
-    lipCore.thinInstanceSetBuffer('oid',coreOid,1,true); lipCore.thinInstanceSetBuffer('matrix',coreM,16,true);
-    lipCore.thinInstanceCount=coreTot;
-    const lipBonds = BABYLON.MeshBuilder.CreateSphere('lipBonds',{segments:5,diameter:1},scene);
-    lipBonds.material = mkLipMat('lipBondMat','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']);
-    lipBonds.material.setFloat('nElec',1);
-    lipBonds.isPickable=false; lipBonds.alwaysSelectAsActiveMesh=true;
-    lipBonds.thinInstanceSetBuffer('taper',bTap,1,true); lipBonds.thinInstanceSetBuffer('bcol',bCol,3,true);
-    lipBonds.thinInstanceSetBuffer('ocen',bCen,3,true); lipBonds.thinInstanceSetBuffer('oid',bOid,1,true);
-    lipBonds.thinInstanceSetBuffer('matrix',bM,16,true); lipBonds.thinInstanceCount=bondTot;
+    const lipCoreMat = mkLipMat('lipCoreMat','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
+    const lipBondMat = mkLipMat('lipBondMat','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']); lipBondMat.setFloat('nElec',1);
+    // Split the G×G grid (×2 leaflets) into BL×BL-tile BLOCKS, each a cellList entry, so the membrane
+    // frustum-culls and LODs (orbitals near ↔ vdW spheres far) exactly like the protein cells do.
+    const BL = 4, nbx = Math.ceil(G/BL);
+    const blockR = 0.5*Math.hypot(BL*S, (yMax-yMin)+2*Math.max(xr,zr,1), BL*S);
+    for(let bgi=0;bgi<nbx;bgi++){ for(let bgj=0;bgj<nbx;bgj++){
+      const gi0=bgi*BL, gj0=bgj*BL, gi1=Math.min(G,gi0+BL), gj1=Math.min(G,gj0+BL), nt=(gi1-gi0)*(gj1-gj0);
+      for(let leaf=0;leaf<2;leaf++){ const t=T[leaf], cn=t.core.m.length/16, bn=t.bond.m.length/16;
+        const coreM=new Float32Array(cn*nt*16), coreCol=new Float32Array(cn*nt*3), coreCen=new Float32Array(cn*nt*3), coreOid=new Float32Array(cn*nt);
+        const bM=new Float32Array(bn*nt*16), bTap=new Float32Array(bn*nt), bCol=new Float32Array(bn*nt*3), bCen=new Float32Array(bn*nt*3), bOid=new Float32Array(bn*nt);
+        const sM=new Float32Array(LN*nt*16), sC=new Float32Array(LN*nt*4), sR=new Float32Array(LN*nt);
+        let ci=0, bi=0, si=0, bcx=0, bcz=0;
+        for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
+          const ox=bilayerCen.x+gi*S-half, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-half; bcx+=ox; bcz+=oz;
+          for(let i=0;i<cn;i++){ const o=ci*16, s=i*16;
+            for(let j=0;j<16;j++) coreM[o+j]=t.core.m[s+j];
+            coreM[o+12]+=ox; coreM[o+13]+=oy; coreM[o+14]+=oz;
+            coreCol[ci*3]=t.core.col[i*3]; coreCol[ci*3+1]=t.core.col[i*3+1]; coreCol[ci*3+2]=t.core.col[i*3+2];
+            coreCen[ci*3]=t.core.cen[i*3]+ox; coreCen[ci*3+1]=t.core.cen[i*3+1]+oy; coreCen[ci*3+2]=t.core.cen[i*3+2]+oz;
+            coreOid[ci]=t.core.oid[i]; ci++; }
+          for(let i=0;i<bn;i++){ const o=bi*16, s=i*16;
+            for(let j=0;j<16;j++) bM[o+j]=t.bond.m[s+j];
+            bM[o+12]+=ox; bM[o+13]+=oy; bM[o+14]+=oz;
+            bTap[bi]=t.bond.tap[i]; bOid[bi]=t.bond.oid[i];
+            bCol[bi*3]=t.bond.col[i*3]; bCol[bi*3+1]=t.bond.col[i*3+1]; bCol[bi*3+2]=t.bond.col[i*3+2];
+            bCen[bi*3]=t.bond.cen[i*3]+ox; bCen[bi*3+1]=t.bond.cen[i*3+1]+oy; bCen[bi*3+2]=t.bond.cen[i*3+2]+oz;
+            bi++; }
+          for(let k=0;k<LN;k++){ const e=lipid.el[k], c=info(e).c, o=si*16;
+            sM[o]=1;sM[o+5]=1;sM[o+10]=1;sM[o+15]=1;
+            sM[o+12]=tPos[leaf][k*3]+ox; sM[o+13]=tPos[leaf][k*3+1]+oy; sM[o+14]=tPos[leaf][k*3+2]+oz;
+            sC[si*4]=c[0];sC[si*4+1]=c[1];sC[si*4+2]=c[2];sC[si*4+3]=0; sR[si]=info(e).vr*FILL_SCALE; si++; }
+        }
+        const bcX=bcx/nt, bcZ=bcz/nt;
+        const coreMesh=BABYLON.MeshBuilder.CreateSphere('lipCo'+bgi+'_'+bgj+'_'+leaf,{segments:6,diameter:1},scene);
+        coreMesh.material=lipCoreMat; coreMesh.isPickable=false; coreMesh.alwaysSelectAsActiveMesh=true;
+        coreMesh.thinInstanceSetBuffer('ocol',coreCol,3,true); coreMesh.thinInstanceSetBuffer('ocen',coreCen,3,true);
+        coreMesh.thinInstanceSetBuffer('oid',coreOid,1,true); coreMesh.thinInstanceSetBuffer('matrix',coreM,16,true); coreMesh.thinInstanceCount=cn*nt;
+        const bondMesh=BABYLON.MeshBuilder.CreateSphere('lipBo'+bgi+'_'+bgj+'_'+leaf,{segments:5,diameter:1},scene);
+        bondMesh.material=lipBondMat; bondMesh.isPickable=false; bondMesh.alwaysSelectAsActiveMesh=true;
+        bondMesh.thinInstanceSetBuffer('taper',bTap,1,true); bondMesh.thinInstanceSetBuffer('bcol',bCol,3,true);
+        bondMesh.thinInstanceSetBuffer('ocen',bCen,3,true); bondMesh.thinInstanceSetBuffer('oid',bOid,1,true);
+        bondMesh.thinInstanceSetBuffer('matrix',bM,16,true); bondMesh.thinInstanceCount=bn*nt;
+        const sphMesh=BABYLON.MeshBuilder.CreatePlane('lipSp'+bgi+'_'+bgj+'_'+leaf,{size:2},scene);
+        sphMesh.material=vdwMatStatic; sphMesh.isPickable=false; sphMesh.alwaysSelectAsActiveMesh=true; sphMesh.renderingGroupId=1;
+        sphMesh.thinInstanceSetBuffer('matrix',sM,16,true); sphMesh.thinInstanceSetBuffer('instanceColor',sC,4,true); sphMesh.thinInstanceSetBuffer('instR',sR,1,true);
+        coreMesh.setEnabled(false); bondMesh.setEnabled(false); sphMesh.setEnabled(false);
+        cellList.push({ cx:bcX, cy:bilayerCen.y, cz:bcZ, meshes:[coreMesh,bondMesh], sphere:sphMesh, macro:false, r:blockR, detail:false, sphereOn:false });
+      }
+      await yield_();
+    } }
     await yield_();
     /* Nucleons would be ~2 M instances across the whole membrane, so instead a small POOL of
        meshes SHARES one nucleon template buffer per leaflet and is re-positioned (via the imp
@@ -2251,6 +2308,7 @@ async function run(fileName){
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
   const fitRadius = cam.radius;                    // radius at which the whole model fits
+  const REVEAL_DIST = Math.max(130, CELL*2.2);     // camera-to-cell distance within which orbital detail shows (else vdW spheres)
   const zoomEl = document.getElementById('zoomval');
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
@@ -2261,35 +2319,40 @@ async function run(fileName){
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
     const ar = Math.abs(cam.radius);                            // abs → fog still works inside / on the far side
     cam.maxZ = ar + modelR*2.0 + 20;                            // tight far clip → depth precision (no z-fighting stripes)
+    // Near clip must shrink as you approach an atom, or the near plane slices the nucleus flat.
+    // Only drops small at close range; stays 0.15 when zoomed out so depth precision holds.
+    cam.minZ = Math.min(0.15, Math.max(0.02, ar*0.03));
     scene.fogStart = Math.max(0.1, ar - modelR*0.55);           // steeper ramp = more contrast
     scene.fogEnd   = ar + modelR*0.6;
     const zoom = fitRadius / Math.max(0.01, ar);
     if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
     if(gMacroSel && !wholeInView()) deselectMacro();   // zoomed back in → drop the macromolecule selection, atoms become selectable
 
-    // Spatial culling: enable only the grid cells that are BOTH inside the camera reveal-bubble
-    // AND inside the view frustum (the cone the camera is actually looking at) → cells behind
-    // the camera or off to the sides never load.
+    // Spatial culling + LOD. Each cell is only touched if it is inside the view frustum (off-screen
+    // cells load nothing). In-frustum cells within REVEAL_DIST of the camera show full orbital detail;
+    // farther / zoomed-out cells fall back to a single space-filling vdW sphere per atom (so the whole
+    // model reads cleanly instead of collapsing into an over-inked olive haze of tiny orbitals).
     const cp = cam.position;
     const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
-    const fwd = cam.getForwardRay(1).direction;   // camera forward
-    const cR = cellHalfDiag;
-    const COS_CONE = 0.92;   // ~23° half-angle: only a narrow cone straight ahead reveals orbitals (sides stay vdW)
-    const nearR2 = (1.7*cR)*(1.7*cR);   // camera inside/adjacent to a cell → never cull it (else a zoomed-in atom vanishes at some orbit angles, leaving only its outline)
+    const REVEAL2 = REVEAL_DIST*REVEAL_DIST;
     const M=macroGizmoNode.getWorldMatrix().m, cx0=psiiCenter.x, cy0=psiiCenter.y, cz0=psiiCenter.z;   // full PSII transform (rotation+translation)
     for(const cell of cellList){
-      const lx=cell.cx-cx0, ly=cell.cy-cy0, lz=cell.cz-cz0;
-      const wcx=M[0]*lx+M[4]*ly+M[8]*lz+M[12], wcy=M[1]*lx+M[5]*ly+M[9]*lz+M[13], wcz=M[2]*lx+M[6]*ly+M[10]*lz+M[14];
+      const cR = cell.r;
+      let wcx, wcy, wcz;
+      if(cell.macro){ const lx=cell.cx-cx0, ly=cell.cy-cy0, lz=cell.cz-cz0;
+        wcx=M[0]*lx+M[4]*ly+M[8]*lz+M[12]; wcy=M[1]*lx+M[5]*ly+M[9]*lz+M[13]; wcz=M[2]*lx+M[6]*ly+M[10]*lz+M[14]; }
+      else { wcx=cell.cx; wcy=cell.cy; wcz=cell.cz; }   // membrane cells don't follow the PSII gizmo
       const vx=wcx-cp.x, vy=wcy-cp.y, vz=wcz-cp.z, d2=vx*vx+vy*vy+vz*vz;
-      // Show everything: NO distance limit. Only skip cells that are fully OFF-SCREEN (behind the
-      // camera / outside the view). Nothing in view is ever hidden by distance now.
-      let want = true;
-      if(d2 > nearR2){
+      let vis = true;                                    // in the view frustum?
+      if(d2 > cR*cR){
         for(let p=0;p<6;p++){ const pl=fplanes[p];
-          if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ want=false; break; }
+          if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ vis=false; break; }
         }
       }
-      if(want !== cell.on){ cell.on = want; for(const m of cell.meshes) m.setEnabled(want); }
+      const wantDetail = vis && d2 < REVEAL2;             // close enough → full orbitals
+      const wantSphere = vis && !wantDetail && !!cell.sphere;   // in view but far → cheap vdW sphere
+      if(cell.detail !== wantDetail){ cell.detail = wantDetail; for(const m of cell.meshes) m.setEnabled(wantDetail); }
+      if(cell.sphereOn !== wantSphere){ cell.sphereOn = wantSphere; if(cell.sphere) cell.sphere.setEnabled(wantSphere); }
     }
     if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
       if(++lowFrames > 90){ lowFrames = 0;
@@ -2493,7 +2556,11 @@ async function run(fileName){
   // White glow-outline around the whole protein's SILHOUETTE (HighlightLayer), shown on hover/select.
   const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 0.6, blurVerticalSize: 0.6, mainTextureRatio: 0.5 });
   psiiHL.innerGlow = false; psiiHL.outerGlow = true;
-  for(const cell of cellList) for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
+  // Outline the PSII cells only (not the membrane). Include the vdW spheres too — when the whole
+  // protein is in view (the only time this outline shows) the cells are in their sphere LOD.
+  for(const cell of cellList){ if(!cell.macro) continue;
+    for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
+    if(cell.sphere) psiiHL.addMesh(cell.sphere, new BABYLON.Color3(1,1,1)); }
   psiiHL.isEnabled = false;   // only rendered while hovering/selecting the macromolecule
   const setOutline = on => { if(psiiHL.isEnabled !== on) psiiHL.isEnabled = on; };
   const macroGizmoNode = new BABYLON.TransformNode('macroGizmo', scene);
