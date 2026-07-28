@@ -1129,61 +1129,73 @@ void main(void){
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
-async function run(fileName){
-  const url = /^(https?:|\.?\/)/.test(fileName) ? fileName : './' + fileName;
-
-  /* Fetch (streamed for a progress bar) */
-  setLbl(`Fetching ${fileName}…`);
-  const res = await fetch(url);
-  if(!res.ok) throw new Error(`HTTP ${res.status} — is "${fileName}" next to index.html?`);
-  const total = +res.headers.get('Content-Length') || 0;
-  const reader = res.body.getReader(); const chunks = []; let got = 0;
-  for(;;){
-    const {done, value} = await reader.read();
-    if(done) break; chunks.push(value); got += value.length;
-    if(total) setBar((got / total) * 55);   // download fills the first ~55%
-  }
-  const buf = new Uint8Array(got); let off = 0;
-  for(const ch of chunks){ buf.set(ch, off); off += ch.length; }
-  // Compositor-driven creep to ~96% so the bar keeps moving smoothly through the
-  // main-thread-blocking parse + build phases (transform animates off the main thread).
+async function run(){
+  /* ── Thylakoid membrane scene ─────────────────────────────────────────────
+     Integral complexes are embedded in the bilayer (Y≈0) in electron-transport order
+     along X; soluble partners sit on the stroma (+Y) or lumen (−Y) face beside their
+     functional partner. x = position along the membrane, y = 0 membrane / + stroma /
+     − lumen, z = depth into the membrane plane. */
+  const MEMBRANE_Y = 0;
+  const MODELS = [
+    {file:'PSII.mol2',                       x:-560, y:0,    z:0,    label:'Photosystem II'},
+    {file:'cytochrome_b6f.mol2',             x:-190, y:0,    z:0,    label:'Cytochrome b6f'},
+    {file:'photosystem_I.mol2',              x:170,  y:0,    z:0,    label:'Photosystem I'},
+    {file:'NDH-1.mol2',                      x:490,  y:0,    z:30,   label:'NDH-1'},
+    {file:'ATP_synthase.mol2',               x:760,  y:0,    z:0,    label:'ATP synthase'},
+    {file:'plastocyanin.mol2',               x:-10,  y:-190, z:0,    label:'Plastocyanin'},
+    {file:'Violaxanthin_de-epoxidase.mol2',  x:-600, y:-190, z:10,   label:'Violaxanthin de-epoxidase'},
+    {file:'ferredoxin.mol2',                 x:230,  y:250,  z:20,   label:'Ferredoxin'},
+    {file:'FNR.mol2',                        x:400,  y:290,  z:80,   label:'FNR'},
+    {file:'RuBisCO.mol2',                    x:600,  y:380,  z:-80,  label:'RuBisCO'},
+    {file:'Thioredoxin_M.mol2',              x:660,  y:250,  z:70,   label:'Thioredoxin M'},
+    {file:'PGR5.mol2',                       x:-40,  y:220,  z:90,   label:'PGR5'},
+    {file:'PGRL1.mol2',                      x:30,   y:185,  z:-90,  label:'PGRL1'},
+    {file:'STN7.mol2',                       x:-360, y:230,  z:90,   label:'STN7'},
+    {file:'PPH1.mol2',                       x:-470, y:220,  z:-80,  label:'PPH1'},
+    {file:'Zeaxanthin_epoxidase.mol2',       x:-640, y:230,  z:0,    label:'Zeaxanthin epoxidase'},
+  ];
   const barEl = document.getElementById('load-bar');
-  if(barEl){ barEl.style.transition = 'transform 5s cubic-bezier(0.15,0.75,0.2,1)';
-             barEl.style.transform  = 'scaleX(0.96)'; }
-  await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(r)); setTimeout(r, 120); });  // commit (rAF), with timeout fallback for hidden tabs
-  const mols = parseMol2(new TextDecoder().decode(buf));
-  if(mols.length === 0) throw new Error('No molecules found in file');
-  const chl = extractChlorophyll(mols[0]);       // showcase one chlorophyll beside the protein
-  const lipid = extractLipid(mols[0]);           // one lipid → tiled into a bilayer showcase
-  if(chl) mols.push(chl);
-
-  // Rotate 90° about Z so the long axis lies horizontal (PSII lands on its side)
-  for(const m of mols){
-    for(let k=0;k<m.na;k++){ const x=m.x[k], y=m.y[k]; m.x[k]=y; m.y[k]=-x; }
+  setLbl('Fetching thylakoid models…');
+  const mols = [];
+  for(let i=0;i<MODELS.length;i++){ const cfg=MODELS[i];
+    setLbl(`Fetching ${cfg.file}…`); setBar((i/MODELS.length)*45);
+    try{
+      const res = await fetch('./'+cfg.file);
+      if(!res.ok){ console.warn('skip (HTTP '+res.status+')', cfg.file); continue; }
+      const ab = await res.arrayBuffer();
+      const parsed = parseMol2(new TextDecoder().decode(new Uint8Array(ab)));
+      for(const m of parsed){ if(m.na>0){ m.cfg = cfg; m.name = cfg.label; mols.push(m); } }
+    }catch(err){ console.warn('failed to load', cfg.file, err); }
+    await yield_();
   }
+  if(mols.length === 0) throw new Error('No models loaded — are the .mol2 files next to index.html?');
+  setLbl('Placing complexes…'); await yield_();
+  const psii = mols.find(m => m.cfg && m.cfg.file==='PSII.mol2') || mols[0];
+  const chl = extractChlorophyll(psii);          // one chlorophyll extracted from PSII, animated
+  const lipid = extractLipid(psii);              // one lipid → tiled into the bilayer
 
-  /* Lay models out side by side; compute per-model bbox + offset */
-  setLbl('Arranging models…'); await yield_();
+  // Rotate every model 90° about Z (as before) so complexes stand upright-ish across the membrane.
+  for(const m of mols){ for(let k=0;k<m.na;k++){ const x=m.x[k], y=m.y[k]; m.x[k]=y; m.y[k]=-x; } }
+  if(chl){ for(let k=0;k<chl.na;k++){ const x=chl.x[k], y=chl.y[k]; chl.x[k]=y; chl.y[k]=-x; }
+    chl.cfg = {x:-560, y:150, z:130}; chl.name = 'Chlorophyll'; mols.push(chl); }
+
+  // Centre each model, then offset it to its target membrane position.
+  if(barEl){ barEl.style.transition = 'transform 6s cubic-bezier(0.15,0.75,0.2,1)'; barEl.style.transform = 'scaleX(0.9)'; }
   const box = [];
   for(const m of mols){
     let miX=Infinity,miY=Infinity,miZ=Infinity,maX=-Infinity,maY=-Infinity,maZ=-Infinity;
-    for(let k=0;k<m.na;k++){
-      const x=m.x[k],y=m.y[k],z=m.z[k];
-      if(x<miX)miX=x; if(y<miY)miY=y; if(z<miZ)miZ=z;
-      if(x>maX)maX=x; if(y>maY)maY=y; if(z>maZ)maZ=z;
-    }
+    for(let k=0;k<m.na;k++){ const x=m.x[k],y=m.y[k],z=m.z[k];
+      if(x<miX)miX=x; if(y<miY)miY=y; if(z<miZ)miZ=z; if(x>maX)maX=x; if(y>maY)maY=y; if(z>maZ)maZ=z; }
     box.push({miX,miY,miZ,maX,maY,maZ,w:maX-miX});
+    const cx=(miX+maX)/2, cy=(miY+maY)/2, cz=(miZ+maZ)/2, cfg=m.cfg||{x:0,y:0,z:0};
+    m.ox = cfg.x - cx; m.oy = (cfg.y + MEMBRANE_Y) - cy; m.oz = cfg.z - cz;
   }
-  const meanW = box.reduce((s,b)=>s+b.w,0)/box.length;
-  const gap   = meanW*GAP_FRAC;
-  const rowW  = box.reduce((s,b)=>s+b.w,0)+gap*(mols.length-1);
-  let cursor  = -rowW/2;
-  for(let mi=0;mi<mols.length;mi++){
-    const b=box[mi];
-    const cx=(b.miX+b.maX)/2, cy=(b.miY+b.maY)/2, cz=(b.miZ+b.maZ)/2;
-    mols[mi].ox = (cursor + b.w/2) - cx; mols[mi].oy = -cy; mols[mi].oz = -cz;
-    cursor += b.w + gap;
-  }
+  // Membrane must span the embedded (integral) complexes → its centre + half-extent.
+  const integ = MODELS.filter(c => c.y===0);
+  let iMinX=Infinity,iMaxX=-Infinity,iMinZ=Infinity,iMaxZ=-Infinity;
+  for(const c of integ){ iMinX=Math.min(iMinX,c.x); iMaxX=Math.max(iMaxX,c.x); iMinZ=Math.min(iMinZ,c.z); iMaxZ=Math.max(iMaxZ,c.z); }
+  const memCenX = (iMinX+iMaxX)/2, memCenZ = (iMinZ+iMaxZ)/2;
+  const memHalfX = (iMaxX-iMinX)/2 + 220, memHalfZ = (iMaxZ-iMinZ)/2 + 180;   // + margin so complexes sit inside the sheet
 
   /* Count atoms + bond-halves per element (for typed-array sizing) */
   const nEl = EL_LIST.length;
@@ -1996,15 +2008,17 @@ async function run(fileName){
 
   /* ── Lipid bilayer showcase: tile one extracted lipid into a two-leaflet membrane
      (~2000 lipids) as space-filling vdW spheres, placed below the protein. ─────── */
-  const bilayerCen = new BABYLON.Vector3(0, -320, 0);
+  const bilayerCen = new BABYLON.Vector3(memCenX, MEMBRANE_Y, memCenZ);
   let bilayerHalf = 0;
   if(lipid){
     const LN = lipid.na, NBL = lipid.nb;
     let cx=0,cy=0,cz=0; for(let k=0;k<LN;k++){ cx+=lipid.x[k]; cy+=lipid.y[k]; cz+=lipid.z[k]; } cx/=LN;cy/=LN;cz/=LN;
-    // head (O/P/N) → tail (C) centroid gives the head-up axis
+    // head (polar O/P/N) → tail (C) axis. Distance²-weight both ends so the FAR sugar/phosphate head
+    // and the FAR chain tips define the axis (not the mid-chain ester oxygens) → the polar heads land
+    // cleanly on the two outer surfaces of the bilayer.
     let hx=0,hy=0,hz=0,hn=0, tx=0,ty=0,tz=0,tn=0;
-    for(let k=0;k<LN;k++){ const s=EL_LIST[lipid.el[k]], px=lipid.x[k]-cx,py=lipid.y[k]-cy,pz=lipid.z[k]-cz;
-      if(s==='O'||s==='P'||s==='N'){ hx+=px;hy+=py;hz+=pz;hn++; } else if(s==='C'){ tx+=px;ty+=py;tz+=pz;tn++; } }
+    for(let k=0;k<LN;k++){ const s=EL_LIST[lipid.el[k]], px=lipid.x[k]-cx,py=lipid.y[k]-cy,pz=lipid.z[k]-cz, w=px*px+py*py+pz*pz;
+      if(s==='O'||s==='P'||s==='N'){ hx+=px*w;hy+=py*w;hz+=pz*w;hn+=w; } else if(s==='C'){ tx+=px*w;ty+=py*w;tz+=pz*w;tn+=w; } }
     let ax=(hn?hx/hn:0)-(tn?tx/tn:0), ay=(hn?hy/hn:1)-(tn?ty/tn:0), az=(hn?hz/hn:0)-(tn?tz/tn:0);
     const al=Math.hypot(ax,ay,az)||1; ax/=al;ay/=al;az/=al;
     // rotate so `axis` → +Y (Rodrigues; rotation axis k = axis × Y)
@@ -2016,8 +2030,15 @@ async function run(fileName){
     const lp=new Float32Array(LN*3); let yMin=1e9,yMax=-1e9,xr=0,zr=0;
     for(let k=0;k<LN;k++){ const q=rot([lipid.x[k]-cx,lipid.y[k]-cy,lipid.z[k]-cz]);
       lp[k*3]=q[0];lp[k*3+1]=q[1];lp[k*3+2]=q[2]; yMin=Math.min(yMin,q[1]);yMax=Math.max(yMax,q[1]); xr=Math.max(xr,Math.abs(q[0]));zr=Math.max(zr,Math.abs(q[2])); }
-    const S=Math.max(8, Math.max(xr,zr)*0.9), G=32, half=(G-1)*S*0.5, copies=G*G*2;   // 32×32 × 2 leaflets = 2048 lipids
-    bilayerHalf = half + Math.max(xr,zr);
+    // RECTANGULAR bilayer spanning the embedded complexes (wide in X, shallow in Z). Tile spacing S
+    // is raised as needed to keep the total lipid count bounded (TARGET_LIPIDS) so a very wide
+    // membrane doesn't explode into millions of lobes.
+    const TARGET_LIPIDS = 3000;
+    const tileArea = (4*memHalfX*memHalfZ) / Math.max(1, TARGET_LIPIDS/2);
+    const S = Math.max(Math.max(xr,zr)*0.9, Math.sqrt(tileArea), 8);
+    const Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
+    const halfX=(Gx-1)*S*0.5, halfZ=(Gz-1)*S*0.5;
+    bilayerHalf = Math.max(halfX, halfZ) + Math.max(xr,zr);
     setLbl('Building membrane orbitals…'); await yield_();
     // Template atom positions per leaflet (0 = heads up, 1 = mirrored so the tails meet at Y=0),
     // relative to a tile origin. Every tile is then a pure TRANSLATION of one of these two.
@@ -2087,16 +2108,16 @@ async function run(fileName){
     const lipBondMat = mkLipMat('lipBondMat','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']); lipBondMat.setFloat('nElec',1);
     // Split the G×G grid (×2 leaflets) into BL×BL-tile BLOCKS, each a cellList entry, so the membrane
     // frustum-culls and LODs (orbitals near ↔ vdW spheres far) exactly like the protein cells do.
-    const BL = 4, nbx = Math.ceil(G/BL);
+    const BL = 4, nbx = Math.ceil(Gx/BL), nbz = Math.ceil(Gz/BL);
     const blockR = 0.5*Math.hypot(BL*S, (yMax-yMin)+2*Math.max(xr,zr,1), BL*S);
-    for(let bgi=0;bgi<nbx;bgi++){ for(let bgj=0;bgj<nbx;bgj++){
-      const gi0=bgi*BL, gj0=bgj*BL, gi1=Math.min(G,gi0+BL), gj1=Math.min(G,gj0+BL), nt=(gi1-gi0)*(gj1-gj0);
+    for(let bgi=0;bgi<nbx;bgi++){ for(let bgj=0;bgj<nbz;bgj++){
+      const gi0=bgi*BL, gj0=bgj*BL, gi1=Math.min(Gx,gi0+BL), gj1=Math.min(Gz,gj0+BL), nt=(gi1-gi0)*(gj1-gj0);
       for(let leaf=0;leaf<2;leaf++){ const t=T[leaf], cn=t.core.m.length/16, bn=t.bond.m.length/16;
         const coreM=new Float32Array(cn*nt*16), coreCol=new Float32Array(cn*nt*3), coreCen=new Float32Array(cn*nt*3), coreOid=new Float32Array(cn*nt);
         const bM=new Float32Array(bn*nt*16), bTap=new Float32Array(bn*nt), bCol=new Float32Array(bn*nt*3), bCen=new Float32Array(bn*nt*3), bOid=new Float32Array(bn*nt);
         let ci=0, bi=0, bcx=0, bcz=0;
         for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
-          const ox=bilayerCen.x+gi*S-half, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-half; bcx+=ox; bcz+=oz;
+          const ox=bilayerCen.x+gi*S-halfX, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-halfZ; bcx+=ox; bcz+=oz;
           for(let i=0;i<cn;i++){ const o=ci*16, s=i*16;
             for(let j=0;j<16;j++) coreM[o+j]=t.core.m[s+j];
             coreM[o+12]+=ox; coreM[o+13]+=oy; coreM[o+14]+=oz;
@@ -2170,10 +2191,10 @@ async function run(fileName){
     scene.onBeforeRenderObservable.add(()=>{
       const cp=cam.position; nearTiles.length=0;
       if(Math.abs(cp.y-bilayerCen.y) < NEAR_R){          // only bother when the camera is at membrane height
-        const gi0=Math.round((cp.x-bilayerCen.x+half)/S), gj0=Math.round((cp.z-bilayerCen.z+half)/S), RAD=3;
+        const gi0=Math.round((cp.x-bilayerCen.x+halfX)/S), gj0=Math.round((cp.z-bilayerCen.z+halfZ)/S), RAD=3;
         for(let di=-RAD;di<=RAD;di++) for(let dj=-RAD;dj<=RAD;dj++){
-          const gi=gi0+di, gj=gj0+dj; if(gi<0||gj<0||gi>=G||gj>=G) continue;
-          const ox=bilayerCen.x+gi*S-half, oz=bilayerCen.z+gj*S-half;
+          const gi=gi0+di, gj=gj0+dj; if(gi<0||gj<0||gi>=Gx||gj>=Gz) continue;
+          const ox=bilayerCen.x+gi*S-halfX, oz=bilayerCen.z+gj*S-halfZ;
           const dx=ox-cp.x, dz=oz-cp.z, d2=dx*dx+dz*dz;
           if(d2 < NEAR_R*NEAR_R) nearTiles.push({ox,oz,d2});
         }
@@ -3076,7 +3097,7 @@ async function run(fileName){
 }
 
 /* ── Auto-load PSII on page load (no prompt) ───────────────────────────── */
-run('PSII.mol2').catch(err => {
+run().catch(err => {
   console.error(err);
   setLbl('Error: ' + err.message);
 });
