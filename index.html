@@ -78,12 +78,13 @@ body.dark-mode{
 #vr-icon{font-size:15px;line-height:1}
 #speedbox{color:var(--brown)!important}
 #speedbox #speedval{font-weight:bold}
-/* Speed slider — dark-brown bar + cream thumb (was a grey default track) */
-#speed{-webkit-appearance:none;appearance:none;height:6px;border-radius:99px;background:var(--brown);outline:none}
-#speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;
-  background:var(--paper);border:2.5px solid var(--brown);cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.35)}
-#speed::-moz-range-track{height:6px;border-radius:99px;background:var(--brown)}
-#speed::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--paper);border:2.5px solid var(--brown);cursor:pointer}
+/* Speed slider — same palette as the loading bar (.ptr tan track + #4a3320 border + #82a058 fill) */
+#speed{-webkit-appearance:none;appearance:none;height:10px;box-sizing:border-box;border-radius:99px;
+  background:#e7d4ac;border:2.5px solid #4a3320;outline:none}
+#speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+  background:#82a058;border:2.5px solid #4a3320;cursor:pointer;margin-top:-5.5px}
+#speed::-moz-range-track{height:10px;box-sizing:border-box;border-radius:99px;background:#e7d4ac;border:2.5px solid #4a3320}
+#speed::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#82a058;border:2.5px solid #4a3320;cursor:pointer}
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
 #br-stack{position:absolute;right:14px;bottom:14px;z-index:25;display:flex;flex-direction:column;
   align-items:flex-end;gap:12px;pointer-events:none}
@@ -1289,12 +1290,12 @@ async function run(){
      functional partner. x = position along the membrane, y = 0 membrane / + stroma /
      − lumen, z = depth into the membrane plane. */
   const MEMBRANE_Y = 0;
-  // The .mol2 FILENAMES are mislabelled (shuffled, plus one duplicate PSII), so each complex is
-  // identified by its INTERNAL name / PDB-or-AlphaFold code — robust to the filename shuffle.
+  // Filenames now match their content, but complexes are still identified by their INTERNAL name /
+  // PDB-or-AlphaFold code (robust regardless of filename).
   // x = along the membrane, y = 0 membrane / + stroma / − lumen, z = depth into the plane.
   const MODELS = [
     {match:'3jcu',   x:-560, y:0,    z:0,    rot:[54,-171,-180], label:'Photosystem II'},
-    {match:'7r0w',   x:-190, y:0,    z:0,    label:'Cytochrome b6f'},
+    {match:'7r0w',   x:-190, y:0,    z:58,   rot:[81,79,-180], label:'Cytochrome b6f'},
     {match:'9e0j',   x:460,  y:0,    z:0,    rot:[-77,132,-130], label:'Photosystem I'},
     {match:'6l7o',   x:97,   y:35,   z:30,   rot:[51,-159,70],   label:'NDH-1'},
     {match:'6vm1',   x:760,  y:84,   z:0,    rot:[-69,102,33],   label:'ATP synthase'},
@@ -1310,7 +1311,7 @@ async function run(){
     {match:'q9fgc7', x:-640, y:230,  z:0,    label:'Zeaxanthin epoxidase'},
   ];
   const FILES = ['PSII.mol2','photosystem_I.mol2','cytochrome_b6f.mol2','ATP_synthase.mol2','NDH-1.mol2',
-    'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','Thioredoxin_M.mol2','plastocyanin.mol2','PGR5.mol2',
+    'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','plastocyanin.mol2','PGR5.mol2',
     'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2'];
   const barEl = document.getElementById('load-bar');
   setLbl('Fetching thylakoid models…');
@@ -1341,16 +1342,7 @@ async function run(){
   if(chl){ for(let k=0;k<chl.na;k++){ const x=chl.x[k], y=chl.y[k]; chl.x[k]=y; chl.y[k]=-x; }
     chl.cfg = {x:-560, y:150, z:130}; chl.name = 'Chlorophyll'; mols.push(chl); }
 
-  // Cytochrome b6f is a physiological HOMODIMER but the file (7r0w) holds one monomer → add the
-  // 2-fold partner: a copy rotated 180° about the membrane normal (Y), placed alongside it.
-  { const b6f = mols.find(m => m.cfg && m.cfg.match==='7r0w');
-    if(b6f){ const N=b6f.na;
-      const cl = { na:N, nb:b6f.nb, x:new Float32Array(N), y:new Float32Array(N), z:new Float32Array(N),
-        el:new Uint16Array(b6f.el), cat:b6f.cat, cof:b6f.cof, sid:b6f.sid, b1:b6f.b1, b2:b6f.b2, bo:b6f.bo };
-      let cx=0,cz=0; for(let k=0;k<N;k++){ cx+=b6f.x[k]; cz+=b6f.z[k]; } cx/=N; cz/=N;
-      for(let k=0;k<N;k++){ cl.x[k]=2*cx-b6f.x[k]; cl.y[k]=b6f.y[k]; cl.z[k]=2*cz-b6f.z[k]; }   // 180° about Y
-      cl.cfg = { match:'7r0wb', x:b6f.cfg.x, y:b6f.cfg.y, z:b6f.cfg.z+58, label:'Cytochrome b6f' };
-      cl.name = 'Cytochrome b6f'; mols.push(cl); } }
+  // Cytochrome b6f (7r0w) is already the physiological HOMODIMER in the file — no clone needed.
 
   // Bake per-model rotation (Euler degrees rx,ry,rz read off the gizmo label) around each model's
   // centroid, so the orientation persists. Uses Babylon's YawPitchRoll(y,x,z) — the inverse of
