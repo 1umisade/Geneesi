@@ -1239,6 +1239,17 @@ async function run(){
   if(chl){ for(let k=0;k<chl.na;k++){ const x=chl.x[k], y=chl.y[k]; chl.x[k]=y; chl.y[k]=-x; }
     chl.cfg = {x:-560, y:150, z:130}; chl.name = 'Chlorophyll'; mols.push(chl); }
 
+  // Cytochrome b6f is a physiological HOMODIMER but the file (1q90) holds one monomer → add the
+  // 2-fold partner: a copy rotated 180° about the membrane normal (Y), placed alongside it.
+  { const b6f = mols.find(m => m.cfg && m.cfg.match==='1q90');
+    if(b6f){ const N=b6f.na;
+      const cl = { na:N, nb:b6f.nb, x:new Float32Array(N), y:new Float32Array(N), z:new Float32Array(N),
+        el:new Uint16Array(b6f.el), cat:b6f.cat, sid:b6f.sid, b1:b6f.b1, b2:b6f.b2, bo:b6f.bo };
+      let cx=0,cz=0; for(let k=0;k<N;k++){ cx+=b6f.x[k]; cz+=b6f.z[k]; } cx/=N; cz/=N;
+      for(let k=0;k<N;k++){ cl.x[k]=2*cx-b6f.x[k]; cl.y[k]=b6f.y[k]; cl.z[k]=2*cz-b6f.z[k]; }   // 180° about Y
+      cl.cfg = { match:'1q90b', x:b6f.cfg.x, y:b6f.cfg.y, z:b6f.cfg.z+58, label:'Cytochrome b6f' };
+      cl.name = 'Cytochrome b6f'; mols.push(cl); } }
+
   // Centre each model, then offset it to its target membrane position.
   if(barEl){ barEl.style.transition = 'transform 6s cubic-bezier(0.15,0.75,0.2,1)'; barEl.style.transform = 'scaleX(0.9)'; }
   const box = [];
