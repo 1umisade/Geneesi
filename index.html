@@ -135,7 +135,7 @@ body.dark-mode{
 .elbtn .eldot{width:10px;height:10px;border-radius:50%;box-shadow:0 0 0 1.5px var(--brown)}
 .elbtn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 2.5px 0 var(--brown)}
 /* Orbital chips (electron-config panel) */
-.orb-chip{font-family:inherit;font-size:14px;font-weight:bold;color:var(--ink);background:var(--paper2);
+.orb-chip{font-family:inherit;font-size:14px;font-weight:bold;color:var(--brown);background:var(--paper2);
   border:2.5px solid var(--brown);border-radius:13px;padding:4px 9px 5px;cursor:pointer;display:flex;
   flex-direction:column;align-items:center;gap:4px;line-height:1;box-shadow:0 2.5px 0 var(--brown)}
 .orb-chip.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 2.5px 0 var(--brown)}
@@ -183,7 +183,7 @@ const FILL_SCALE = 0.72; // space-filling sphere size as a fraction of vdW radiu
       C dark grey, H light grey.  vr drives the space-filling surface mode.  ── */
 /* n = nucleon count (mass number) → nucleus size; z = proton count; en = Pauling electronegativity (bond polarity). */
 const ELEM = {
-  H :{c:[0.88,0.88,0.88], r:0.23, vr:1.10, n:1,  z:1 , en:2.20},   C :{c:[0.24,0.24,0.24], r:0.32, vr:1.70, n:12, z:6 , en:2.55},
+  H :{c:[0.88,0.88,0.88], r:0.23, vr:1.10, n:1,  z:1 , en:2.20},   C :{c:[0.42,0.42,0.42], r:0.32, vr:1.70, n:12, z:6 , en:2.55},
   N :{c:[0.19,0.31,0.97], r:0.31, vr:1.55, n:14, z:7 , en:3.04},   O :{c:[0.94,0.15,0.15], r:0.30, vr:1.52, n:16, z:8 , en:3.44},
   S :{c:[1.00,0.78,0.16], r:0.38, vr:1.80, n:32, z:16, en:2.58},   P :{c:[1.00,0.50,0.00], r:0.38, vr:1.80, n:31, z:15, en:2.19},
   MG:{c:[0.33,0.78,0.33], r:0.42, vr:1.73, n:24, z:12, en:1.31},   FE:{c:[0.88,0.40,0.20], r:0.42, vr:1.56, n:56, z:26, en:1.83},
@@ -528,12 +528,12 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
-  float rim = smoothstep(0.9, 1.0, r2);
+  float rim = smoothstep(0.86, 1.0, r2);   // slightly wider+deeper ink band → crevices read on mid-gray carbon too
   if(protonOutline > 0.5 && vFlag > 0.5){
     float pf = pow(1.0 - zc, 1.6);                           // broad, soft Fresnel (zc = sqrt(1-r2)) → hazy edge
     col = mix(col, vec3(1.0, 0.18, 0.18), pf) + vec3(0.40, 0.0, 0.0) * pf;   // hazy red glow on protons
   } else
-    col *= mix(1.0, 0.12, rim);                              // ink rim → Goodsell outline
+    col *= mix(1.0, 0.10, rim);                              // ink rim → Goodsell outline
   // Selected complex → repaint each of its atoms' rims sage. Every atom is outlined, so the shape
   // the eye picks up is the OUTER contour of the whole protein (interior rims are hidden behind the
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
@@ -3790,6 +3790,84 @@ async function run(){
   const EV_J = 1.602176634e-19;   // 1 eV in joules
   // Relative energy (lowest orbital = 0, others above it): E'_i = E_i − E_lowest, in joules.
   const fmtJ = evRel => { const j = evRel*EV_J; return j < 1e-30 ? '0 J' : '+' + j.toExponential(2) + ' J'; };
+  // The plain ATOMIC orbitals of an element (1s, 2s, 2pₓ, 2p_y, 2p_z …) from its ground config —
+  // never the hybrid set. Used by BOTH the panel list and the header render, so they always agree.
+  const atomicOrbitals = e => { const list = [];
+    for(const [n,ty] of econf(e)){ const norb = 2*ty + 1;   // s=1, p=3, d=5, f=7 orbitals (NOT lobes)
+      for(let sub=0; sub<norb; sub++) list.push(n*100 + ty*10 + sub); }
+    return list; };
+
+  /* ── Static orbital preview for the config panel ───────────────────────────
+     A tiny off-screen render of the selected atom's ATOMIC orbitals (s spheres + p lobes) + nucleus,
+     using the very same 'orb' and 'imp' shaders the 3-D scene uses — so it looks identical — but
+     captured ONCE to a 2-D canvas so it never animates. The preview meshes live on their own layerMask
+     so the MAIN camera never draws them; only prevCam (via its render target) does. */
+  const PREV_MASK = 0x20000000;
+  const prevCam = new BABYLON.ArcRotateCamera('prevCam', -Math.PI/2.5, Math.PI/2.7, 3, BABYLON.Vector3.Zero(), scene);
+  prevCam.fov = 0.7; prevCam.minZ = 0.01; prevCam.maxZ = 100; prevCam.layerMask = PREV_MASK;
+  const prevRTT = new BABYLON.RenderTargetTexture('orbPrevRTT', 256, scene, false, true,
+    BABYLON.Constants.TEXTURETYPE_UNSIGNED_BYTE, false, BABYLON.Texture.TRILINEAR_SAMPLINGMODE, true);
+  prevRTT.clearColor = new BABYLON.Color4(0,0,0,0);   // transparent → the panel paper shows behind the atom
+  prevRTT.activeCamera = prevCam;
+  const prevOrbMat = new BABYLON.ShaderMaterial('prevOrbMat', scene, 'orb', {
+    attributes:['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
+    uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'] });
+  prevOrbMat.setFloat('bubbleR',1e9); prevOrbMat.setFloat('nElec',2); prevOrbMat.setFloat('coneCos',-1.0);
+  prevOrbMat.setFloat('drawElec',1); prevOrbMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6));
+  prevOrbMat.setFloat('focusId',-1); prevOrbMat.backFaceCulling=true;
+  prevOrbMat.onBindObservable.add(()=>{ const eff=prevOrbMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
+    eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9); });
+  const prevOrb = BABYLON.MeshBuilder.CreateSphere('prevOrb',{segments:10,diameter:1},scene);
+  prevOrb.material=prevOrbMat; prevOrb.isPickable=false; prevOrb.alwaysSelectAsActiveMesh=true; prevOrb.layerMask=PREV_MASK; prevOrb.thinInstanceCount=0;
+  const prevNucMat = new BABYLON.ShaderMaterial('prevNucMat', scene, 'imp', {
+    attributes:['position','instanceColor','world0','world1','world2','world3'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','selModel','selCol'] });
+  prevNucMat.setFloat('radius',NUCLEON_R); prevNucMat.setFloat('isShell',0); prevNucMat.setFloat('bubbleR',1e9);
+  prevNucMat.setFloat('protonOutline',0); prevNucMat.setFloat('coneCos',-1.0); prevNucMat.setFloat('depthBias',NUC_BIAS);
+  prevNucMat.setFloat('selModel',-1); prevNucMat.setColor3('selCol', SAGE);
+  prevNucMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); prevNucMat.disableDepthWrite=true; prevNucMat.backFaceCulling=false;
+  prevNucMat.onBindObservable.add(()=>{ const eff=prevNucMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
+    eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9); });
+  const prevNuc = BABYLON.MeshBuilder.CreatePlane('prevNuc',{size:2},scene);
+  prevNuc.material=prevNucMat; prevNuc.isPickable=false; prevNuc.alwaysSelectAsActiveMesh=true; prevNuc.layerMask=PREV_MASK; prevNuc.renderingGroupId=1; prevNuc.thinInstanceCount=0;
+  prevRTT.renderList = [prevOrb, prevNuc];
+  const renderAtomPreview = (atom, canvas) => {
+    const e = atom.e;
+    // Atomic orbital lobes at the ORIGIN (s → sphere R·0.72, p/d → lobes of length R), element-coloured.
+    const defs = []; let maxR = SHELL_STEP;
+    for(const [n,ty] of econf(e)){ const R = n*SHELL_STEP; maxR = Math.max(maxR, R);
+      if(ty===0) defs.push({s:true, R:R*0.72});
+      else for(const d of OTMPL[ty]) defs.push({s:false, dx:d[0], dy:d[1], dz:d[2], R, w:R*0.34}); }
+    const cn = defs.length, oM=new Float32Array(cn*16), oCol=new Float32Array(cn*3), oCen=new Float32Array(cn*3), oOid=new Float32Array(cn);
+    const col = info(e).c, tmp = new Float32Array(16);
+    for(let i=0;i<cn;i++){ const d=defs[i];
+      if(d.s) sphereMat(0,0,0, d.R, tmp, 0); else cylTo(0,0,0, d.dx*d.R, d.dy*d.R, d.dz*d.R, tmp, 0, d.w);
+      for(let j=0;j<16;j++) oM[i*16+j]=tmp[j];
+      oCol[i*3]=col[0]; oCol[i*3+1]=col[1]; oCol[i*3+2]=col[2]; oOid[i]=0; }
+    prevOrb.thinInstanceSetBuffer('ocol',oCol,3,true); prevOrb.thinInstanceSetBuffer('ocen',oCen,3,true);
+    prevOrb.thinInstanceSetBuffer('oid',oOid,1,true); prevOrb.thinInstanceSetBuffer('matrix',oM,16,true); prevOrb.thinInstanceCount=cn;
+    const A = info(e).n, Zz = info(e).z, nM=new Float32Array(A*16), nC=new Float32Array(A*4);
+    for(let i=0;i<A;i++){ const proton=Math.floor((i+1)*Zz/A)>Math.floor(i*Zz/A), o=i*16;
+      nM[o]=1;nM[o+5]=1;nM[o+10]=1;nM[o+15]=1;
+      nM[o+12]=fcc[i][0]*SPACING; nM[o+13]=fcc[i][1]*SPACING; nM[o+14]=fcc[i][2]*SPACING;
+      const cc=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62]; nC[i*4]=cc[0];nC[i*4+1]=cc[1];nC[i*4+2]=cc[2];nC[i*4+3]=0; }
+    prevNuc.thinInstanceSetBuffer('instanceColor',nC,4,true); prevNuc.thinInstanceSetBuffer('matrix',nM,16,true); prevNuc.thinInstanceCount=A;
+    prevCam.setTarget(BABYLON.Vector3.Zero()); prevCam.radius = maxR * 3.4;
+    // Render + capture. Retry until the shaders are ready (RTT comes back with opaque pixels).
+    const capture = tries => { prevRTT.render();
+      Promise.resolve(prevRTT.readPixels()).then(buf => { if(!buf) return;
+        let opaque=false; for(let i=3;i<buf.length;i+=4){ if(buf[i]>8){ opaque=true; break; } }
+        if(!opaque && tries>0){ requestAnimationFrame(()=>capture(tries-1)); return; }
+        const sz=prevRTT.getSize(), W=sz.width, H=sz.height, cw=canvas.width, ch=canvas.height;
+        const ctx=canvas.getContext('2d'), img=ctx.createImageData(cw,ch);
+        for(let y=0;y<ch;y++){ const sy=Math.min(H-1, Math.floor((ch-1-y)*H/ch));
+          for(let x=0;x<cw;x++){ const sx=Math.min(W-1, Math.floor(x*W/cw)), si=(sy*W+sx)*4, di=(y*cw+x)*4;
+            img.data[di]=buf[si]; img.data[di+1]=buf[si+1]; img.data[di+2]=buf[si+2]; img.data[di+3]=buf[si+3]; } }
+        ctx.putImageData(img,0,0);
+      }); };
+    capture(10);
+  };
+
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
     econfPanel.innerHTML = '';
@@ -3797,29 +3875,21 @@ async function run(){
     const bonds = (!atom.spawn && bondCntEA[e]) ? bondCntEA[e][atom.idx] : 0, sn = bonds + lonePairs(e);   // spawned atoms are unbonded
     const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
     const title = document.createElement('div');
-    title.textContent = EL_LIST[e] + (hyb ? '  ·  ' + hyb + ' hybridised' : '');
-    title.style.cssText = 'font-size:13px;font-weight:bold;color:var(--sage2);';
-    // Small STATIC rendition of the selected atom: a shaded vdW sphere in its element colour, symbol
-    // overlaid. (No spin — a plain radial-gradient div.) The 1s²… notation line is intentionally gone.
-    const c = info(e).c, R = v => Math.round(Math.max(0, Math.min(1, v)) * 255);
-    const base = 'rgb('+R(c[0])+','+R(c[1])+','+R(c[2])+')';
-    const lite = 'rgb('+R(c[0]*.5+.5)+','+R(c[1]*.5+.5)+','+R(c[2]*.5+.5)+')';
-    const dark = 'rgb('+R(c[0]*.55)+','+R(c[1]*.55)+','+R(c[2]*.55)+')';
-    const lum = 0.299*c[0] + 0.587*c[1] + 0.114*c[2];
-    const atomViz = document.createElement('div');
-    atomViz.style.cssText = 'width:52px;height:52px;border-radius:50%;flex:0 0 auto;'
-      + 'background:radial-gradient(circle at 38% 32%, '+lite+', '+base+' 56%, '+dark+' 100%);'
-      + 'border:2.5px solid var(--brown);box-shadow:0 2.5px 0 var(--brown);'
-      + 'display:flex;align-items:center;justify-content:center;'
-      + "font-family:'Courier New',monospace;font-weight:bold;font-size:18px;"
-      + 'color:'+(lum>0.6?'var(--ink)':'#fff')+';text-shadow:0 1px 1px rgba(0,0,0,.25);';
-    atomViz.textContent = EL_LIST[e];
+    title.textContent = EL_LIST[e];                              // element only — no "· sp³ hybridised"
+    title.style.cssText = 'font-size:15px;font-weight:bold;color:var(--brown);';
+    // A small STATIC render of the selected atom's orbitals — the SAME orb + nucleus shaders as the
+    // 3-D scene, drawn ONCE to this canvas (renderAtomPreview, below), so it matches the live look
+    // but never animates.
+    const atomViz = document.createElement('canvas');
+    atomViz.width = atomViz.height = 128;
+    atomViz.style.cssText = 'width:62px;height:62px;flex:0 0 auto;';
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px;';
     header.appendChild(atomViz); header.appendChild(title);
     // Vertical energy-level diagram: group the orbitals into energy levels (equal-energy
     // subshells share a rung), highest energy on top, each rung labelled with its eV.
-    const items = collectOrbitals(atom).map(oid => ({ oid, energy: orbEnergyEV(e, oid, hyb, maxN) }));
+    // "Just list the orbitals": the plain ATOMIC orbitals (1s, 2s, 2pₓ …), never the sp³ hybrids.
+    const items = atomicOrbitals(e).map(oid => ({ oid, energy: orbEnergyEV(e, oid, null, maxN) }));
     const eMin = items.length ? Math.min(...items.map(x => x.energy)) : 0;   // lowest orbital → 0, others relative to it
     const levelMap = new Map();
     for(const it of items){ const key = it.energy.toFixed(2);
@@ -3835,14 +3905,14 @@ async function run(){
       rung.style.cssText = 'display:flex;align-items:center;gap:8px;border-top:2px solid var(--brown);padding-top:5px;';
       const ev = document.createElement('span');
       ev.textContent = fmtJ(lv.energy - eMin);
-      ev.style.cssText = 'font-size:11px;font-weight:bold;color:var(--sage2);min-width:82px;text-align:right;font-variant-numeric:tabular-nums;';
+      ev.style.cssText = 'font-size:11px;font-weight:bold;color:var(--brown);min-width:82px;text-align:right;font-variant-numeric:tabular-nums;';
       const chipsWrap = document.createElement('div');
       chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
       for(const oid of lv.oids){
         const chip = document.createElement('button');
         chip.dataset.t = oid;
         chip.className = 'orb-chip';
-        const lab = document.createElement('span'); lab.textContent = orbLabel(oid, hyb, maxN); chip.appendChild(lab);
+        const lab = document.createElement('span'); lab.textContent = orbLabel(oid, null, maxN); chip.appendChild(lab);
         // The orbital "box": its electrons drawn as dots that RADIATE the same wave rings as the 3-D electrons.
         const ne = orbElectrons(e, oid);
         const box = document.createElement('span');
@@ -3855,11 +3925,9 @@ async function run(){
       }
       rung.appendChild(ev); rung.appendChild(chipsWrap); stack.appendChild(rung);
     }
-    const hint = document.createElement('div');
-    hint.textContent = 'energy ↑ · click an orbital to isolate it';
-    hint.style.cssText = 'font-size:10px;font-weight:bold;color:var(--brown);margin-top:8px;';
-    econfPanel.appendChild(header); econfPanel.appendChild(stack); econfPanel.appendChild(hint);
+    econfPanel.appendChild(header); econfPanel.appendChild(stack);   // hint line ("energy ↑ · click…") removed
     econfPanel.style.display = 'block';
+    renderAtomPreview(atom, atomViz);   // draw the static orbital render into the header canvas
   };
 
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
