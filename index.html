@@ -2556,10 +2556,20 @@ async function run(){
     // driven by camera ELEVATION: the front lipids dissolve gradually as the view drops to the
     // membrane's level. Here we only compute the fade parameters; the whole sheet still renders and
     // the far edge is handled by fog.
-    const fy = Math.abs(f.y);   // 0 = looking horizontally (at membrane level), 1 = straight down/up
+    // The cross-cut fade needs TWO conditions, multiplied together, so it only fires when you are
+    // truly viewing the sheet edge-on:
+    //   look  — the view points roughly along the membrane (not down at it), and
+    //   elev  — the camera actually sits near the membrane's Y-plane (not hovering above it).
+    // Gating on elevation kills the stray "free nuclei" (half-dithered lipids) that used to linger
+    // whenever you were high above the sheet but happened to be looking horizontally.
+    const fy = Math.abs(f.y);                                        // 0 = looking horizontally, 1 = straight down/up
+    const look = 1.0 - Math.max(0, Math.min(1, (fy-0.12)/(0.5-0.12)));
+    const elevAbs = Math.abs(cp.y - bilayerCen.y);                   // camera height above/below the membrane plane
+    const inR = Math.max(40, ar*0.12), outR = Math.max(220, ar*0.55); // "at membrane level" scales with zoom distance
+    const elev = 1.0 - Math.max(0, Math.min(1, (elevAbs - inR)/(outR - inR)));
     gCut[0] = bilayerCen.z;                                          // cut plane (membrane centre z)
     gCut[1] = (cp.z - bilayerCen.z) >= 0 ? 1 : -1;                   // which side is toward the camera
-    gCut[2] = 1.0 - Math.max(0, Math.min(1, (fy-0.12)/(0.5-0.12)));  // fade strength: 1 at membrane level → 0 looking down
+    gCut[2] = look * elev;                                           // fade strength: full only when edge-on AND at membrane height
     for(const cell of cellList){
       const cR = cell.r;
       let wcx, wcy, wcz;
