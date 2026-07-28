@@ -1191,11 +1191,11 @@ async function run(){
   // identified by its INTERNAL name / PDB-or-AlphaFold code — robust to the filename shuffle.
   // x = along the membrane, y = 0 membrane / + stroma / − lumen, z = depth into the plane.
   const MODELS = [
-    {match:'3jcu',   x:-560, y:0,    z:0,    label:'Photosystem II'},
+    {match:'3jcu',   x:-560, y:0,    z:0,    rot:[54,-171,-180], label:'Photosystem II'},
     {match:'1q90',   x:-190, y:0,    z:0,    label:'Cytochrome b6f'},
-    {match:'9e0j',   x:170,  y:0,    z:0,    label:'Photosystem I'},
-    {match:'6l7o',   x:490,  y:0,    z:30,   label:'NDH-1'},
-    {match:'6vm1',   x:760,  y:0,    z:0,    label:'ATP synthase'},
+    {match:'9e0j',   x:460,  y:0,    z:0,    rot:[-77,132,-130], label:'Photosystem I'},
+    {match:'6l7o',   x:97,   y:35,   z:30,   rot:[51,-159,70],   label:'NDH-1'},
+    {match:'6vm1',   x:760,  y:84,   z:0,    rot:[-69,102,33],   label:'ATP synthase'},
     {match:'1ag6',   x:-10,  y:-190, z:0,    label:'Plastocyanin'},
     {match:'q39249', x:-600, y:-190, z:10,   label:'Violaxanthin de-epoxidase'},
     {match:'1a70',   x:230,  y:250,  z:20,   label:'Ferredoxin'},
@@ -1249,6 +1249,17 @@ async function run(){
       for(let k=0;k<N;k++){ cl.x[k]=2*cx-b6f.x[k]; cl.y[k]=b6f.y[k]; cl.z[k]=2*cz-b6f.z[k]; }   // 180° about Y
       cl.cfg = { match:'1q90b', x:b6f.cfg.x, y:b6f.cfg.y, z:b6f.cfg.z+58, label:'Cytochrome b6f' };
       cl.name = 'Cytochrome b6f'; mols.push(cl); } }
+
+  // Bake per-model rotation (Euler degrees rx,ry,rz read off the gizmo label) around each model's
+  // centroid, so the orientation persists. Uses Babylon's YawPitchRoll(y,x,z) — the inverse of
+  // the label's toEulerAngles(), so the numbers reproduce exactly.
+  { const D = Math.PI/180, _R = new BABYLON.Matrix(), _v = new BABYLON.Vector3();
+    for(const m of mols){ const rot = m.cfg && m.cfg.rot; if(!rot) continue;
+      BABYLON.Quaternion.RotationYawPitchRoll(rot[1]*D, rot[0]*D, rot[2]*D).toRotationMatrix(_R);
+      let cx=0,cy=0,cz=0; for(let k=0;k<m.na;k++){ cx+=m.x[k]; cy+=m.y[k]; cz+=m.z[k]; } cx/=m.na; cy/=m.na; cz/=m.na;
+      for(let k=0;k<m.na;k++){ _v.set(m.x[k]-cx, m.y[k]-cy, m.z[k]-cz);
+        const w = BABYLON.Vector3.TransformCoordinates(_v, _R);
+        m.x[k]=w.x+cx; m.y[k]=w.y+cy; m.z[k]=w.z+cz; } } }
 
   // Centre each model, then offset it to its target membrane position.
   if(barEl){ barEl.style.transition = 'transform 6s cubic-bezier(0.15,0.75,0.2,1)'; barEl.style.transform = 'scaleX(0.9)'; }
