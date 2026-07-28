@@ -47,6 +47,13 @@ body.dark-mode{
   transition:transform .1s ease,box-shadow .1s ease}
 #darkmode-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #darkmode-icon{font-size:16px;line-height:1}
+#gfx-btn{position:absolute;left:16px;top:60px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#gfx-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#gfx-icon{font-size:15px;line-height:1}
 #speedbox{color:var(--brown)!important}
 #speedbox #speedval{font-weight:bold}
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
@@ -91,6 +98,7 @@ body.dark-mode{
   <div class="ptr"><div class="pfil" id="load-bar"></div></div>
 </div>
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
+<button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬡</span><span id="gfx-label">Orbitaalit</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
@@ -1562,6 +1570,11 @@ async function run(){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
+  let gVdw = false;           // graphics mode: false = orbitals (default), true = space-filling vdW spheres
+  { const gfxBtn = document.getElementById('gfx-btn');   // toggle orbitals ↔ vdW spheres (cull loop applies it next frame)
+    if(gfxBtn) gfxBtn.addEventListener('click', () => { gVdw = !gVdw;
+      const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = gVdw ? 'vdW-pallot' : 'Orbitaalit';
+      const ic=document.getElementById('gfx-icon');   if(ic)  ic.textContent  = gVdw ? '⬤' : '⬡'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
@@ -1770,17 +1783,19 @@ async function run(){
     return (ix*gny+iy)*gnz+iz;
   };
   const cells = new Map();
-  const getCell = k => { let c=cells.get(k); if(!c){ c={ nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
+  const getCell = k => { let c=cells.get(k); if(!c){ c={ sphM:[],sphC:[],sphR:[], nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
 
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const sb=sphBuf[e], A=info(e).n, ec=info(e).c;
-    // Nucleons — A per atom, contiguous → bin by the atom centre.
+    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE;
+    // Nucleons — A per atom, contiguous → bin by the atom centre. Also collect ONE vdW sphere per
+    // atom (the space-filling representation shown when the graphics toggle is in "vdW" mode).
     const nb=nucBuf[e], nc=nucColBuf[e];
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
+      pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
     }
     // Orbitals — bin by orbCenBuf (each lobe's atom centre).
     const oc=orbCount(e);
@@ -1806,6 +1821,28 @@ async function run(){
     await yield_();
   }
 
+  // vdW space-filling sphere materials (shown when the graphics toggle is in "vdW" mode). One
+  // sphere per atom, per-instance radius via IMPRAD. Movable variant follows the PSII gizmo.
+  const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
+    attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter'],
+    defines:['#define IMPRAD','#define MACROMOVE'] });
+  vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('bubbleR',1e9);
+  vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
+  vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false;
+  vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
+    eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
+    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+  const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
+    attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'],
+    defines:['#define IMPRAD'] });
+  vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('bubbleR',1e9);
+  vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
+  vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false;
+  vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
+    eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+
   // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
   const cellList = [];
   for(const [k,c] of cells){
@@ -1829,9 +1866,15 @@ async function run(){
       m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true); m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
       m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true); m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.lpOid),1,true);
       m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
+    let sphere=null;
+    if(c.sphM.length){ sphere=BABYLON.MeshBuilder.CreatePlane('cs'+k,{size:2},scene); sphere.material=vdwMat; sphere.isPickable=false;
+      sphere.thinInstanceSetBuffer('matrix', new Float32Array(c.sphM),16,true);
+      sphere.thinInstanceSetBuffer('instanceColor', new Float32Array(c.sphC),4,true);
+      sphere.thinInstanceSetBuffer('instR', new Float32Array(c.sphR),1,true);
+      sphere.renderingGroupId=1; sphere.alwaysSelectAsActiveMesh=true; sphere.setEnabled(false); }
     if(nuc) nuc.setEnabled(false);
     for(const m of meshes) m.setEnabled(false);
-    cellList.push({ cx,cy,cz, meshes, nuc, macro:true, r:0.5*Math.hypot(CELL,CELL,CELL), visOn:false, nucOn:false });
+    cellList.push({ cx,cy,cz, meshes, nuc, sphere, macro:true, r:0.5*Math.hypot(CELL,CELL,CELL), visOn:false, nucOn:false, sphOn:false });
     await yield_();
   }
   cells.clear();
@@ -2115,9 +2158,14 @@ async function run(){
       for(let leaf=0;leaf<2;leaf++){ const t=T[leaf], cn=t.core.m.length/16, bn=t.bond.m.length/16;
         const coreM=new Float32Array(cn*nt*16), coreCol=new Float32Array(cn*nt*3), coreCen=new Float32Array(cn*nt*3), coreOid=new Float32Array(cn*nt);
         const bM=new Float32Array(bn*nt*16), bTap=new Float32Array(bn*nt), bCol=new Float32Array(bn*nt*3), bCen=new Float32Array(bn*nt*3), bOid=new Float32Array(bn*nt);
-        let ci=0, bi=0, bcx=0, bcz=0;
+        const sM=new Float32Array(LN*nt*16), sC=new Float32Array(LN*nt*4), sR=new Float32Array(LN*nt);
+        let ci=0, bi=0, si=0, bcx=0, bcz=0;
         for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
           const ox=bilayerCen.x+gi*S-halfX, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-halfZ; bcx+=ox; bcz+=oz;
+          for(let k=0;k<LN;k++){ const el=lipid.el[k], cc=info(el).c, o=si*16;
+            sM[o]=1;sM[o+5]=1;sM[o+10]=1;sM[o+15]=1;
+            sM[o+12]=tPos[leaf][k*3]+ox; sM[o+13]=tPos[leaf][k*3+1]+oy; sM[o+14]=tPos[leaf][k*3+2]+oz;
+            sC[si*4]=cc[0];sC[si*4+1]=cc[1];sC[si*4+2]=cc[2];sC[si*4+3]=0; sR[si]=info(el).vr*FILL_SCALE; si++; }
           for(let i=0;i<cn;i++){ const o=ci*16, s=i*16;
             for(let j=0;j<16;j++) coreM[o+j]=t.core.m[s+j];
             coreM[o+12]+=ox; coreM[o+13]+=oy; coreM[o+14]+=oz;
@@ -2142,8 +2190,11 @@ async function run(){
         bondMesh.thinInstanceSetBuffer('taper',bTap,1,true); bondMesh.thinInstanceSetBuffer('bcol',bCol,3,true);
         bondMesh.thinInstanceSetBuffer('ocen',bCen,3,true); bondMesh.thinInstanceSetBuffer('oid',bOid,1,true);
         bondMesh.thinInstanceSetBuffer('matrix',bM,16,true); bondMesh.thinInstanceCount=bn*nt;
-        coreMesh.setEnabled(false); bondMesh.setEnabled(false);
-        cellList.push({ cx:bcX, cy:bilayerCen.y, cz:bcZ, meshes:[coreMesh,bondMesh], nuc:null, macro:false, r:blockR, visOn:false, nucOn:false });
+        const sphMesh=BABYLON.MeshBuilder.CreatePlane('lipSp'+bgi+'_'+bgj+'_'+leaf,{size:2},scene);
+        sphMesh.material=vdwMatStatic; sphMesh.isPickable=false; sphMesh.alwaysSelectAsActiveMesh=true; sphMesh.renderingGroupId=1;
+        sphMesh.thinInstanceSetBuffer('matrix',sM,16,true); sphMesh.thinInstanceSetBuffer('instanceColor',sC,4,true); sphMesh.thinInstanceSetBuffer('instR',sR,1,true);
+        coreMesh.setEnabled(false); bondMesh.setEnabled(false); sphMesh.setEnabled(false);
+        cellList.push({ cx:bcX, cy:bilayerCen.y, cz:bcZ, meshes:[coreMesh,bondMesh], nuc:null, sphere:sphMesh, macro:false, r:blockR, visOn:false, nucOn:false, sphOn:false });
       }
       await yield_();
     } }
@@ -2346,8 +2397,12 @@ async function run(){
         }
       }
       const near = vis && d2 < REVEAL2;                   // close enough for electrons + nuclei
-      if(cell.visOn !== vis){ cell.visOn = vis; for(const m of cell.meshes) m.setEnabled(vis); }   // orbitals whenever in view
-      if(cell.nucOn !== near){ cell.nucOn = near; if(cell.nuc) cell.nuc.setEnabled(near); }         // nuclei only up close
+      const wantOrb = vis && !gVdw;                       // orbital lobes: in view, orbital mode
+      const wantSph = vis && gVdw && !!cell.sphere;       // vdW spheres: in view, vdW mode
+      const wantNuc = near && !gVdw;                      // nuclei: orbital mode, up close only
+      if(cell.visOn !== wantOrb){ cell.visOn = wantOrb; for(const m of cell.meshes) m.setEnabled(wantOrb); }
+      if(cell.sphOn !== wantSph){ cell.sphOn = wantSph; if(cell.sphere) cell.sphere.setEnabled(wantSph); }
+      if(cell.nucOn !== wantNuc){ cell.nucOn = wantNuc; if(cell.nuc) cell.nuc.setEnabled(wantNuc); }
     }
     if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
       if(++lowFrames > 90){ lowFrames = 0;
@@ -2556,7 +2611,8 @@ async function run(){
   psiiHL.innerGlow = false; psiiHL.outerGlow = true;
   // Outline the PSII cells only (not the membrane), from their always-on orbital meshes.
   for(const cell of cellList){ if(!cell.macro) continue;
-    for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1)); }
+    for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
+    if(cell.sphere) psiiHL.addMesh(cell.sphere, new BABYLON.Color3(1,1,1)); }
   psiiHL.isEnabled = false;   // only rendered while hovering/selecting the macromolecule
   const setOutline = on => { if(psiiHL.isEnabled !== on) psiiHL.isEnabled = on; };
   const macroGizmoNode = new BABYLON.TransformNode('macroGizmo', scene);
