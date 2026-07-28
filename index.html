@@ -505,7 +505,7 @@ void main(void){
   if(colorMode > 0.5) vBcol = modelCol[int(modelId + 0.5)];
 #endif
   vOid = oid;
-  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['bondFragmentShader'] = `
@@ -728,7 +728,7 @@ void main(void){
 #endif
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vOid = oid;
-  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
 }`;
 BABYLON.Effect.ShadersStore['orbFragmentShader'] = `
@@ -889,7 +889,7 @@ void main(void){
 #endif
   vSel = step(distance(ocen, selCenter), 0.6);
   vOid = oid;
-  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;
+  vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;
   gl_Position = projection * vp;
 }`;
 
@@ -1754,7 +1754,12 @@ async function run(){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
-  let gVdw = true;            // graphics mode: true = space-filling vdW spheres (default), false = orbitals
+  let gGfxMode = 0;           // graphics mode: 0 = vdW spheres (default), 1 = full orbitals, 2 = orbitals only in the forward cone
+  const GFX_MODES = [
+    { label:'vdW-pallot',    icon:'⬤' },
+    { label:'Orbitaalit',    icon:'⬡' },
+    { label:'Orbit. kartio', icon:'🔦' },   // orbitals revealed only inside a cone in front of the camera
+  ];
   let gEtc = false, etcOverlay = null;   // ETC cofactor overlay (render-on-top) toggle + its mesh (built later)
   const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut fade: [cutZ, cutSign, strength] (bound as memCut[])
   const MAX_MODELS = 24;
@@ -1771,16 +1776,18 @@ async function run(){
   { const cb = document.getElementById('color-btn');   // colour by element ↔ per-model pastel
     if(cb) cb.addEventListener('click', () => { gColorMode = !gColorMode;
       const lab=document.getElementById('color-label'); if(lab) lab.textContent = gColorMode ? 'Mallit' : 'Alkuaineet'; }); }
-  { const gfxBtn = document.getElementById('gfx-btn');   // toggle orbitals ↔ vdW spheres (cull loop applies it next frame)
-    if(gfxBtn) gfxBtn.addEventListener('click', () => { gVdw = !gVdw;
-      const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = gVdw ? 'vdW-pallot' : 'Orbitaalit';
-      const ic=document.getElementById('gfx-icon');   if(ic)  ic.textContent  = gVdw ? '⬤' : '⬡'; }); }
+  { const gfxBtn = document.getElementById('gfx-btn');   // cycle vdW → orbitals → orbitals-in-cone (cull loop applies it next frame)
+    if(gfxBtn) gfxBtn.addEventListener('click', () => { gGfxMode = (gGfxMode + 1) % 3;
+      const g = GFX_MODES[gGfxMode];
+      const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = g.label;
+      const ic=document.getElementById('gfx-icon');   if(ic)  ic.textContent  = g.icon; }); }
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
+  const CONE_TAN = 0.36;      // graphics mode 2: orbitals shown only inside this half-angle cone (tan ≈ 20°) in front of the camera
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
@@ -1944,6 +1951,7 @@ async function run(){
   orbMatG.backFaceCulling = true;
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
+    eff.setFloat('coneCos', gGfxMode === 2 ? CONE_TAN : -1.0);   // mode 2 → only orbitals inside the forward cone
     eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
@@ -1957,6 +1965,7 @@ async function run(){
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
+      eff.setFloat('coneCos', gGfxMode === 2 ? CONE_TAN : -1.0);   // mode 2 → forward-cone reveal
       eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
@@ -2386,6 +2395,7 @@ async function run(){
       mat.setFloat('bubbleR',1e9); mat.setFloat('nElec',2); mat.setFloat('coneCos',-1.0);
       mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true;   // orbitals always, electrons only up close
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
+        eff.setFloat('coneCos', gGfxMode === 2 ? CONE_TAN : -1.0);   // mode 2 → membrane orbitals only inside the forward cone
         eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setArray3('memCut', gCut);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return mat;
@@ -2658,9 +2668,9 @@ async function run(){
         }
       }
       const near = vis && d2 < REVEAL2;                   // close enough for electrons + nuclei
-      const wantOrb = vis && !gVdw;                       // orbital lobes: in view, orbital mode
-      const wantSph = vis && gVdw && !!cell.sphere;       // vdW spheres: in view, vdW mode
-      const wantNuc = near && !gVdw;                      // nuclei: orbital mode, up close only
+      const wantOrb = vis && gGfxMode !== 0;              // orbital lobes: in view, any orbital mode (full or cone)
+      const wantSph = vis && gGfxMode === 0 && !!cell.sphere;  // vdW spheres: in view, vdW mode
+      const wantNuc = near && gGfxMode !== 0;             // nuclei: orbital mode, up close only
       if(cell.visOn !== wantOrb){ cell.visOn = wantOrb; for(const m of cell.meshes) m.setEnabled(wantOrb); }
       if(cell.sphOn !== wantSph){ cell.sphOn = wantSph; if(cell.sphere) cell.sphere.setEnabled(wantSph); }
       if(cell.nucOn !== wantNuc){ cell.nucOn = wantNuc; if(cell.nuc) cell.nuc.setEnabled(wantNuc); }
@@ -3524,6 +3534,24 @@ async function run(){
       const xr = await scene.createDefaultXRExperienceAsync({ disableTeleportation: true, disableDefaultUI: true });
       if (xr && xr.baseExperience) {
         const fm = xr.baseExperience.featuresManager;
+        // ── VR performance ──────────────────────────────────────────────────
+        // A screen-space post-process (painterly) doesn't map onto the stereo eye buffers, and the
+        // heavy scene can push the Quest into reprojection — both show up as lag AND dark borders at
+        // the edges of the view. While in VR: drop the post-process, render at a lighter resolution,
+        // and turn on fixed foveation (cheap periphery). Everything is restored on exit.
+        xr.baseExperience.onStateChangedObservable.add(state => {
+          if (state === BABYLON.WebXRState.IN_XR) {
+            try { cam.detachPostProcess(painterly); } catch (e) {}
+            engine.setHardwareScalingLevel(1.4);   // ~50% fewer pixels → big GPU win, keeps framerate up
+            try {
+              const bl = xr.baseExperience.sessionManager.session.renderState.baseLayer;
+              if (bl && 'fixedFoveation' in bl) bl.fixedFoveation = 1;   // max foveation → cheap periphery
+            } catch (e) {}
+          } else if (state === BABYLON.WebXRState.NOT_IN_XR) {
+            engine.setHardwareScalingLevel(1);
+            if (painterlyOn) { try { cam.attachPostProcess(painterly); } catch (e) {} }
+          }
+        });
         // Reveal our palette button and wire it to enter/exit VR.
         const vrBtn = document.getElementById('vr-btn');
         if (vrBtn) {
