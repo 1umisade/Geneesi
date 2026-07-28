@@ -2886,6 +2886,12 @@ async function run(){
   const zoomEl = document.getElementById('zoomval');
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
+    // Safety reset of shared GL state before ANY group renders. The selection stencil-mask mesh
+    // (selMask) turns colour-write OFF in its onBeforeRender and back ON in its onAfterRender — but
+    // if its render bails (thin-instance material momentarily not-ready), the "back on" never fires
+    // and colour-write leaks OFF into the next frame, blanking the whole scene. Clearing it here each
+    // frame guarantees groups 0–1 (the protein + membrane) always draw with colour-write on.
+    engine.setColorWrite(true); engine.setStencilBuffer(false);
     gWaveT += Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;   // advance the thermal-shake clock
     const f = cam.getDirection(BABYLON.Axis.Z);   // view forward
     const u = cam.getDirection(BABYLON.Axis.Y);   // view up
@@ -3100,6 +3106,17 @@ async function run(){
     engine.setStencilOperationFail(BABYLON.Constants.KEEP); engine.setStencilOperationDepthFail(BABYLON.Constants.KEEP); engine.setStencilOperationPass(BABYLON.Constants.KEEP);
   });
   selNuc.onAfterRenderObservable.add(() => { engine.setStencilBuffer(false); });
+  // BULLETPROOF restore of the shared GL state the mask borrows. selMask/selNuc set colour-write OFF
+  // and the stencil test ON in their onBeforeRender; their onAfterRender is meant to undo it, but that
+  // is SKIPPED whenever a thin-instance material is momentarily not-ready — leaking colour-write OFF
+  // and a stencil EQUAL-1 test ON into the next frame, which fails everywhere and blanks the ENTIRE
+  // scene. Restoring at the rendering-group boundary runs no matter which meshes actually drew:
+  // colour-write back on after group 2 (so the group-3 nucleus still draws), stencil test off after
+  // group 3 (so the next frame's scene isn't masked away). This is what fixes the blank-on-select bug.
+  scene.onAfterRenderingGroupObservable.add(info => {
+    if(info.renderingGroupId === 2) engine.setColorWrite(true);
+    if(info.renderingGroupId === 3) engine.setStencilBuffer(false);
+  });
   const selNucM=new Float32Array(80*16), selNucC=new Float32Array(80*4);
   let selNucA=0; const selNucCtr=new BABYLON.Vector3();   // for the per-frame tumble of the selected nucleus
   const setSelNuc = atom => {
@@ -3779,19 +3796,27 @@ async function run(){
     const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
     const bonds = (!atom.spawn && bondCntEA[e]) ? bondCntEA[e][atom.idx] : 0, sn = bonds + lonePairs(e);   // spawned atoms are unbonded
     const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
-    // Hybrid-aware notation: once the valence s + p have merged, show the sp-hybrids, not 2s/2p.
-    const parts = [];
-    for(const [n,ty] of econf(e)){ const cnt = Math.min(capOf[ty], Z); Z -= cnt; if(cnt<=0) continue;
-      const isHyb = hyb && n===maxN && ty<=1;
-      if(!isHyb) parts.push(n + subL[ty] + sup(cnt)); }
-    if(hyb) parts.push('(' + hyb + ')' + sup(sn));
-
     const title = document.createElement('div');
     title.textContent = EL_LIST[e] + (hyb ? '  ·  ' + hyb + ' hybridised' : '');
-    title.style.cssText = 'font-size:13px;font-weight:bold;color:var(--sage2);margin-bottom:5px;';
-    const notation = document.createElement('div');
-    notation.textContent = parts.join(' ');
-    notation.style.cssText = 'font-size:16px;font-weight:bold;color:var(--ink);margin-bottom:8px;letter-spacing:0.5px;';
+    title.style.cssText = 'font-size:13px;font-weight:bold;color:var(--sage2);';
+    // Small STATIC rendition of the selected atom: a shaded vdW sphere in its element colour, symbol
+    // overlaid. (No spin — a plain radial-gradient div.) The 1s²… notation line is intentionally gone.
+    const c = info(e).c, R = v => Math.round(Math.max(0, Math.min(1, v)) * 255);
+    const base = 'rgb('+R(c[0])+','+R(c[1])+','+R(c[2])+')';
+    const lite = 'rgb('+R(c[0]*.5+.5)+','+R(c[1]*.5+.5)+','+R(c[2]*.5+.5)+')';
+    const dark = 'rgb('+R(c[0]*.55)+','+R(c[1]*.55)+','+R(c[2]*.55)+')';
+    const lum = 0.299*c[0] + 0.587*c[1] + 0.114*c[2];
+    const atomViz = document.createElement('div');
+    atomViz.style.cssText = 'width:52px;height:52px;border-radius:50%;flex:0 0 auto;'
+      + 'background:radial-gradient(circle at 38% 32%, '+lite+', '+base+' 56%, '+dark+' 100%);'
+      + 'border:2.5px solid var(--brown);box-shadow:0 2.5px 0 var(--brown);'
+      + 'display:flex;align-items:center;justify-content:center;'
+      + "font-family:'Courier New',monospace;font-weight:bold;font-size:18px;"
+      + 'color:'+(lum>0.6?'var(--ink)':'#fff')+';text-shadow:0 1px 1px rgba(0,0,0,.25);';
+    atomViz.textContent = EL_LIST[e];
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px;';
+    header.appendChild(atomViz); header.appendChild(title);
     // Vertical energy-level diagram: group the orbitals into energy levels (equal-energy
     // subshells share a rung), highest energy on top, each rung labelled with its eV.
     const items = collectOrbitals(atom).map(oid => ({ oid, energy: orbEnergyEV(e, oid, hyb, maxN) }));
@@ -3833,7 +3858,7 @@ async function run(){
     const hint = document.createElement('div');
     hint.textContent = 'energy ↑ · click an orbital to isolate it';
     hint.style.cssText = 'font-size:10px;font-weight:bold;color:var(--brown);margin-top:8px;';
-    econfPanel.appendChild(title); econfPanel.appendChild(notation); econfPanel.appendChild(stack); econfPanel.appendChild(hint);
+    econfPanel.appendChild(header); econfPanel.appendChild(stack); econfPanel.appendChild(hint);
     econfPanel.style.display = 'block';
   };
 
