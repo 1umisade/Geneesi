@@ -369,7 +369,14 @@ void main(void){
   rad *= instR;
 #endif
   vRad = rad;
-  vec3 cornerV = cV.xyz + vec3(position.xy * rad, 0.0);
+  // Billboard that faces the actual eye (view-space origin), not just the view axis. At the wide
+  // off-axis FOV of a VR headset a view-axis billboard visibly swings as you turn — reading as the
+  // balls "following" your head — whereas facing the eye keeps them put. Identical on-axis (desktop).
+  vec3 vToEye = normalize(-cV.xyz);
+  vec3 upv = abs(vToEye.y) > 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+  vec3 vr = normalize(cross(upv, vToEye));
+  vec3 vu = cross(vToEye, vr);
+  vec3 cornerV = cV.xyz + (vr * position.x + vu * position.y) * rad;
   gl_Position = projection * vec4(cornerV, 1.0);
 }`;
 BABYLON.Effect.ShadersStore['impFragmentShader'] = `
@@ -3506,17 +3513,16 @@ async function run(){
     }
   });
   /* ── WebXR / VR ─────────────────────────────────────────────────────────
-     Enter VR with the auto-added goggles button. Quest-3 control scheme:
-       • RIGHT thumbstick → glide across the membrane. Y = back/forth,
-         X = left/right. Movement is locked to the horizontal plane (based
-         on the headset's facing, but pitch is ignored) so you don't dive
-         into the sheet when you look up or down.
-       • LEFT  thumbstick → rotate the view (X = turn left/right).
+     Enter VR with our palette VR button. Quest-3 control scheme (free flight,
+     no floor anchor — reference space is 'local'):
+       • RIGHT thumbstick → FLY toward where the headset is looking. Y =
+         forward/back along the full gaze (look up & push to ascend), X = strafe.
+       • LEFT  thumbstick → X = turn (rotate the view); Y = rise / descend.
        • grip / squeeze   → speed boost while held.
      Rotation runs through Babylon's built-in movement feature because a turn
      has to rotate the WebXR reference space — a camera rotation set by hand
      would be overwritten by the headset pose every frame. Its own movement
-     is disabled; we translate the camera ourselves for exact planar control.
+     is disabled; we translate the camera ourselves for full 6-DOF flight.
      Teleportation is off. */
   try {
     // Only offer VR when the browser actually exposes an immersive-VR device (e.g. the Quest browser).
@@ -3533,7 +3539,7 @@ async function run(){
           vrBtn.addEventListener('click', async () => {
             try {
               if (xr.baseExperience.state === BABYLON.WebXRState.IN_XR) await xr.baseExperience.exitXRAsync();
-              else await xr.baseExperience.enterXRAsync('immersive-vr', 'local-floor');
+              else await xr.baseExperience.enterXRAsync('immersive-vr', 'local');   // 'local' (not 'local-floor') → free flight, no floor anchor
             } catch (e) { setLbl('VR-tilaan siirtyminen epäonnistui: ' + (e && e.message)); }
           });
         }
@@ -3553,12 +3559,14 @@ async function run(){
           ],
         });
 
-        // Manual RIGHT-stick planar translation + grip boost.
-        let rightStick = null;
+        // Manual RIGHT-stick FLIGHT (full 6-DOF) + optional LEFT-stick vertical + grip boost.
+        let rightStick = null, leftStick = null;
         const gripState = { left: 0, right: 0 };
         xr.input.onControllerAddedObservable.add(ctrl => {
           ctrl.onMotionControllerInitObservable.add(mc => {
-            if (mc.handedness === 'right') rightStick = mc.getComponent('xr-standard-thumbstick') || rightStick;
+            const stick = mc.getComponent('xr-standard-thumbstick');
+            if (mc.handedness === 'right') rightStick = stick || rightStick;
+            else                           leftStick  = stick || leftStick;
             const grip = mc.getComponent('xr-standard-squeeze');
             if (grip) grip.onButtonStateChangedObservable.add(c => { gripState[mc.handedness] = c.value; });
           });
@@ -3567,16 +3575,25 @@ async function run(){
         const BASE = 5;      // units/frame at the sheet's scale (~300 u/s)
         const DEAD = 0.15;
         const fwd = new BABYLON.Vector3(), rgt = new BABYLON.Vector3();
+        const UP = new BABYLON.Vector3(0, 1, 0);
         scene.onBeforeRenderObservable.add(() => {
-          if (xr.baseExperience.state !== BABYLON.WebXRState.IN_XR || !rightStick) return;
-          const ax = rightStick.axes;
-          if (Math.abs(ax.x) <= DEAD && Math.abs(ax.y) <= DEAD) return;
+          if (xr.baseExperience.state !== BABYLON.WebXRState.IN_XR) return;
           const camXR = xr.baseExperience.camera;
-          camXR.getDirectionToRef(BABYLON.Axis.Z, fwd); fwd.y = 0; fwd.normalize();   // horizontal forward
-          camXR.getDirectionToRef(BABYLON.Axis.X, rgt); rgt.y = 0; rgt.normalize();   // horizontal right
-          const step = BASE * (1 + 5 * Math.max(gripState.left, gripState.right));    // grip → up to 6×
-          camXR.position.addInPlace(fwd.scale(-ax.y * step));   // stick up (ax.y<0) = forward
-          camXR.position.addInPlace(rgt.scale( ax.x * step));   // stick right = strafe right
+          const step = BASE * (1 + 5 * Math.max(gripState.left, gripState.right));   // grip → up to 6×
+          // Right stick = FLY toward where the headset looks (pitch INCLUDED → look up & push to ascend).
+          if (rightStick) {
+            const ax = rightStick.axes;
+            if (Math.abs(ax.x) > DEAD || Math.abs(ax.y) > DEAD) {
+              camXR.getDirectionToRef(BABYLON.Axis.Z, fwd);   // full gaze direction (no y-lock → free flight)
+              camXR.getDirectionToRef(BABYLON.Axis.X, rgt);
+              camXR.position.addInPlace(fwd.scale(-ax.y * step));   // stick up = forward (fly up when looking up)
+              camXR.position.addInPlace(rgt.scale( ax.x * step));   // strafe
+            }
+          }
+          // Left stick Y = straight up / down (rotation X is handled by the built-in feature).
+          if (leftStick && Math.abs(leftStick.axes.y) > DEAD) {
+            camXR.position.addInPlace(UP.scale(-leftStick.axes.y * step));   // push up = rise
+          }
         });
       }
     }
