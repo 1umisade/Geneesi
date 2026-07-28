@@ -487,7 +487,7 @@ void main(void){
   // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
-  c *= 1.0 - 0.62 * pow(fres, 2.5);
+  c *= mix(1.0, 0.08, smoothstep(0.5, 0.86, fres));   // hard dark ink rim on each lobe → crevices between touching same-colour lobes stay visible
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → others' electrons dim to  5%
 #ifdef ELECGATE
   if(drawElec > 0.5 && length(vViewPos) < elecR) electrons(c, nElec, efac);
@@ -684,7 +684,7 @@ void main(void){
   // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
-  c *= 1.0 - 0.62 * pow(fres, 2.5);
+  c *= mix(1.0, 0.08, smoothstep(0.5, 0.86, fres));   // hard dark ink rim on each lobe → crevices between touching same-colour lobes stay visible
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → the others' electrons dim to  5%
 #ifdef ELECGATE
@@ -1493,10 +1493,15 @@ async function run(fileName){
       // dumbbell (two lobes ±⊥ to the bond). The two atoms' parallel p lobes overlap side-on = the π.
       for(let pi=0; pi<bo-1 && !aromatic; pi++){
         const pp = pi===0 ? per1 : per2;
-        if(EL_LIST[e1]!=='H'){ halfLobe(x1,y1,z1, x1+pp[0]*pR,y1+pp[1]*pR,z1+pp[2]*pR, x1,y1,z1, pw, 1.0, e1, ai1, 900);
-                               halfLobe(x1,y1,z1, x1-pp[0]*pR,y1-pp[1]*pR,z1-pp[2]*pR, x1,y1,z1, pw, 1.0, e1, ai1, 900); }
-        if(EL_LIST[e2]!=='H'){ halfLobe(x2,y2,z2, x2+pp[0]*pR,y2+pp[1]*pR,z2+pp[2]*pR, x2,y2,z2, pw, 1.0, e2, ai2, 900);
-                               halfLobe(x2,y2,z2, x2-pp[0]*pR,y2-pp[1]*pR,z2-pp[2]*pR, x2,y2,z2, pw, 1.0, e2, ai2, 900); }
+        // A real π bond = the two atoms' parallel unhybridised p orbitals overlapping SIDE-ON. Draw a
+        // continuous cloud above the bond and one below: each atom's half reaches from its p position
+        // in to the bond midpoint, so the two halves meet and merge (not two detached dumbbells).
+        const mx=(x1+x2)/2, my=(y1+y2)/2, mz=(z1+z2)/2;
+        for(let s=0;s<2;s++){ const sg = s===0 ? 1.0 : -1.0;
+          const cmx=mx+pp[0]*pR*sg, cmy=my+pp[1]*pR*sg, cmz=mz+pp[2]*pR*sg;   // cloud centre, above/below the bond
+          if(EL_LIST[e1]!=='H') halfLobe(x1+pp[0]*pR*sg, y1+pp[1]*pR*sg, z1+pp[2]*pR*sg, cmx,cmy,cmz, x1,y1,z1, pw*1.1, 0.85, e1, ai1, 900);
+          if(EL_LIST[e2]!=='H') halfLobe(x2+pp[0]*pR*sg, y2+pp[1]*pR*sg, z2+pp[2]*pR*sg, cmx,cmy,cmz, x2,y2,z2, pw*1.1, 0.85, e2, ai2, 900);
+        }
       }
     }
     for(let k=0;k<m.na;k++){                          // non-bonding (lone-pair) orbitals → separate translucent buffer
@@ -1962,11 +1967,12 @@ async function run(fileName){
           if(pn[i]&&pn[j]){ const s=(pn[i][0]*pn[j][0]+pn[i][1]*pn[j][1]+pn[i][2]*pn[j][2])<0?-1:1; pnrm=nrm([pn[i][0]+pn[j][0]*s,pn[i][1]+pn[j][1]*s,pn[i][2]+pn[j][2]*s]); }
           let per1; if(pnrm){ const dt=pnrm[0]*bdir[0]+pnrm[1]*bdir[1]+pnrm[2]*bdir[2]; per1=nrm([pnrm[0]-dt*bdir[0],pnrm[1]-dt*bdir[1],pnrm[2]-dt*bdir[2]]); }
             else per1=nrm(crs([bx,by,bz],Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
-          const per2=nrm(crs([bx,by,bz],per1)), pw=LOBE_W*0.42, pf=0.6, dd=LOBE_W;
+          const per2=nrm(crs([bx,by,bz],per1)), pw=LOBE_W*0.42, pR=0.62;
+          const mx=(x1+x2)/2, my=(y1+y2)/2, mz=(z1+z2)/2;   // continuous π cloud above/below the bond, from both p orbitals
           for(let pi=0;pi<bo-1;pi++){ const pp=pi===0?per1:per2;
-            for(const sgn of [1,-1]){ const gx=pp[0]*dd*sgn,gy=pp[1]*dd*sgn,gz=pp[2]*dd*sgn;
-              put(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, pw,1.0,c1, x1,y1,z1);
-              put(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, pw,1.0,c2, x2,y2,z2); } } } }
+            for(const sg of [1,-1]){ const cmx=mx+pp[0]*pR*sg, cmy=my+pp[1]*pR*sg, cmz=mz+pp[2]*pR*sg;
+              put(x1+pp[0]*pR*sg,y1+pp[1]*pR*sg,z1+pp[2]*pR*sg, cmx,cmy,cmz, pw*1.1,0.85,c1, x1,y1,z1);
+              put(x2+pp[0]*pR*sg,y2+pp[1]*pR*sg,z2+pp[2]*pR*sg, cmx,cmy,cmz, pw*1.1,0.85,c2, x2,y2,z2); } } } }
       for(let k=0;k<N;k++){ const lp=lonePairs(chl.el[k]); if(lp===0||bd[k].length===0) continue;
         const ax=cpos[k*3],ay=cpos[k*3+1],az=cpos[k*3+2], c=info(chl.el[k]).c;
         for(const d of lonePairDirs(bd[k],lp)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az); }
@@ -2634,6 +2640,15 @@ async function run(fileName){
       if(tca<=0) continue; const d2=px*px+py*py+pz*pz-tca*tca; if(d2>r*r) continue;
       const t=tca-Math.sqrt(r*r-d2); if(t>0 && t<bestT){ bestT=t; bE=-2; bA=i; }
     }
+    // Chlorophyll showcase atoms → pickable as vdW spheres (always shown, never bubble-gated).
+    // Reuse the spawn-atom selection path (isolated-atom outline + nucleus + config); si:-1 keeps
+    // refreshSpawnSelection a safe no-op since there's no spawned[] entry.
+    if(chl){ for(let k=0;k<chl.na;k++){ const r=info(chl.el[k]).vr*FILL_SCALE;
+        const px=chl.x[k]+chl.ox-ox, py=chl.y[k]+chl.oy-oy, pz=chl.z[k]+chl.oz-oz, tca=px*dx+py*dy+pz*dz;
+        if(tca<=0) continue; const d2=px*px+py*py+pz*pz-tca*tca; if(d2>r*r) continue;
+        const t=tca-Math.sqrt(r*r-d2); if(t>0 && t<bestT){ bestT=t; bE=-3; bA=k; } } }
+    if(bE === -3){ const k=bA; return { spawn:true, chl:true, sym:EL_LIST[chl.el[k]], e:chl.el[k], idx:-1,
+      center:new BABYLON.Vector3(chl.x[k]+chl.ox, chl.y[k]+chl.oy, chl.z[k]+chl.oz), si:-1 }; }
     if(bE === -2){ const a=spawned[bA]; return { spawn:true, sym:a.sym, e:codeOf(a.sym), idx:-1, center:new BABYLON.Vector3(a.x,a.y,a.z), si:bA }; }
     if(bE < 0) return null;
     const sb = sphBuf[bE], o = bA*16;
@@ -2846,14 +2861,25 @@ async function run(fileName){
     list.sort((a,b)=>a-b);
     return list;
   };
-  const orbLabel = (oid, hyb) => {
+  const orbLabel = (oid, hyb, maxN) => {
     if(oid >= 2000) return (hyb || 'sp³') + ' lp';     // lone pair — sits in a hybrid orbital, so name it (e.g. "sp³ lp")
     if(oid >= 1000) return hyb || 'sp³';               // hybrid orbital
-    if(oid === 900) return 'π';                        // π orbital
+    if(oid === 900) return (maxN || 2) + 'p';          // the π IS the unhybridised valence p orbital (e.g. 2p)
     const n = Math.floor(oid/100), type = Math.floor((oid%100)/10), sub = oid%10;
     if(type === 1) return n + 'p' + 'xyz'[sub];        // 2pₓ / 2p_y / 2p_z
     if(type >= 2) return n + 'spdf'[type] + (sub>0 ? '·'+(sub+1) : '');
     return n + 's';
+  };
+  // Electrons occupying a panel orbital: hybrids / π / lone pairs hold a pair; atomic subshells
+  // fill by Hund's rule (one per orbital, then pair up).
+  const orbElectrons = (e, oid) => {
+    if(oid >= 900) return 2;                            // hybrid / π / lone pair → an electron pair
+    const n = Math.floor(oid/100), L = Math.floor((oid%100)/10), sub = oid%10;
+    let Z = info(e).z, total = 0;
+    for(const [nn,ll] of econf(e)){ const c = Math.min(capOf[ll], Z); Z -= c; if(nn===n && ll===L){ total=c; break; } }
+    if(L===0) return total;                             // s orbital: 0/1/2
+    const norb = 2*L+1;                                 // this specific p/d/f orbital under Hund filling
+    return sub < total-norb ? 2 : (sub < total ? 1 : 0);
   };
   const hideConfig = () => { econfPanel.style.display='none'; econfPanel.innerHTML=''; };
   const hybLabel = {2:'sp',3:'sp²',4:'sp³',5:'sp³d',6:'sp³d²'};
@@ -2929,9 +2955,17 @@ async function run(fileName){
       chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
       for(const oid of lv.oids){
         const chip = document.createElement('button');
-        chip.textContent = orbLabel(oid, hyb);
         chip.dataset.t = oid;
-        chip.style.cssText = 'font-family:inherit;font-size:14px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 8px;cursor:pointer;';
+        chip.style.cssText = 'font-family:inherit;font-size:14px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 8px 4px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;line-height:1;';
+        const lab = document.createElement('span'); lab.textContent = orbLabel(oid, hyb, maxN); chip.appendChild(lab);
+        // The orbital "box": its electrons drawn as stationary paired dots (occupancy = # dots).
+        const ne = orbElectrons(e, oid);
+        const box = document.createElement('span');
+        box.style.cssText = 'display:inline-flex;gap:4px;justify-content:center;min-height:7px;';
+        for(let k=0;k<ne;k++){ const dot=document.createElement('span');
+          dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#dcecff,#4f8dff 72%);box-shadow:0 0 3px rgba(79,141,255,0.9);'; box.appendChild(dot); }
+        chip.appendChild(box);
+        chip.title = ne + ' electron' + (ne===1?'':'s');
         chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
         chips.push(chip); chipsWrap.appendChild(chip);
       }
