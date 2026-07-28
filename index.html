@@ -26,6 +26,7 @@ body.dark-mode{
   background:var(--paper);border:2.5px solid var(--brown);border-radius:10px;
   padding:2px 8px;font-family:'Courier New',monospace;font-size:11px;font-weight:bold;
   white-space:nowrap;display:none;box-shadow:0 2.5px 0 var(--brown)}
+.mlbl.dev{font-size:10px;padding:1px 6px;opacity:.9;box-shadow:0 2px 0 var(--brown)}   /* dev per-model tags: a touch lighter */
 #zoomval{position:absolute;top:14px;right:16px;z-index:10;color:var(--brown);
   font-family:'Courier New',monospace;font-size:15px;font-weight:bold;pointer-events:none}
 #zoomtips{position:absolute;right:18px;bottom:18px;z-index:10;
@@ -69,14 +70,14 @@ body.dark-mode{
 #etc-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #etc-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #etc-icon{font-size:15px;line-height:1}
-#proj-btn{position:absolute;left:16px;top:204px;z-index:12;touch-action:manipulation;
+#dev-btn{position:absolute;left:16px;top:204px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
   box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
-#proj-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
-#proj-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
-#proj-icon{font-size:15px;line-height:1}
+#dev-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#dev-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#dev-icon{font-size:15px;line-height:1}
 #vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
@@ -89,15 +90,12 @@ body.dark-mode{
 /* Speed slider — same palette as the loading bar (.ptr tan track + #4a3320 border + #82a058 fill) */
 #speed{-webkit-appearance:none;appearance:none;height:10px;box-sizing:border-box;border-radius:99px;
   background:#e7d4ac;border:2.5px solid #4a3320;outline:none}
-/* Knob = the 48×48 Mona image, used as-is (square, uncropped). Sized 48px, so it is pulled up by
-   (48−10)/2 = 19px to stay centred on the 10px track. */
-#speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:48px;height:48px;border:0;
-  border-radius:0;cursor:pointer;margin-top:-19px;
-  background:url('./mona_knob_48.png') center/48px 48px no-repeat}
+/* Knob = a small sage circle with a dark-brown rim, centred on the 10px track:
+   margin-top = (trackHeight − thumb)/2 = (10 − 16)/2 = −3px. */
+#speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+  background:#82a058;border:2.5px solid #4a3320;cursor:pointer;margin-top:-3px}
 #speed::-moz-range-track{height:10px;box-sizing:border-box;border-radius:99px;background:#e7d4ac;border:2.5px solid #4a3320}
-#speed::-moz-range-thumb{width:48px;height:48px;border:0;border-radius:0;cursor:pointer;
-  background:url('./mona_knob_48.png') center/48px 48px no-repeat}
-#speedbox{padding-bottom:19px}   /* room for the oversized knob so it isn't clipped at the window edge */
+#speed::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#82a058;border:2.5px solid #4a3320;cursor:pointer}
 /* ── UI gizmo panel: move/rotate handles for the selected complex, docked above the speed slider ── */
 #gizmo-ui{position:fixed;left:16px;bottom:96px;z-index:26;display:none;width:154px;
   font-family:'Courier New',monospace;color:var(--ink);background:var(--paper);
@@ -160,7 +158,7 @@ body.dark-mode{
 <button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
 <button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Alkuaineet</span></button>
 <button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (klorofyllit, karotenoidit, kinonit, hemit, feofytiini, Tyr Z, OEC, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
-<button id="proj-btn" title="2D: ortografinen sivukuva kalvon tasossa · 3D: takaisin perspektiiviin"><span id="proj-icon">🔲</span><span id="proj-label">2D</span></button>
+<button id="dev-btn" title="Dev-tila: mallien siirto/kierto-työkalu + sijaintimerkinnät"><span id="dev-icon">🛠️</span><span id="dev-label">Dev</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
@@ -1610,10 +1608,7 @@ async function run(){
      fixed world distance at a given depth — so scaling the pixel delta by the world-per-pixel at the
      grabbed depth keeps that point exactly under the cursor. panDepth is the depth of whatever was
      under the cursor when the pan began (a complex if one was hit, else the pivot distance). */
-  const worldPerPixelAt = R => { const Hcss = Math.max(1, canvas.clientHeight);
-    return cam.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA
-      ? (cam.orthoTop - cam.orthoBottom) / Hcss
-      : 2 * Math.abs(R) * Math.tan(cam.fov / 2) / Hcss; };
+  const worldPerPixelAt = R => 2 * Math.abs(R) * Math.tan(cam.fov / 2) / Math.max(1, canvas.clientHeight);
   const panBy = (dxPx, dyPx) => { const wpp = worldPerPixelAt(panDepth);
     const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(-dxPx * wpp)).addInPlace(up.scale(dyPx * wpp)); };
@@ -1956,35 +1951,19 @@ async function run(){
   };
   { const gfxBtn = document.getElementById('gfx-btn');   // cycle vdW → orbitals → close-cone reveal (cull loop applies it next frame)
     if(gfxBtn) gfxBtn.addEventListener('click', () => { gGfxMode = (gGfxMode + 1) % 3; applyGfxMode(); }); }
-  /* ── 2D / 3D projection toggle ────────────────────────────────────────────
-     "2D" = a true ORTHOGRAPHIC camera swung exactly edge-on to the bilayer (beta = 90°, target
-     dropped to the membrane plane) → a flat cross-section with no perspective convergence, so
-     depths read as real distances. The ortho half-height is kept at radius·tan(fov/2), i.e. the
-     framing the perspective camera had at the pivot, so the flip itself doesn't jump — and the
-     zoom keeps working in 2D. "3D" eases beta back and restores the perspective projection. */
-  let gOrtho = false;
-  const syncOrtho = () => {
-    const h = Math.abs(cam.radius) * Math.tan(cam.fov*0.5);
-    const asp = engine.getRenderWidth()/Math.max(1, engine.getRenderHeight());
-    cam.orthoTop=h; cam.orthoBottom=-h; cam.orthoLeft=-h*asp; cam.orthoRight=h*asp;
-  };
-  const setProjection = ortho => {
-    gOrtho = ortho;
-    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
-    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
-    const tgt = cam.target.clone(); if(ortho) tgt.y = MEMBRANE_Y;
-    BABYLON.Animation.CreateAndStartAnimation('projBeta', cam, 'beta', 60, 26,
-      cam.beta, ortho ? Math.PI/2 : Math.PI/2.3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
-    BABYLON.Animation.CreateAndStartAnimation('projTgt', cam, 'target', 60, 26,
-      cam.target.clone(), tgt, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
-    if(ortho){ syncOrtho(); cam.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA; }
-    else cam.mode = BABYLON.Camera.PERSPECTIVE_CAMERA;
-    const b=document.getElementById('proj-btn'); if(b) b.classList.toggle('on', ortho);
-    const l=document.getElementById('proj-label'); if(l) l.textContent = ortho ? '3D' : '2D';
-    const i=document.getElementById('proj-icon');  if(i) i.textContent = ortho ? '🧊' : '🔲';
-  };
-  { const pb = document.getElementById('proj-btn');
-    if(pb) pb.addEventListener('click', () => setProjection(!gOrtho)); }
+  /* ── Dev mode ──────────────────────────────────────────────────────────────
+     A layout/editing mode. OFF (default) is clean presentation: atoms and ETC cofactors are still
+     selectable, but the whole-complex move/rotate tools are hidden. ON exposes the model gizmo
+     (double-click a complex → the UI panel above the speed slider) and floating position labels for
+     every complex. setDevMode(false) also drops any live model selection. Wired up after the model
+     selection code exists (see applyDevMode below). */
+  let gDev = false;
+  let applyDevMode = () => {};   // real implementation installed once deselectModel + labels exist
+  { const devBtn = document.getElementById('dev-btn');
+    if(devBtn) devBtn.addEventListener('click', () => { gDev = !gDev;
+      devBtn.classList.toggle('on', gDev);
+      const lab=document.getElementById('dev-label'); if(lab) lab.textContent = gDev ? 'Dev päällä' : 'Dev';
+      applyDevMode(); }); }
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
@@ -2918,7 +2897,6 @@ async function run(){
     // Only drops small at close range; stays 0.15 when zoomed out so depth precision holds.
     cam.minZ = Math.min(0.15, Math.max(0.02, ar*0.03));
     if(gGfxMode === 2) gConeCos = coneTanNow();                 // keep the cone matched to the live viewport aspect
-    if(gOrtho) syncOrtho();                                     // 2D mode: ortho frustum tracks zoom + viewport aspect
     // Fog is OFF by design: colours must stay accurate at every distance (no olive wash on the far
     // membrane). Pinned far beyond maxZ so every shader's fog factor evaluates to 1 → col unchanged.
     scene.fogStart = 1e8; scene.fogEnd = 1e9;
@@ -3364,6 +3342,26 @@ async function run(){
     const vis = p.z>0 && p.z<1; modelLabel.style.display = vis?'block':'none';
     if(vis){ modelLabel.style.left=(p.x-modelLabel.offsetWidth/2)+'px'; modelLabel.style.top=(p.y-modelLabel.offsetHeight-34)+'px'; }
   });
+  // Dev-mode floating position labels — one per complex (name + world x/y/z), pinned above it each
+  // frame. The selected complex is skipped here since its own modelLabel already shows position+rot.
+  const devLabels = mInfo.filter(mi => !mi.isChl).map(mi => {
+    const d = document.createElement('div'); d.className = 'mlbl dev';
+    d.style.pointerEvents='none'; d.style.display='none'; d.style.zIndex='9'; document.body.appendChild(d);
+    return { mi, el: d };
+  });
+  scene.registerAfterRender(() => {
+    if(!gDev) return;
+    for(const {mi, el} of devLabels){
+      if(mi.mi === gSelModel){ el.style.display='none'; continue; }
+      const wx=mi.cx+gModelOff[mi.mi*3], wy=mi.cy+gModelOff[mi.mi*3+1], wz=mi.cz+gModelOff[mi.mi*3+2];
+      const p = projectCss(new BABYLON.Vector3(wx,wy,wz));
+      const vis = p.z>0 && p.z<1; el.style.display = vis?'block':'none';
+      if(vis){ el.textContent = mi.name+'  x '+Math.round(wx)+' y '+Math.round(wy)+' z '+Math.round(wz);
+        el.style.left=(p.x-el.offsetWidth/2)+'px'; el.style.top=(p.y-el.offsetHeight-8)+'px'; }
+    }
+  });
+  // Turning dev mode OFF drops any live complex selection and hides every dev label.
+  applyDevMode = () => { if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
   const wholeInView = () => false;
@@ -3879,8 +3877,9 @@ async function run(){
     if(a){ clearEtcSel(); centerOnAtom(a); return; }
     const gi = pickEtcGroup();
     if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
-    const mid = pickModelAtCursor();
-    if(mid >= 0 && _modelPickT > BUBBLE_R){ clearAtomSel(); clearEtcSel(); selectModel(mid); return; }
+    // Whole-complex selection (→ move/rotate gizmo) is a DEV-mode tool only.
+    if(gDev){ const mid = pickModelAtCursor();
+      if(mid >= 0 && _modelPickT > BUBBLE_R){ clearAtomSel(); clearEtcSel(); selectModel(mid); return; } }
     clearAtomSel(); clearEtcSel(); deselectModel(); viewPerp();
   };
   canvas.addEventListener('dblclick', onDouble);                                    // desktop
