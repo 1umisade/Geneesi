@@ -98,7 +98,7 @@ body.dark-mode{
   <div class="ptr"><div class="pfil" id="load-bar"></div></div>
 </div>
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
-<button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬡</span><span id="gfx-label">Orbitaalit</span></button>
+<button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
@@ -1570,7 +1570,7 @@ async function run(){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
-  let gVdw = false;           // graphics mode: false = orbitals (default), true = space-filling vdW spheres
+  let gVdw = true;            // graphics mode: true = space-filling vdW spheres (default), false = orbitals
   { const gfxBtn = document.getElementById('gfx-btn');   // toggle orbitals ↔ vdW spheres (cull loop applies it next frame)
     if(gfxBtn) gfxBtn.addEventListener('click', () => { gVdw = !gVdw;
       const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = gVdw ? 'vdW-pallot' : 'Orbitaalit';
