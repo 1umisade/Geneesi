@@ -2628,7 +2628,9 @@ async function run(){
     g.onDragStartObservable.add(()=>{ gizmoDragging=true; });
     g.onDragEndObservable.add(()=>{ gizmoDragging=false; });
   }
-  const wholeInView = () => cam.radius >= fitRadius * 0.85;   // zoomed out enough that the whole PSII fits the viewport
+  // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
+  // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
+  const wholeInView = () => false;
   // Ray vs the PSII bounding box (in its moved frame) → true if the cursor is over the protein.
   const pickPSII = () => {
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
@@ -3104,15 +3106,7 @@ async function run(){
   });
 
   /* Floating per-model labels (multi-molecule files only) */
-  const labels = mols.length===1 ? [] : mols.map((m,mi) => {
-    const el = document.createElement('div'); el.className = 'mlbl';
-    el.textContent = m.name; document.body.appendChild(el);
-    const b = box[mi];
-    el.pos = new BABYLON.Vector3((b.miX+b.maX)/2+m.ox, b.maY+m.oy+dimY*0.02, (b.miZ+b.maZ)/2+m.oz);
-    return el;
-  });
-  if(lipid){ const el=document.createElement('div'); el.className='mlbl'; el.textContent='Lipid bilayer';
-    document.body.appendChild(el); el.pos=new BABYLON.Vector3(bilayerCen.x, bilayerCen.y+40, bilayerCen.z); labels.push(el); }
+  const labels = [];   // floating model name-tags removed (per request)
   scene.registerAfterRender(() => {
     const vp = cam.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
     const tm = scene.getTransformMatrix();
