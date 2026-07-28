@@ -2483,7 +2483,7 @@ async function run(){
     gSpawnPlaneZ = gcz;
     gSpawnBounds = {x0:gcx-iw, x1:gcx+iw, y0:gcy-ih, y1:gcy+ih};
 
-    const NW=260, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };
+    const NW=0, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };   // free-floating water removed from the thylakoid scene
     const wc=new Float32Array(NW*3), wv=new Float32Array(NW*3), wh1=new Float32Array(NW*3), wh2=new Float32Array(NW*3);
     for(let i=0;i<NW;i++){
       wc[i*3]=x0+rnd(i+1)*bw; wc[i*3+1]=y0+rnd(i+2)*bh; wc[i*3+2]=z0+rnd(i+3)*bd;
@@ -3388,6 +3388,60 @@ async function run(){
       if(painterlyOn) cam.attachPostProcess(painterly); else cam.detachPostProcess(painterly);
     }
   });
+  /* ── WebXR / VR ─────────────────────────────────────────────────────────
+     Enter VR with the auto-added button. Locomotion: push the RIGHT
+     controller thumbstick to fly in the direction the headset is facing
+     (stick-Y = forward/back along gaze, stick-X = strafe). The squeeze
+     (grip) on either hand acts as a speed boost. Teleportation is off. */
+  try {
+    if (navigator.xr) {
+      const xr = await scene.createDefaultXRExperienceAsync({ disableTeleportation: true });
+      if (xr && xr.baseExperience) {
+        // Make sure teleport isn't active (we use smooth locomotion instead).
+        try { xr.baseExperience.featuresManager.disableFeature(BABYLON.WebXRFeatureName.TELEPORTATION); } catch (e) {}
+
+        let rightStick = null, leftStick = null, boost = 1;
+        const gripState = { left: 0, right: 0 };
+        xr.input.onControllerAddedObservable.add(ctrl => {
+          ctrl.onMotionControllerInitObservable.add(mc => {
+            const stick = mc.getComponent('xr-standard-thumbstick');
+            const grip  = mc.getComponent('xr-standard-squeeze');
+            if (mc.handedness === 'right') rightStick = stick || rightStick;
+            else                           leftStick  = stick || leftStick;
+            if (grip) grip.onButtonStateChangedObservable.add(c => { gripState[mc.handedness] = c.value; });
+          });
+        });
+
+        // Scene is huge (thousands of units); base VR speed picked to cross it in a few seconds.
+        const BASE = 6;      // units per frame at 60fps ≈ 360 u/s
+        const DEAD = 0.15;
+        const up = new BABYLON.Vector3(0, 1, 0);
+        scene.onBeforeRenderObservable.add(() => {
+          if (xr.baseExperience.state !== BABYLON.WebXRState.IN_XR) return;
+          const camXR = xr.baseExperience.camera;
+          boost = 1 + 5 * Math.max(gripState.left, gripState.right);   // squeeze → up to 6×
+          // Right stick: fly toward where the headset looks.
+          if (rightStick) {
+            const ax = rightStick.axes;
+            if (Math.abs(ax.x) > DEAD || Math.abs(ax.y) > DEAD) {
+              const fwd = camXR.getDirection(BABYLON.Axis.Z);           // headset forward
+              const rgt = BABYLON.Vector3.Cross(up, fwd).normalize();   // headset right (world-up planar)
+              const step = BASE * boost;
+              camXR.position.addInPlace(fwd.scale(-ax.y * step));       // stick up (ax.y<0) = forward
+              camXR.position.addInPlace(rgt.scale(-ax.x * step));
+            }
+          }
+          // Left stick Y: rise / descend (handy in a 3-D membrane).
+          if (leftStick) {
+            const ay = leftStick.axes.y;
+            if (Math.abs(ay) > DEAD) camXR.position.addInPlace(up.scale(-ay * BASE * boost));
+          }
+        });
+        setLbl('VR ready — press the goggles button');
+      }
+    }
+  } catch (e) { console.warn('WebXR unavailable:', e && e.message); }
+
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
 }
