@@ -81,10 +81,15 @@ body.dark-mode{
 /* Speed slider — same palette as the loading bar (.ptr tan track + #4a3320 border + #82a058 fill) */
 #speed{-webkit-appearance:none;appearance:none;height:10px;box-sizing:border-box;border-radius:99px;
   background:#e7d4ac;border:2.5px solid #4a3320;outline:none}
-#speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
-  background:#82a058;border:2.5px solid #4a3320;cursor:pointer;margin-top:-5.5px}
+/* Knob = the 48×48 Mona cell-face. Sized 48px, so it is pulled up by (48−10)/2 = 19px to stay
+   centred on the 10px track, and the track needs 48px of vertical room around it. */
+#speed::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:48px;height:48px;border:0;
+  border-radius:50%;cursor:pointer;margin-top:-19px;
+  background:url('./mona_knob_48.png') center/48px 48px no-repeat}
 #speed::-moz-range-track{height:10px;box-sizing:border-box;border-radius:99px;background:#e7d4ac;border:2.5px solid #4a3320}
-#speed::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#82a058;border:2.5px solid #4a3320;cursor:pointer}
+#speed::-moz-range-thumb{width:48px;height:48px;border:0;border-radius:50%;cursor:pointer;
+  background:url('./mona_knob_48.png') center/48px 48px no-repeat}
+#speedbox{padding-bottom:19px}   /* room for the oversized knob so it isn't clipped at the window edge */
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
 #br-stack{position:absolute;right:14px;bottom:14px;z-index:25;display:flex;flex-direction:column;
   align-items:flex-end;gap:12px;pointer-events:none}
@@ -129,7 +134,8 @@ body.dark-mode{
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
 <button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
 <button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Alkuaineet</span></button>
-<button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (OEC, feofytiini, plastokinoni, hemit, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
+<button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (klorofyllit, karotenoidit, kinonit, hemit, feofytiini, Tyr Z, OEC, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
+<button id="proj-btn" title="2D: ortografinen sivukuva kalvon tasossa · 3D: takaisin perspektiiviin"><span id="proj-icon">🔲</span><span id="proj-label">2D</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
@@ -195,25 +201,33 @@ const CAT_COLORS = [
 const RES_CAT = {};
 'ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL HOH'.split(' ').forEach(r=>RES_CAT[r]=0);
 'CHL CLA PHO BCL'.split(' ').forEach(r=>RES_CAT[r]=1);
-'BCR LUT NEX XAT VIO ZEA'.split(' ').forEach(r=>RES_CAT[r]=2);
+'BCR LUT NEX XAT VIO ZEA ECH'.split(' ').forEach(r=>RES_CAT[r]=2);   // ECH = echinenone (b6f)
 'HEM HEC'.split(' ').forEach(r=>RES_CAT[r]=3);
-'DGD LMG LHG PL9 SQD LMT'.split(' ').forEach(r=>RES_CAT[r]=4);
+'DGD LMG LHG PL9 SQD LMT 6PL PGV LFA'.split(' ').forEach(r=>RES_CAT[r]=4);   // 6PL/PGV/LFA = b6f phospholipids + fatty acid
 'CL FE2 FE MG MN CA NA K ZN OEX BCT CU CO'.split(' ').forEach(r=>RES_CAT[r]=5);
 const catOf = res => RES_CAT[res] ?? 6;
 // Electron-transport-chain cofactors → flagged so a button can render them on top of everything.
-// (Bulk antenna chlorophylls CLA/CHL are deliberately excluded — they'd bury the actual cofactors;
-//  P680/P700 can't be told apart from antenna Chl in this data, so we mark pheophytin + the quinones
-//  and metal clusters that flank the reaction centres instead.)
-// Each cofactor residue → a TYPE code (1-6) so the overlay can colour them by role, in vivid hues
+// The FULL light-harvesting + electron-transport set: every chlorophyll (antenna AND reaction-centre —
+// P680/P700 can't be told apart from antenna Chl in this data), every carotenoid, the quinones, hemes,
+// pheophytins, metal clusters, and Tyr Z (tagged geometrically in markTyrZ — it's a plain TYR residue,
+// identified as the one hydrogen-bonded to the OEC).
+// Each cofactor residue → a TYPE code (1-9) so the overlay can colour them by role, in vivid hues
 // that stand out from the muted parent-model palette.
-const ETC_RES = { OEX:1, MN:1, CA:1,   PHO:2,   PL9:3, PQN:3,   HEM:4, HEC:4,   SF4:5, FES:5, FE:5, FE2:5,   CU:6 };
+const ETC_RES = { OEX:1, MN:1, CA:1,   PHO:2,   PL9:3, PQN:3, PQ9:3, UQ:3,   HEM:4, HEC:4,
+  SF4:5, FES:5, F3S:5, FE:5, FE2:5,   CU:6,
+  CLA:7, CHL:7, BCL:7, CL0:7,                                   // chlorophylls (antenna + reaction centre)
+  BCR:8, LUT:8, NEX:8, XAT:8, VIO:8, ZEA:8, LU2:8, A86:8, ECH:8 };   // carotenoids (ECH = echinenone, b6f)
+const ETC_TYRZ = 9;                                             // assigned geometrically, not by residue name
 const ETC_COL = [ [0,0,0],              // 0 unused
   [1.00,0.52,0.00],   // 1 OEC (Mn₄CaO₅)        — bright orange
   [1.00,0.20,0.72],   // 2 pheophytin           — magenta
   [0.05,0.90,0.92],   // 3 plasto/phyllo-quinone — cyan
   [1.00,0.13,0.13],   // 4 heme                  — vivid red
   [1.00,0.84,0.08],   // 5 Fe-S cluster          — yellow
-  [0.28,0.52,1.00] ]; // 6 Cu (plastocyanin)     — blue
+  [0.28,0.52,1.00],   // 6 Cu (plastocyanin)     — blue
+  [0.13,0.95,0.38],   // 7 chlorophyll           — vivid green
+  [0.99,0.70,0.22],   // 8 carotenoid            — amber
+  [0.74,0.36,1.00] ]; // 9 Tyr Z (D1-Tyr161)     — violet
 
 /* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
 function parseMol2(text){
@@ -240,6 +254,7 @@ function parseMol2(text){
         cur.cat = new Uint8Array(cur.na);
         cur.cof = new Uint8Array(cur.na);  // 1 = electron-transport-chain cofactor (for the render-on-top overlay)
         cur.sid = new Int32Array(cur.na);  // subst_id (residue instance) → to extract one chlorophyll
+        cur.tyr = new Uint8Array(cur.na);  // 1 = atom of a TYR residue → markTyrZ picks the one beside the OEC
         cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
         cur.bo = new Uint8Array(cur.nb);   // bond order (1 single, 2 double, 3 triple)
       }
@@ -250,7 +265,8 @@ function parseMol2(text){
       if(p.length < 6 || cur.ai >= cur.na) continue;
       const k = cur.ai++;
       cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
-      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0; cur.cof[k] = ETC_RES[p[7]] || 0;   // 0 = not a cofactor, else type code 1-6
+      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0; cur.cof[k] = ETC_RES[p[7]] || 0;   // 0 = not a cofactor, else type code 1-9
+      if(p[7] === 'TYR') cur.tyr[k] = 1;
     } else if(section === 'BOND'){
       const p = ln.trim().split(/\s+/);
       if(p.length < 4 || cur.bi >= cur.nb) continue;
@@ -260,6 +276,49 @@ function parseMol2(text){
     }
   }
   return mols.filter(m => m.na > 0);
+}
+
+/* Tyr Z (D1-Tyr161) — the redox-active tyrosine that ferries electrons from the OEC to P680⁺.
+   The mol2 carries no chain id or PDB numbering, so name-matching can't find it; instead we use the
+   geometry that DEFINES it: it is the one tyrosine hydrogen-bonded to the Mn₄CaO₅ cluster (~5 Å).
+   Tyr D, its pseudo-symmetric twin on D2, sits ~30 Å from any Mn and is correctly left unmarked.
+   A dimer simply yields one Tyr Z per monomer. Marks every atom of each matching TYR residue. */
+function markTyrZ(m){
+  if(!m.tyr || !m.cof) return;
+  const oi=[];                                                 // OEC atom indices (Mn/Ca/O of the cluster)
+  for(let k=0;k<m.na;k++) if(m.cof[k]===1) oi.push(k);
+  if(!oi.length) return;                                       // no OEC in this model → no Tyr Z
+  // Split the OEC atoms into clusters (one per PSII monomer) by single-linkage within 6 Å.
+  const cid = new Array(oi.length).fill(-1); let nc = 0;
+  for(let a=0;a<oi.length;a++){
+    if(cid[a] >= 0) continue;
+    cid[a] = nc; const stack=[a];
+    while(stack.length){ const p=stack.pop(), pk=oi[p];
+      for(let b=0;b<oi.length;b++){ if(cid[b]>=0) continue; const bk=oi[b];
+        const dx=m.x[pk]-m.x[bk], dy=m.y[pk]-m.y[bk], dz=m.z[pk]-m.z[bk];
+        if(dx*dx+dy*dy+dz*dz < 36){ cid[b]=nc; stack.push(b); } } }
+    nc++;
+  }
+  // Per cluster, the SINGLE closest tyrosine is Tyr Z (its OH hydrogen-bonds the cluster, ~5 Å).
+  // Tyr D, the pseudo-symmetric twin on D2, is ~30 Å away and never wins.
+  const best = new Array(nc).fill(-1), bestD = new Array(nc).fill(Infinity);
+  const resMin = new Map();                                    // residue id → [minDist², cluster]
+  for(let k=0;k<m.na;k++){
+    if(!m.tyr[k]) continue;
+    for(let a=0;a<oi.length;a++){ const ok=oi[a];
+      const dx=m.x[k]-m.x[ok], dy=m.y[k]-m.y[ok], dz=m.z[k]-m.z[ok], d2=dx*dx+dy*dy+dz*dz;
+      const cur = resMin.get(m.sid[k]);
+      if(!cur || d2 < cur[0]) resMin.set(m.sid[k], [d2, cid[a]]);
+    }
+  }
+  // Only a REAL Mn₄CaO₅ cluster counts — lone Mn/Ca ions elsewhere in the structure form their own
+  // 1-2 atom "clusters" and would each drag in a spurious nearby tyrosine.
+  const csize = new Array(nc).fill(0); for(const c of cid) csize[c]++;
+  for(const [sid, v] of resMin){ const [d2, c] = v;
+    if(csize[c] >= 4 && d2 < 100 && d2 < bestD[c]){ bestD[c] = d2; best[c] = sid; } }   // within 10 Å, nearest wins
+  const hit = new Set(best.filter(s => s >= 0));
+  if(!hit.size) return;
+  for(let k=0;k<m.na;k++) if(m.tyr[k] && hit.has(m.sid[k])) m.cof[k] = ETC_TYRZ;
 }
 
 /* Pull one complete chlorophyll (CLA/CHL/PHO residue) out of the model as its own molecule. */
@@ -342,7 +401,15 @@ varying vec3 vColor;
 varying vec3 vWCen;      // instance world centre → identify the selected atom's nucleons
 varying float vFlag;     // instance alpha → 1 for protons, 0 for neutrons
 varying float vRad;      // per-instance radius (= uniform radius unless IMPRAD scales it)
+varying float vMid;      // which model this instance belongs to (−1 = not model-tagged) → sage selection rim
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+#ifdef MEMFADE
+// Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
+// of one upright lipid shares it and the lipid stays rigid, while lipids a tile apart are out of
+// phase and visibly slide past one another — a fluid bilayer, not one sheet breathing as a block.
+vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
+  return vec3(0.62*sin(uT*0.85 + ph), 0.26*sin(uT*0.63 + ph*1.7), 0.62*cos(uT*0.74 + ph*1.3)); }
+#endif
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec3 base = W[3].xyz;
@@ -354,6 +421,9 @@ void main(void){
 #endif
   vWCen = base;
   vec3 wc = shake(base);
+#ifdef MEMFADE
+  wc += memSway(base);
+#endif
 #ifdef MACROMOVE
   wc = (macroXform * vec4(wc - macroCenter, 1.0)).xyz;
 #endif
@@ -362,8 +432,10 @@ void main(void){
   vUV = position.xy;
   vColor = instanceColor.rgb;
   vFlag = instanceColor.a;
+  vMid = -1.0;
 #ifdef MODELMOVE
   if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];
+  vMid = modelId;
 #endif
   float rad = radius;
 #ifdef IMPRAD
@@ -395,14 +467,22 @@ uniform float depthBias;   // nuclei: push toward camera (view units) so they cl
 uniform vec3 selCenter;    // the focused atom (its static nucleus is hidden → the spinning highlight shows instead)
 uniform float coneCos;     // reveal only atoms within this cosine of the view axis (negative disables the cone)
 #ifdef MEMFADE
-uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane dither away
+uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane fade away
 #endif
+#ifdef ETCHOLE
+uniform sampler2D etcDepth;   // R = view depth of the nearest ETC cofactor surface (huge = none)
+uniform vec2 etcRes;          // 1 / render-target size
+uniform float etcHole;        // 1 = carve the shafts, 0 = off
+#endif
+uniform float selModel;    // index of the SELECTED complex (−1 = none) → its atoms get a sage rim
+uniform vec3 selCol;       // that rim's colour (sage)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
 varying vec3 vWCen;
 varying float vFlag;
 varying float vRad;      // per-instance radius (vdW LOD)
+varying float vMid;      // this instance's model index
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));  // raking light from the side (right)
 void main(void){
   float r2 = dot(vUV, vUV);
@@ -411,18 +491,24 @@ void main(void){
   vec3 n = vec3(vUV, -zc);                 // sphere normal toward camera
   vec3 posV = vCenterV + n * vRad;
   float dist = length(vCenterV);           // atom-centre distance from the camera
-  // Screen-door cross-fade across an 8-unit band at the bubble edge, so vdW shells
-  // dissolve away to reveal the orbitals inside (and cores dissolve in).
-  float hsh = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // TRUE ALPHA — every fade below is a real coverage value written to gl_FragColor.a and blended.
+  // (No screen-door dither anywhere.) Depth-write stays on, so fully opaque fragments still occlude.
+  float alpha = 1.0;
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-4.0, 18.0,(vWCen.z - memCut.x)*memCut.y) > hsh) discard;   // cross-cut fade
+  alpha *= 1.0 - memCut.z * step(0.0,(vWCen.z - memCut.x)*memCut.y);   // hard cut plane — only memCut.z (the 2.5 s fade) is ever partial
 #endif
   float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside the reveal radius, 1 beyond it
   float perp = (vCenterV.z > 0.0) ? length(vCenterV.xy)/vCenterV.z : 1e9;   // tan(angle) from the view axis → forward cone (matches the orbital shaders)
-  float inCone = (coneCos < -0.5) ? 1.0 : step(perp, coneCos);   // inside the cone if tan(angle) <= coneCos
+  float inCone = (coneCos < -0.5) ? 1.0 : 1.0 - smoothstep(coneCos*0.86, coneCos, perp);   // soft-edged cone rim
   float reveal = (1.0 - edge) * inCone;                       // 1 = orbitals/nuclei show here, 0 = vdW shell
-  if(isShell < 0.5){ if(reveal < hsh) discard; }             // core/nucleons show only where revealed
-  else { if((1.0 - reveal) < hsh) discard; }                 // shell shows where NOT revealed (outside bubble OR off-cone)
+  alpha *= (isShell < 0.5) ? reveal : (1.0 - reveal);         // core fades IN where revealed, shell fades OUT
+  if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
+#ifdef ETCHOLE
+  if(etcHole > 0.5){   // anything in front of a cofactor is an occluder → drop it, opening the shaft
+    float cd = texture2D(etcDepth, gl_FragCoord.xy * etcRes).r;
+    if(cd < 1.0e7 && posV.z < cd - 0.3) discard;
+  }
+#endif
   if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
   posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
   vec4 clip = projection * vec4(posV, 1.0);
@@ -436,8 +522,35 @@ void main(void){
     col = mix(col, vec3(1.0, 0.18, 0.18), pf) + vec3(0.40, 0.0, 0.0) * pf;   // hazy red glow on protons
   } else
     col *= mix(1.0, 0.12, rim);                              // ink rim → Goodsell outline
+  // Selected complex → repaint each of its atoms' rims sage. Every atom is outlined, so the shape
+  // the eye picks up is the OUTER contour of the whole protein (interior rims are hidden behind the
+  // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
+  if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
+    col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, col, fog), 1.0);
+  gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
+}`;
+
+/* ETC cofactor depth mask. Pairs with the 'imp' VERTEX shader: renders ONLY the cofactor spheres
+   into an off-screen target, storing the view-space depth of the nearest cofactor surface per pixel
+   (cleared to a huge value = "no cofactor down this ray"). Every other material then samples it and
+   drops any fragment sitting in FRONT of that depth — which hides everything between the camera and
+   a cofactor, carving a clean shaft to all of them at once, at one texture fetch per fragment. */
+BABYLON.Effect.ShadersStore['etcdFragmentShader'] = `
+#extension GL_EXT_frag_depth : enable
+precision highp float;
+uniform mat4 projection;
+varying vec2 vUV;
+varying vec3 vCenterV;
+varying float vRad;
+void main(void){
+  float r2 = dot(vUV, vUV);
+  if(r2 > 1.0) discard;
+  float zc = sqrt(1.0 - r2);
+  vec3 posV = vCenterV + vec3(vUV, -zc) * vRad;
+  vec4 clip = projection * vec4(posV, 1.0);
+  gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;   // real sphere depth → the RTT keeps the NEAREST cofactor
+  gl_FragColor = vec4(posV.z, 0.0, 0.0, 1.0);
 }`;
 
 /* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
@@ -464,6 +577,7 @@ uniform mat4 macroXform; uniform vec3 macroCenter;
 attribute float modelId; uniform mat4 modelXform[24];
 uniform vec3 modelCol[24]; uniform float colorMode;
 #endif
+varying float vMid;      // this instance's model index (-1 = untagged) -> sage selection rim
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -476,14 +590,24 @@ varying float vCang;
 varying vec3 vMemW; uniform vec3 memCut;
 #endif
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+#ifdef MEMFADE
+// Membrane fluid sway — must match the imp/orb shaders exactly so a lipid's bonds ride with its atoms.
+vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
+  return vec3(0.62*sin(uT*0.85 + ph), 0.26*sin(uT*0.63 + ph*1.7), 0.62*cos(uT*0.74 + ph*1.3)); }
+#endif
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   float wsc = taper;   // per-lobe overall width multiplier (electronegative atom's lobe is wider → pair forms a cone)
   vec3 pos = vec3(position.x*wsc, position.y, position.z*wsc);
   vec3 nrm = normal;
   vec4 wp = W * vec4(pos, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MEMFADE
+  wp.xyz += memSway(W[3].xyz);
+#endif
+  vMid = -1.0;
 #ifdef MODELMOVE
   wp.xyz = (modelXform[int(modelId + 0.5)] * vec4(wp.xyz, 1.0)).xyz;
+  vMid = modelId;
 #endif
 #ifdef MACROMOVE
   wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
@@ -523,6 +647,11 @@ uniform float drawElec; // 1 = draw electrons inline (chlorophyll), 0 = electron
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
+#ifdef ETCHOLE
+uniform sampler2D etcDepth;   // R = view depth of the nearest ETC cofactor surface (huge = none)
+uniform vec2 etcRes;          // 1 / render-target size
+uniform float etcHole;        // 1 = carve the shafts, 0 = off
+#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -535,10 +664,13 @@ varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
+uniform float selModel;   // index of the SELECTED complex (-1 = none)
+uniform vec3 selCol;      // sage rim colour
+varying float vMid;       // this instance's model index
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
 float elecBolt(vec3 N, vec3 e, vec3 uref){
-  float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
+  float fr = (vOid >= 2000.0) ? 1.9 : (vOid >= 900.0) ? 1.2 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));   // energy ladder: core shells (rise with n) < bonding σ/π (900–1999, stabilised) < lone pairs (≥2000, non-bonding, often the HOMO)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
@@ -590,12 +722,20 @@ void electrons(inout vec3 c, float ne, float bri){
   c += vec3(0.72, 0.86, 1.0) * core * 0.5 * bri;   // small soft highlight at the very centre
 }
 void main(void){
-  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // TRUE ALPHA — real blended coverage, no screen-door dither.
+  float alpha = 1.0;
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  alpha *= 1.0 - memCut.z * step(0.0,(vMemW.z - memCut.x)*memCut.y);   // hard cut plane — only memCut.z (the 2.5 s fade) is ever partial
 #endif
-  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
-  if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
+  alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the bubble
+  if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
+  if(alpha < 0.004) discard;
+#ifdef ETCHOLE
+  if(etcHole > 0.5){   // anything in front of a cofactor is an occluder → drop it, opening the shaft
+    float cd = texture2D(etcDepth, gl_FragCoord.xy * etcRes).r;
+    if(cd < 1.0e7 && vViewPos.z < cd - 0.3) discard;
+  }
+#endif
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices) with a lifted ambient floor so shadows aren't crushed
@@ -603,6 +743,8 @@ void main(void){
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
   c *= 1.0 - 0.55 * pow(fres, 2.5);   // gentle silhouette darkening (restored — no thick rim)
+  if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
+    c = mix(c, selCol, smoothstep(0.45, 0.95, fres) * 0.95);   // sage rim on the selected complex's lobes
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → others' electrons dim to  5%
 #ifdef ELECGATE
   if(drawElec > 0.5 && length(vViewPos) < elecR) electrons(c, nElec, efac);
@@ -610,7 +752,7 @@ void main(void){
   if(drawElec > 0.5) electrons(c, nElec, efac);
 #endif
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque (focus isolates via the outline, not transparency)
+  gl_FragColor = vec4(mix(fogColor, c, fog), alpha);   // alpha carries the reveal and cross-cut fades
 }`;
 
 /* Bonding orbital = one CONE per bond: wide (base) at the more electronegative atom,
@@ -653,11 +795,13 @@ varying vec3 vNrmV;
 varying vec3 vCol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
-  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // TRUE ALPHA — real blended coverage, no screen-door dither.
+  float alpha = 1.0;
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  alpha *= 1.0 - memCut.z * step(0.0,(vMemW.z - memCut.x)*memCut.y);   // hard cut plane — only memCut.z (the 2.5 s fade) is ever partial
 #endif
-  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in
+  alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the bubble
+  if(alpha < 0.004) discard;
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices register) with a lifted ambient floor
@@ -665,7 +809,7 @@ void main(void){
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));   // electric-blue outline
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);
+  gl_FragColor = vec4(mix(fogColor, c, fog), alpha);
 }`;
 
 /* Electron-orbital lobes: real-shaped ellipsoids, per-instance colour by type (s/p/d/f). */
@@ -691,6 +835,7 @@ uniform mat4 macroXform; uniform vec3 macroCenter;  // whole-macromolecule drag 
 attribute float modelId; uniform mat4 modelXform[24];
 uniform vec3 modelCol[24]; uniform float colorMode;
 #endif
+varying float vMid;      // this instance's model index (-1 = untagged) -> sage selection rim
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -703,11 +848,21 @@ varying float vCang;
 varying vec3 vMemW; uniform vec3 memCut;
 #endif
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+#ifdef MEMFADE
+// Membrane fluid sway — must match the imp/bond shaders exactly so a lipid's orbitals ride with it.
+vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
+  return vec3(0.62*sin(uT*0.85 + ph), 0.26*sin(uT*0.63 + ph*1.7), 0.62*cos(uT*0.74 + ph*1.3)); }
+#endif
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MEMFADE
+  wp.xyz += memSway(W[3].xyz);
+#endif
+  vMid = -1.0;
 #ifdef MODELMOVE
   wp.xyz = (modelXform[int(modelId + 0.5)] * vec4(wp.xyz, 1.0)).xyz;
+  vMid = modelId;
 #endif
 #ifdef MACROMOVE
   wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
@@ -745,6 +900,11 @@ uniform float drawElec; // 1 = draw electrons inline (chlorophyll / aromatic π)
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
+#ifdef ETCHOLE
+uniform sampler2D etcDepth;   // R = view depth of the nearest ETC cofactor surface (huge = none)
+uniform vec2 etcRes;          // 1 / render-target size
+uniform float etcHole;        // 1 = carve the shafts, 0 = off
+#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -757,10 +917,13 @@ varying float vCang;
 varying vec3 vMemW; uniform vec3 memCut;
 #endif
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
+uniform float selModel;   // index of the SELECTED complex (-1 = none)
+uniform vec3 selCol;      // sage rim colour
+varying float vMid;       // this instance's model index
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
 float elecBolt(vec3 N, vec3 e, vec3 uref){
-  float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
+  float fr = (vOid >= 2000.0) ? 1.9 : (vOid >= 900.0) ? 1.2 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));   // energy ladder: core shells (rise with n) < bonding σ/π (900–1999, stabilised) < lone pairs (≥2000, non-bonding, often the HOMO)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
@@ -812,12 +975,20 @@ void electrons(inout vec3 c, float ne, float bri){
   c += vec3(0.72, 0.86, 1.0) * core * 0.5 * bri;   // small soft highlight at the very centre
 }
 void main(void){
-  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // TRUE ALPHA — real blended coverage, no screen-door dither.
+  float alpha = 1.0;
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  alpha *= 1.0 - memCut.z * step(0.0,(vMemW.z - memCut.x)*memCut.y);   // hard cut plane — only memCut.z (the 2.5 s fade) is ever partial
 #endif
-  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
-  if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
+  alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the camera sphere
+  if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
+  if(alpha < 0.004) discard;
+#ifdef ETCHOLE
+  if(etcHole > 0.5){   // anything in front of a cofactor is an occluder → drop it, opening the shaft
+    float cd = texture2D(etcDepth, gl_FragCoord.xy * etcRes).r;
+    if(cd < 1.0e7 && vViewPos.z < cd - 0.3) discard;
+  }
+#endif
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices register) with a lifted ambient floor
@@ -825,6 +996,8 @@ void main(void){
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
   c *= 1.0 - 0.55 * pow(fres, 2.5);   // gentle silhouette darkening (restored — no thick rim)
+  if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
+    c = mix(c, selCol, smoothstep(0.45, 0.95, fres) * 0.95);   // sage rim on the selected complex's lobes
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → the others' electrons dim to  5%
 #ifdef ELECGATE
@@ -833,7 +1006,7 @@ void main(void){
   if(drawElec > 0.5) electrons(c, ne, efac);
 #endif
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
-  gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // opaque orbital, isolation shows via outline + dimmed electrons
+  gl_FragColor = vec4(mix(fogColor, c, fog), alpha);   // alpha carries the reveal and cross-cut fades
 }`;
 
 /* Spawn orbital vertex shader: identical to 'orb' but the electron phase + thermal-shake come
@@ -920,7 +1093,7 @@ varying float vCang;
 varying vec3 vMemW; uniform vec3 memCut;
 #endif
 float elecBolt(vec3 N, vec3 e, vec3 uref){
-  float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
+  float fr = (vOid >= 2000.0) ? 1.9 : (vOid >= 900.0) ? 1.2 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));   // energy ladder: core shells (rise with n) < bonding σ/π (900–1999, stabilised) < lone pairs (≥2000, non-bonding, often the HOMO)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
@@ -967,15 +1140,17 @@ vec3 electronGlow(float ne){
        + vec3(0.72, 0.86, 1.0) * core * 0.45;
 }
 void main(void){
-  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // TRUE ALPHA — this pass is additive, so coverage scales the glow instead of keying a dither.
+  float alpha = 1.0;
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  alpha *= 1.0 - memCut.z * step(0.0,(vMemW.z - memCut.x)*memCut.y);   // hard cut plane — only memCut.z (the 2.5 s fade) is ever partial
 #endif
-  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
-  if(coneCos > -0.5 && vCang > coneCos) discard;
+  alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));
+  if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);
+  if(alpha < 0.004) discard;
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;
   float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate → other orbitals' electrons dim to  5%
-  vec3 g = electronGlow(ne) * foc;
+  vec3 g = electronGlow(ne) * foc * alpha;
   vec3 pv = vViewPos; pv.z -= depthBias;
   vec4 clip = projection * vec4(pv, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
@@ -1003,7 +1178,7 @@ varying float vCang;
 varying vec3 vMemW; uniform vec3 memCut;
 #endif
 float elecBolt(vec3 N, vec3 e, vec3 uref){
-  float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
+  float fr = (vOid >= 2000.0) ? 1.9 : (vOid >= 900.0) ? 1.2 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));   // energy ladder: core shells (rise with n) < bonding σ/π (900–1999, stabilised) < lone pairs (≥2000, non-bonding, often the HOMO)
   float d = clamp(dot(N, e), -1.0, 1.0);
   vec3 tp = N - d*e;
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
@@ -1050,14 +1225,16 @@ vec3 electronGlow(float ne){
        + vec3(0.72, 0.86, 1.0) * core * 0.45;
 }
 void main(void){
-  float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // TRUE ALPHA — additive pass, so coverage scales the glow instead of keying a dither.
+  float alpha = 1.0;
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  alpha *= 1.0 - memCut.z * step(0.0,(vMemW.z - memCut.x)*memCut.y);   // hard cut plane — only memCut.z (the 2.5 s fade) is ever partial
 #endif
-  if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
-  if(coneCos > -0.5 && vCang > coneCos) discard;
+  alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));
+  if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);
+  if(alpha < 0.004) discard;
   float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate → other orbitals' electrons dim to  5%
-  vec3 g = electronGlow(nElec) * foc;
+  vec3 g = electronGlow(nElec) * foc * alpha;
   vec3 pv = vViewPos; pv.z -= depthBias;
   vec4 clip = projection * vec4(pv, 1.0);
   gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
@@ -1099,13 +1276,14 @@ precision highp float;
 uniform vec3 oc;      // outline colour
 uniform float rimLo;  // rim band start (higher = thinner)
 uniform float rimHi;  // rim band end
+uniform float rimW;   // stroke width in fwidth units (hover = thin, selection = thick)
 varying vec3 vVP;
 varying vec3 vN;
 void main(void){
   vec3 N = normalize(vN), V = normalize(-vVP);
   float f = 1.0 - max(dot(N, V), 0.0);             // 0 face-on … 1 at the silhouette (front faces only)
   float w = fwidth(f);                             // screen-space gradient → normalise the band to a constant pixel width
-  float a = 1.0 - smoothstep(0.0, w*2.6, abs(f - rimLo));   // even stroke along the f=rimLo contour
+  float a = 1.0 - smoothstep(0.0, w*rimW, abs(f - rimLo));   // even stroke along the f=rimLo contour
   if(a < 0.04) discard;
   gl_FragColor = vec4(oc, a);
 }`;
@@ -1327,7 +1505,9 @@ async function run(){
         const nm = (m.name||'').toLowerCase();
         const cfg = MODELS.find(e => !e._used && nm.includes(e.match));   // match by internal name/code
         if(!cfg){ console.log('unmatched molecule "'+m.name+'" in '+fn+' (skipped)'); continue; }
-        cfg._used = true; cfg.file = fn; m.cfg = cfg; m.name = cfg.label; mols.push(m); }
+        cfg._used = true; cfg.file = fn; m.cfg = cfg; m.name = cfg.label;
+        markTyrZ(m);                                   // tag the OEC-adjacent tyrosine as Tyr Z (needs raw, pre-transform coords)
+        mols.push(m); }
     }catch(err){ console.warn('failed to load', fn, err); }
     await yield_();
   }
@@ -1413,8 +1593,8 @@ async function run(){
   engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));   // crisp supersample (quality over FPS)
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(1.0,0.996,0.976,1);   // #fffef9
-  scene.fogMode  = BABYLON.Scene.FOGMODE_LINEAR;               // depth shadow: distant = darker
-  scene.fogColor = new BABYLON.Color3(0.16,0.17,0.13);         // dark olive-grey (not black) → lighter vibe
+  scene.fogMode  = BABYLON.Scene.FOGMODE_NONE;                 // NO distance darkening — every atom keeps its true colour at any depth
+  scene.fogColor = new BABYLON.Color3(0.16,0.17,0.13);         // kept only to satisfy the shaders' fogColor uniform (fog factor is pinned to 1 → never mixed in)
   // ── Theme toggle: light (cream) ↔ warm-dark (Solukko brown palette) ─────────
   const THEME = {
     light:{ clear:new BABYLON.Color4(1.0,0.996,0.976,1), fog:new BABYLON.Color3(0.16,0.17,0.13) },
@@ -1488,35 +1668,33 @@ async function run(){
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         const isTap = mdx*mdx + mdy*mdy < 9;
-        if(isTap && !spawnEl && wholeInView()){                          // zoomed out → select/deselect the whole macromolecule
-          if(pickPSII()) selectPSII(); else deselectMacro(); return;
-        }
-        if(isTap && spawnEl && !pickAtom()){ spawnAtPointer(); }         // armed element + tap on empty space → drop an atom
-        else if(isTap && selCenter.x < 1e5 && !pickAtom()){              // a click on empty space → clear the selection
-          selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false); hideSelElec(); orbitLocked = false;
-          selAtom = null; gFocusId = -1; hideConfig();
+        if(isTap && spawnEl){ if(!pickAtom()) spawnAtPointer(); return; }  // armed element + tap on empty space → drop an atom
+        if(isTap){
+          // Three range tiers: CLOSE → the individual atom · MEDIUM → the whole ETC cofactor
+          // (chlorophyll, heme, quinone, Tyr Z …) · FAR → the whole complex.
+          const a = pickAtom();
+          if(a){ clearEtcSel(); centerOnAtom(a); }                          // CLOSE: an atom inside the reveal bubble
+          else {
+            const gi = pickEtcGroup();
+            if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); }  // MEDIUM: a whole cofactor molecule
+            else { const mid = pickModelAtCursor();
+              if(mid>=0 && _modelPickT > BUBBLE_R){ clearAtomSel(); clearEtcSel(); selectModel(mid); }   // FAR: the whole complex
+              else { clearAtomSel(); clearEtcSel(); deselectModel(); }       // empty space → clear
+            }
+          }
         }
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
       if(macroDrag){ macroDragMove(); return; }               // dragging the whole protein
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
-      if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)){   // right-drag / ctrl+drag = pan → stop orbiting the selection
-        orbitLocked = false; return;
-      }
+      if((e.buttons & 2) || ((e.buttons & 1) && e.ctrlKey)) return;   // right-drag / ctrl+drag = pan (the selection stays the pivot)
       if(e.buttons & 4){ dragZoom(e.movementY || 0); showTips(); return; }   // middle held = zoom
-      // Left-drag rotation: on the FIRST real move (not a click), re-pivot onto the selected atom —
-      // but only if it's still on-screen. If you've zoomed in past it (it left the view), rotate
-      // around the current view instead (and keep it selected, just don't snap back to it).
-      if((e.buttons & 1) && orbitLocked && !snappedDrag){
+      // Left-drag rotation ALWAYS orbits the current selection (atom or whole complex): on the first
+      // real move of a drag, re-pivot onto it — even if it's off-screen or you've dollied past it.
+      if((e.buttons & 1) && orbitLocked && !snappedDrag && orbitCenter.x < 1e5){
         const dx = scene.pointerX - dnX, dy = scene.pointerY - dnY;
-        if(dx*dx + dy*dy > 9){
-          const pl = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());
-          let inView = true;
-          for(let i=0;i<6;i++){ if(pl[i].dotCoordinate(selCenter) < 0){ inView = false; break; } }
-          if(inView) cam.setTarget(selCenter.clone());
-          snappedDrag = true;
-        }
+        if(dx*dx + dy*dy > 9){ cam.setTarget(orbitCenter.clone()); snappedDrag = true; }
       }
     }
   });
@@ -1543,7 +1721,7 @@ async function run(){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [], cofBuf = [],
+  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [], cofBuf = [], resBuf = [],
         sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
@@ -1557,7 +1735,8 @@ async function run(){
     lpCenBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)*3);
     lpOidBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)); // per-lobe orbital id (lone pair = 2000+i)
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
-    cofBuf[e] = new Uint8Array(atomCount[e]);       // 1 = ETC cofactor atom (feeds the render-on-top overlay)
+    cofBuf[e] = new Uint8Array(atomCount[e]);       // cofactor type code (feeds the ETC overlay)
+    resBuf[e] = new Float64Array(atomCount[e]);     // globally-unique residue instance id → groups cofactor atoms into molecules
   }
   const hybCnt = [];   // running hybrid-orbital count per atom → each σ (+ its knob) gets a distinct id
   for(let e=0;e<nEl;e++) hybCnt[e] = new Uint16Array(atomCount[e]);
@@ -1607,7 +1786,7 @@ async function run(){
   const RINGS = [];       // detected aromatic rings → {cx,cy,cz, nx,ny,nz, R} (world) for the delocalised-π tori
   for(const m of mols){
     if(m===chl) continue;   // chlorophyll built separately (animated)
-    const ox=m.ox, oy=m.oy, oz=m.oz;
+    const ox=m.ox, oy=m.oy, oz=m.oz, mi=mols.indexOf(m);
     const kel = new Int32Array(m.na), kci = new Int32Array(m.na);   // molecule atom k → (element, element-atom index)
     for(let k=0;k<m.na;k++){
       const e=m.el[k], ci=sphIdx[e]++;
@@ -1617,6 +1796,7 @@ async function run(){
       const col = CAT_COLORS[m.cat[k]];
       colBuf[e][ci*4]=col[0]; colBuf[e][ci*4+1]=col[1]; colBuf[e][ci*4+2]=col[2]; colBuf[e][ci*4+3]=1;
       cofBuf[e][ci] = m.cof ? m.cof[k] : 0;   // cofactor type code (0 = none)
+      resBuf[e][ci] = (m.sid ? m.sid[k] : 0) + mi*1000000;   // residue instance, made unique across models → exact cofactor grouping
     }
     const bd = [];                                   // per-atom bond directions
     for(let k=0;k<m.na;k++) bd[k] = [];
@@ -1765,8 +1945,23 @@ async function run(){
   let gConeCos = -1.0;        // cone half-angle as tan (−1 = disabled → no cone)
   let gBubbleR = 1e9;         // reveal only within this camera distance (1e9 = everywhere)
   let gShell   = 0;           // vdW spheres: 1 = act as shells that hide inside the reveal, 0 = always solid
-  let gEtc = false, etcOverlay = null;   // ETC cofactor overlay (render-on-top) toggle + its mesh (built later)
-  const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut fade: [cutZ, cutSign, strength] (bound as memCut[])
+  let gEtc = false, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later)
+  let etcDepthRT = null;                 // off-screen cofactor depth mask → the "tunnel" carve (built with the overlay)
+  const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
+  let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
+  let etcSel = -1;                       // index into etcGroups of the selected cofactor (−1 = none)
+  // Bound by every material that can OCCLUDE a cofactor. Feeds the mask + the on/off switch to the
+  // ETCHOLE branch, which drops fragments lying between the camera and any cofactor.
+  const bindEtcHole = eff => {
+    if(etcDepthRT && gEtc){
+      eff.setTexture('etcDepth', etcDepthRT);
+      eff.setFloat2('etcRes', 1/Math.max(1,engine.getRenderWidth()), 1/Math.max(1,engine.getRenderHeight()));
+      eff.setFloat('etcHole', 1);
+    } else eff.setFloat('etcHole', 0);
+  };
+  const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut: [cutZ, cutSign, strength] (bound as memCut[])
+  const MEM_FADE_S = 2.5;      // seconds the membrane takes to fade fully out / back in
+  let memCutOn = false;        // latched threshold state (hysteresis) driving that fade
   const MAX_MODELS = 24;
   const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model translation offset (for picking + the label)
   const gModelXform = new Float32Array(MAX_MODELS*16);   // per-model full transform (rotate around centre + translate) → bound as modelXform[]
@@ -1782,7 +1977,7 @@ async function run(){
     if(cb) cb.addEventListener('click', () => { gColorMode = !gColorMode;
       const lab=document.getElementById('color-label'); if(lab) lab.textContent = gColorMode ? 'Mallit' : 'Alkuaineet'; }); }
   const applyGfxMode = () => {   // push the current mode into the reveal params + the button UI
-    gConeCos = (gGfxMode === 2) ? CONE_TAN : -1.0;
+    gConeCos = (gGfxMode === 2) ? coneTanNow() : -1.0;
     gBubbleR = (gGfxMode === 2) ? REVEAL_R : 1e9;
     gShell   = (gGfxMode === 2) ? 1 : 0;
     const g = GFX_MODES[gGfxMode];
@@ -1791,14 +1986,49 @@ async function run(){
   };
   { const gfxBtn = document.getElementById('gfx-btn');   // cycle vdW → orbitals → close-cone reveal (cull loop applies it next frame)
     if(gfxBtn) gfxBtn.addEventListener('click', () => { gGfxMode = (gGfxMode + 1) % 3; applyGfxMode(); }); }
+  /* ── 2D / 3D projection toggle ────────────────────────────────────────────
+     "2D" = a true ORTHOGRAPHIC camera swung exactly edge-on to the bilayer (beta = 90°, target
+     dropped to the membrane plane) → a flat cross-section with no perspective convergence, so
+     depths read as real distances. The ortho half-height is kept at radius·tan(fov/2), i.e. the
+     framing the perspective camera had at the pivot, so the flip itself doesn't jump — and the
+     zoom keeps working in 2D. "3D" eases beta back and restores the perspective projection. */
+  let gOrtho = false;
+  const syncOrtho = () => {
+    const h = Math.abs(cam.radius) * Math.tan(cam.fov*0.5);
+    const asp = engine.getRenderWidth()/Math.max(1, engine.getRenderHeight());
+    cam.orthoTop=h; cam.orthoBottom=-h; cam.orthoLeft=-h*asp; cam.orthoRight=h*asp;
+  };
+  const setProjection = ortho => {
+    gOrtho = ortho;
+    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
+    const tgt = cam.target.clone(); if(ortho) tgt.y = MEMBRANE_Y;
+    BABYLON.Animation.CreateAndStartAnimation('projBeta', cam, 'beta', 60, 26,
+      cam.beta, ortho ? Math.PI/2 : Math.PI/2.3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('projTgt', cam, 'target', 60, 26,
+      cam.target.clone(), tgt, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    if(ortho){ syncOrtho(); cam.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA; }
+    else cam.mode = BABYLON.Camera.PERSPECTIVE_CAMERA;
+    const b=document.getElementById('proj-btn'); if(b) b.classList.toggle('on', ortho);
+    const l=document.getElementById('proj-label'); if(l) l.textContent = ortho ? '3D' : '2D';
+    const i=document.getElementById('proj-icon');  if(i) i.textContent = ortho ? '🧊' : '🔲';
+  };
+  { const pb = document.getElementById('proj-btn');
+    if(pb) pb.addEventListener('click', () => setProjection(!gOrtho)); }
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
+      if(etcDepthRT) etcDepthRT.refreshRate = gEtc ? 1 : 0;   // only pay for the depth mask while carving
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
-  const CONE_TAN = 0.36;      // graphics mode 2: orbitals shown only inside this half-angle cone (tan ≈ 20°) in front of the camera
-  const REVEAL_R = 95;        // graphics mode 2: the cone reveal only reaches this far (Å) — beyond it, everything stays vdW
+  // Graphics mode 2 cone half-angle, as tan(angle) off the view axis. Sized from the LIVE viewport:
+  // 0.78 × the wider half-FOV → a big reveal that still never fills the frame (the long axis' edges
+  // and all four corners stay vdW, so you keep context). Recomputed on resize via the frame loop.
+  const coneTanNow = () => { const tv = Math.tan(cam.fov*0.5),
+      asp = engine.getRenderWidth()/Math.max(1, engine.getRenderHeight());
+    return 0.78 * Math.max(tv, tv*asp); };
+  const REVEAL_R = 300;       // graphics mode 2: how far the cone reveal reaches (Å) — beyond it, everything stays vdW
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
      FCC packing offsets (nearest-neighbour distance normalised to 1), sorted by
@@ -1903,12 +2133,23 @@ async function run(){
   for(let e=0;e<nEl;e++){ bondCntEA[e] = new Uint8Array(atomCount[e]);
     for(let a=0;a<atomCount[e];a++) bondCntEA[e][a] = (bondDirEA[e][a]||[]).length; }
   bondDirEA.length = 0;   // done with bond directions
+  /* REAL alpha, not screen-door: the fragment shaders now emit a true coverage in gl_FragColor.a,
+     and this flips the material into the blended queue so that alpha is actually composited.
+     Babylon only blends a ShaderMaterial when its .alpha < 1 (the value itself is unused — the
+     shader's own alpha does the work). forceDepthWrite keeps depth writes on, so solid fragments
+     still occlude normally and only the genuinely faded ones blend. */
+  const realAlpha = mat => {
+    mat.alpha = 0.999; mat.alphaMode = BABYLON.Constants.ALPHA_COMBINE; mat.forceDepthWrite = true;
+    return mat;
+  };
   const impostorMat = (name, radius, isShell, protonOutline, movable) => {
     const opts = {
       attributes: ['position','instanceColor','world0','world1','world2','world3'].concat(movable ? ['modelId'] : []),
       uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelXform','modelCol','colorMode'] : [])
     };
-    if(movable) opts.defines = ['#define MACROMOVE','#define MODELMOVE'];   // follows the PSII gizmo AND its own per-model drag
+    if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE','#define ETCHOLE'];   // follows the PSII gizmo AND its own per-model drag; can occlude a cofactor
+      opts.uniforms = opts.uniforms.concat(['etcDepth','etcRes','etcHole','selModel','selCol']); opts.samplers = ['etcDepth']; }
+    else opts.uniforms = opts.uniforms.concat(['selModel','selCol']);
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
     mat.setFloat('radius', radius);
     mat.setFloat('isShell', isShell);
@@ -1924,12 +2165,16 @@ async function run(){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); }
+      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); bindEtcHole(eff); }
+      eff.setFloat('selModel', movable ? gSelModel : -1); eff.setColor3('selCol', SAGE);
     });
-    return mat;
+    return realAlpha(mat);
   };
 
   const selCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);   // focused atom centre (far = none) → its orbitals go transparent
+  // Camera pivot for the CURRENT selection — an atom centre, or a whole complex's centre. Kept apart
+  // from selCenter (which the shaders test per-atom) so selecting a model can't tint a stray atom.
+  const orbitCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);
   const gPsiiOffset = new BABYLON.Vector3(0, 0, 0);        // whole-PSII drag offset (moved via the macromolecule gizmo)
   setLbl('Uploading to GPU…'); await yield_();
   /* ── Spatial culling ──────────────────────────────────────────────────────
@@ -1957,10 +2202,11 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode'],
-    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','etcDepth','etcRes','etcHole','selModel','selCol'],
+    samplers: ['etcDepth'],
+    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define ETCHOLE']   // drag offset + per-model move; electrons only up close
   });
-  orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // always fully revealed → no screen-door band
+  orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1); realAlpha(orbMatG);   // always fully revealed; blended fades
   orbMatG.backFaceCulling = true;
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
@@ -1968,12 +2214,14 @@ async function run(){
     eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
+    bindEtcHole(eff); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode'],
-      defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','etcDepth','etcRes','etcHole','selModel','selCol'],
+      samplers: ['etcDepth'],
+      defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define ETCHOLE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
@@ -1982,8 +2230,9 @@ async function run(){
       eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
+      bindEtcHole(eff); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
     });
-    return mat;
+    return realAlpha(mat);
   };
   const bondBondingMat = bondMatG('bondG');    // bonding lobes
   bondBondingMat.setFloat('nElec', 1);         // a σ/π bond = 2 lobes (one per atom), one electron each
@@ -2012,11 +2261,11 @@ async function run(){
   const cells = new Map();
   const getCell = k => { let c=cells.get(k); if(!c){ c={ sphM:[],sphC:[],sphR:[], nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
-  const etcM=[], etcC=[], etcR=[];   // ETC cofactor overlay (rendered on top of everything)
+  const etcM=[], etcC=[], etcR=[], etcT=[], etcS=[];   // ETC cofactor overlay: matrices, colours, radii, type codes, residue ids
 
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e];
+    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e], rs=resBuf[e];
     // Nucleons — A per atom, contiguous → bin by the atom centre. Also collect ONE vdW sphere per
     // atom (the space-filling representation shown when the graphics toggle is in "vdW" mode).
     const nb=nucBuf[e], nc=nucColBuf[e];
@@ -2024,7 +2273,7 @@ async function run(){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
       pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
-      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); }   // cofactor → overlay, coloured by type, slightly enlarged to pop
+      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); }   // cofactor → overlay, coloured by type, slightly enlarged to pop
     }
     // Orbitals — bin by orbCenBuf (each lobe's atom centre).
     const oc=orbCount(e);
@@ -2058,25 +2307,28 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode'],
-    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','etcDepth','etcRes','etcHole','selModel','selCol'],
+    samplers:['etcDepth'],
+    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHOLE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
-  vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false;
+  vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false; realAlpha(vdwMat);
   vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → vdW spheres become shells that hide inside the close cone
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); bindEtcHole(eff);
+    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','memCut'],
-    defines:['#define IMPRAD','#define MEMFADE'] });   // MEMFADE = membrane cross-cut fade
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','memCut','etcDepth','etcRes','etcHole','selModel'],
+    samplers:['etcDepth'],
+    defines:['#define IMPRAD','#define MEMFADE','#define ETCHOLE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
-  vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false;
+  vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane vdW spheres become shells too
-    eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); bindEtcHole(eff); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -2085,11 +2337,11 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
-    etcMat.setFloat('radius',1.0); etcMat.setFloat('isShell',0); etcMat.setFloat('bubbleR',1e9);
+    etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
-    etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false;
+    etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
     etcMat.onBindObservable.add(()=>{ const eff=etcMat.getEffect(); if(!eff)return;
       eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode)
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
@@ -2100,9 +2352,56 @@ async function run(){
     etcOverlay.thinInstanceSetBuffer('instanceColor', new Float32Array(etcC),4,true);
     etcOverlay.thinInstanceSetBuffer('instR', new Float32Array(etcR),1,true);
     etcOverlay.thinInstanceSetBuffer('modelId', mdlBuf(etcM),1,true);
-    etcOverlay.renderingGroupId=3;                              // last group…
-    scene.setRenderingAutoClearDepthStencil(3, true, true, true);   // …with its depth cleared first → always on top
+    // Cofactors render IN PLACE at their true depth (no more draw-on-top): the tunnel carved by the
+    // depth mask is what makes them visible. Their spheres are 1.15× the normal radius, so where an
+    // atom is BOTH a cofactor and a regular atom the overlay's surface is nearer and wins the depth
+    // test cleanly (no z-fighting with the element-coloured sphere underneath).
+    etcOverlay.renderingGroupId = 0;
+    scene.setRenderingAutoClearDepthStencil(3, true, true, true);   // group 3 = outlines, still cleared → topmost
     etcOverlay.setEnabled(gEtc);
+    /* Cofactor depth mask. Renders ONLY the cofactor spheres, storing each pixel's nearest cofactor
+       view-depth; every occluder material samples it and discards fragments in front of that depth.
+       One fetch per fragment, so the cost is independent of how many cofactors there are. */
+    if(engine.getCaps().textureFloatRender || engine.getCaps().textureHalfFloatRender){
+      const useFloat = engine.getCaps().textureFloatRender;
+      etcDepthRT = new BABYLON.RenderTargetTexture('etcDepthRT',
+        { width: engine.getRenderWidth(), height: engine.getRenderHeight() }, scene, false, true,
+        useFloat ? BABYLON.Constants.TEXTURETYPE_FLOAT : BABYLON.Constants.TEXTURETYPE_HALF_FLOAT,
+        false, BABYLON.Constants.TEXTURE_NEAREST_SAMPLINGMODE, true);
+      etcDepthRT.clearColor = new BABYLON.Color4(1e8, 0, 0, 1);   // 1e8 = "no cofactor along this ray"
+      etcDepthRT.renderList = [etcOverlay];
+      const etcDepthMat = new BABYLON.ShaderMaterial('etcDepthMat', scene, { vertex:'imp', fragment:'etcd' }, {
+        attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
+        uniforms:['view','projection','radius','uT','isShell','bubbleR','protonOutline','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode'],
+        defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+      etcDepthMat.setFloat('radius',1.0); etcDepthMat.backFaceCulling=false;
+      etcDepthMat.onBindObservable.add(()=>{ const eff=etcDepthMat.getEffect(); if(!eff)return;
+        eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setFloat('colorMode',0);
+        eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+      etcDepthRT.setMaterialForRendering(etcOverlay, etcDepthMat);
+      etcDepthRT.refreshRate = gEtc ? 1 : 0;
+      scene.customRenderTargets.push(etcDepthRT);
+      /* Group the cofactor atoms into whole MOLECULES (one chlorophyll, one heme, one Tyr Z …).
+         Grouping is by the mol2 residue instance (subst_id, made unique per model), which is exact —
+         geometric clustering merged neighbouring chlorophylls, whose phytol tails interdigitate to
+         within vdW contact. These groups are what a mid-range click selects, so you pick "this
+         chlorophyll" rather than "this carbon". */
+      const NA = etcT.length;
+      const gx=new Float32Array(NA), gy=new Float32Array(NA), gz=new Float32Array(NA);
+      for(let i=0;i<NA;i++){ gx[i]=etcM[i*16+12]; gy[i]=etcM[i*16+13]; gz[i]=etcM[i*16+14]; }
+      const byRes = new Map();
+      for(let i=0;i<NA;i++){
+        let gi = byRes.get(etcS[i]);
+        if(gi === undefined){ gi = etcGroups.length; byRes.set(etcS[i], gi);
+          etcGroups.push({ cx:0, cy:0, cz:0, r:0, n:0, type:etcT[i], atoms:[] }); }
+        const g = etcGroups[gi]; g.atoms.push(i); g.cx+=gx[i]; g.cy+=gy[i]; g.cz+=gz[i]; g.n++;
+      }
+      for(const g of etcGroups){ g.cx/=g.n; g.cy/=g.n; g.cz/=g.n; let r2=0;
+        for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
+        g.r = Math.sqrt(r2) + 2.0; }
+      etcGroupPos = { gx, gy, gz };
+      engine.onResizeObservable.add(()=>{ if(etcDepthRT) etcDepthRT.resize({ width: engine.getRenderWidth(), height: engine.getRenderHeight() }); });
+    }
   }
 
   // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
@@ -2340,22 +2639,57 @@ async function run(){
     const lp=new Float32Array(LN*3); let yMin=1e9,yMax=-1e9,xr=0,zr=0;
     for(let k=0;k<LN;k++){ const q=rot([lipid.x[k]-cx,lipid.y[k]-cy,lipid.z[k]-cz]);
       lp[k*3]=q[0];lp[k*3+1]=q[1];lp[k*3+2]=q[2]; yMin=Math.min(yMin,q[1]);yMax=Math.max(yMax,q[1]); xr=Math.max(xr,Math.abs(q[0]));zr=Math.max(zr,Math.abs(q[2])); }
+    // SAFETY: guarantee the POLAR head (O/P/N) sits on the OUTER (high-y) end and the C tails point
+    // toward y=0. If the head→tail axis came out inverted for this lipid, flip Y so heads face out.
+    { let pY=0,pN=0,cY=0,cN=0;
+      for(let k=0;k<LN;k++){ const s=EL_LIST[lipid.el[k]], y=lp[k*3+1];
+        if(s==='O'||s==='P'||s==='N'){pY+=y;pN++;} else if(s==='C'){cY+=y;cN++;} }
+      if(pN&&cN && pY/pN < cY/cN){ for(let k=0;k<LN;k++) lp[k*3+1]=-lp[k*3+1]; const t=-yMin; yMin=-yMax; yMax=t; } }
     // RECTANGULAR bilayer spanning the embedded complexes (wide in X, shallow in Z). Tile spacing S
     // is raised as needed to keep the total lipid count bounded (TARGET_LIPIDS) so a very wide
-    // membrane doesn't explode into millions of lobes.
-    const TARGET_LIPIDS = 6000;   // more tiles for the bigger sheet (only near+in-view blocks render, far ones fog out)
-    const tileArea = (4*memHalfX*memHalfZ) / Math.max(1, TARGET_LIPIDS/2);
-    const S = Math.max(Math.max(xr,zr)*0.9, Math.sqrt(tileArea), 8);
-    const Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
+    // membrane doesn't explode into millions of lobes. DENSER packing (footprint*0.7) + per-tile
+    // random spin/jitter (below) make the sheet read as a crowded, disordered membrane.
+    // DENSITY FIRST: the tile pitch is set by the lipid's own footprint (tails interdigitating), never
+    // by "spread N lipids over the whole sheet" — that was what left visible rows and gaps. The sheet
+    // then extends as far as the instance budget allows at that density (buffers for the WHOLE sheet
+    // are uploaded up front, so the budget is a hard memory ceiling — ~75 KB of GPU buffers per lipid).
+    const TARGET_LIPIDS = 16000;   // ~1.2 GB of instance buffers — the practical ceiling on a desktop GPU
+    const S = Math.max(Math.max(xr,zr)*0.46, 5);   // tight interdigitated packing → a solid bilayer
+    let Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
+    if(Gx*Gz > TARGET_LIPIDS/2){                    // too many tiles at this density → shrink the SHEET, keep the density
+      const k = Math.sqrt((TARGET_LIPIDS/2)/(Gx*Gz));
+      Gx = Math.max(4, Math.round(Gx*k)); Gz = Math.max(4, Math.round(Gz*k));
+    }
     const halfX=(Gx-1)*S*0.5, halfZ=(Gz-1)*S*0.5;
-    bilayerHalf = Math.max(halfX, halfZ) + Math.max(xr,zr);
+    const JIT = S*0.16;   // per-tile in-plane position jitter → breaks the crystalline grid
+    bilayerHalf = Math.max(halfX, halfZ) + Math.max(xr,zr) + JIT;
     setLbl('Building membrane orbitals…'); await yield_();
-    // Template atom positions per leaflet (0 = heads up, 1 = mirrored so the tails meet at Y=0),
-    // relative to a tile origin. Every tile is then a pure TRANSLATION of one of these two.
+    // ── Randomisation: NV pre-baked rotamer templates. Each tile picks one by a DETERMINISTIC hash
+    //    of (grid i, j, leaflet) so the orbital/sphere build and the per-frame nucleon pool agree.
+    //    A rotamer = full spin about the membrane normal (+Y) + a small tilt; because every tile is
+    //    still a pure TRANSLATION of its chosen template, the tiling/pool machinery is unchanged.
+    //    Spin is about +Y so the polar heads stay on the two outer surfaces.
+    const NV = 8, variants = [];
+    for(let v=0;v<NV;v++){ const th=Math.random()*Math.PI*2;
+      variants.push({ a: v/NV*Math.PI*2 + (Math.random()-0.5)*0.6, tilt:(Math.random()-0.5)*0.22, tax:[Math.cos(th),0,Math.sin(th)] }); }
+    const applyVar = (src,v)=>{ const V=variants[v], ca=Math.cos(V.a), sa=Math.sin(V.a),
+        ux=V.tax[0],uy=V.tax[1],uz=V.tax[2], ct=Math.cos(V.tilt), st=Math.sin(V.tilt), out=new Float32Array(src.length);
+      for(let k=0;k<src.length/3;k++){ const x=src[k*3], y=src[k*3+1], z=src[k*3+2];
+        const x1=ca*x+sa*z, y1=y, z1=-sa*x+ca*z, dt=ux*x1+uy*y1+uz*z1,     // Y azimuth, then tilt (Rodrigues about tax)
+          crx=uy*z1-uz*y1, cry=uz*x1-ux*z1, crz=ux*y1-uy*x1;
+        out[k*3]=x1*ct+crx*st+ux*dt*(1-ct); out[k*3+1]=y1*ct+cry*st+uy*dt*(1-ct); out[k*3+2]=z1*ct+crz*st+uz*dt*(1-ct); }
+      return out; };
+    const hash2=(i,j)=>{ let h=((i*73856093)^(j*19349663))>>>0; h^=h>>>13; h=(h*1274126177)>>>0; return h; };
+    const tileVar=(gi,gj,leaf)=> hash2(gi*2+leaf, gj*3+leaf) % NV;
+    const tileJit=(gi,gj,leaf)=>{ const h=hash2(gi+leaf*911+1, gj+leaf*337+1);
+      return [ ((h&1023)/1023-0.5)*2*JIT, (((h>>>10)&1023)/1023-0.5)*2*(S*0.04), (((h>>>20)&1023)/1023-0.5)*2*JIT ]; };
+    // Base leaflet templates (0 = heads up, 1 = mirrored so the tails meet at Y=0). Every tile is a
+    // TRANSLATION of one rotamer VARIANT of one of these two.
     const tPos = [new Float32Array(LN*3), new Float32Array(LN*3)];
     for(let k=0;k<LN;k++){ const px=lp[k*3], py=lp[k*3+1], pz=lp[k*3+2];
       tPos[0][k*3]=px; tPos[0][k*3+1]=py-yMin;  tPos[0][k*3+2]=pz;
       tPos[1][k*3]=px; tPos[1][k*3+1]=-py+yMin; tPos[1][k*3+2]=-pz; }
+    const tPosV = [ Array.from({length:NV},(_,v)=>applyVar(tPos[0],v)), Array.from({length:NV},(_,v)=>applyVar(tPos[1],v)) ];
     // Build ONE lipid's lobes with exactly the protein's representation: core (non-hybridised)
     // orbitals, hybridised σ bonds with back-knobs, π lobes, and VSEPR lone pairs.
     const buildLobes = pos => {
@@ -2400,39 +2734,41 @@ async function run(){
         for(const d of lonePairDirs(bd[k],lpn)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az, 2000+(li++)); }
       return {core, bond};
     };
-    const T = [buildLobes(tPos[0]), buildLobes(tPos[1])];
+    const TV = [ Array.from({length:NV},(_,v)=>buildLobes(tPosV[0][v])), Array.from({length:NV},(_,v)=>buildLobes(tPosV[1][v])) ];
     await yield_();
     const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
     const mkLipMat = (nm, shader, attrs, extra) => {
       const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs,
-        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','memCut'].concat(extra||[]),
-        defines:['#define ELECGATE','#define MEMFADE'] });   // ELECGATE isolates elecR; MEMFADE = the cross-cut fade
+        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','memCut','etcDepth','etcRes','etcHole','selModel'].concat(extra||[]),
+        samplers:['etcDepth'],
+        defines:['#define ELECGATE','#define MEMFADE','#define ETCHOLE'] });   // ELECGATE isolates elecR, MEMFADE = the cross-cut fade
       mat.setFloat('bubbleR',1e9); mat.setFloat('nElec',2); mat.setFloat('coneCos',-1.0);
-      mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true;   // orbitals always, electrons only up close
+      mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true; mat.setFloat('selModel', -1);   // orbitals always, electrons only up close
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane orbitals only inside the close forward cone
         eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setArray3('memCut', gCut);
-        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
-      return mat;
+        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); bindEtcHole(eff); });
+      return realAlpha(mat);
     };
     const lipCoreMat = mkLipMat('lipCoreMat','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
     const lipBondMat = mkLipMat('lipBondMat','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']); lipBondMat.setFloat('nElec',1);
     // Split the G×G grid (×2 leaflets) into BL×BL-tile BLOCKS, each a cellList entry, so the membrane
     // frustum-culls and LODs (orbitals near ↔ vdW spheres far) exactly like the protein cells do.
     const BL = 4, nbx = Math.ceil(Gx/BL), nbz = Math.ceil(Gz/BL);
-    const blockR = 0.5*Math.hypot(BL*S, (yMax-yMin)+2*Math.max(xr,zr,1), BL*S);
+    const blockR = 0.5*Math.hypot(BL*S, (yMax-yMin)+2*Math.max(xr,zr,1), BL*S) + JIT;
     for(let bgi=0;bgi<nbx;bgi++){ for(let bgj=0;bgj<nbz;bgj++){
       const gi0=bgi*BL, gj0=bgj*BL, gi1=Math.min(Gx,gi0+BL), gj1=Math.min(Gz,gj0+BL), nt=(gi1-gi0)*(gj1-gj0);
-      for(let leaf=0;leaf<2;leaf++){ const t=T[leaf], cn=t.core.m.length/16, bn=t.bond.m.length/16;
+      for(let leaf=0;leaf<2;leaf++){ const cn=TV[leaf][0].core.m.length/16, bn=TV[leaf][0].bond.m.length/16;   // lobe COUNT is identical across rotamer variants
         const coreM=new Float32Array(cn*nt*16), coreCol=new Float32Array(cn*nt*3), coreCen=new Float32Array(cn*nt*3), coreOid=new Float32Array(cn*nt);
         const bM=new Float32Array(bn*nt*16), bTap=new Float32Array(bn*nt), bCol=new Float32Array(bn*nt*3), bCen=new Float32Array(bn*nt*3), bOid=new Float32Array(bn*nt);
         const sM=new Float32Array(LN*nt*16), sC=new Float32Array(LN*nt*4), sR=new Float32Array(LN*nt);
         let ci=0, bi=0, si=0, bcx=0, bcz=0;
         for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
-          const ox=bilayerCen.x+gi*S-halfX, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-halfZ; bcx+=ox; bcz+=oz;
+          const v=tileVar(gi,gj,leaf), jt=tileJit(gi,gj,leaf), tp=tPosV[leaf][v], t=TV[leaf][v];   // per-tile rotamer + jitter
+          const ox=bilayerCen.x+gi*S-halfX+jt[0], oy=bilayerCen.y+jt[1], oz=bilayerCen.z+gj*S-halfZ+jt[2]; bcx+=ox; bcz+=oz;
           for(let k=0;k<LN;k++){ const el=lipid.el[k], cc=info(el).c, o=si*16;
             sM[o]=1;sM[o+5]=1;sM[o+10]=1;sM[o+15]=1;
-            sM[o+12]=tPos[leaf][k*3]+ox; sM[o+13]=tPos[leaf][k*3+1]+oy; sM[o+14]=tPos[leaf][k*3+2]+oz;
+            sM[o+12]=tp[k*3]+ox; sM[o+13]=tp[k*3+1]+oy; sM[o+14]=tp[k*3+2]+oz;
             sC[si*4]=cc[0];sC[si*4+1]=cc[1];sC[si*4+2]=cc[2];sC[si*4+3]=0; sR[si]=info(el).vr*FILL_SCALE; si++; }
           for(let i=0;i<cn;i++){ const o=ci*16, s=i*16;
             for(let j=0;j<16;j++) coreM[o+j]=t.core.m[s+j];
@@ -2471,17 +2807,18 @@ async function run(){
        meshes SHARES one nucleon template buffer per leaflet and is re-positioned (via the imp
        shader's tileOff uniform) onto the tiles nearest the camera each frame. */
     let nucN=0; for(let k=0;k<LN;k++) nucN += info(lipid.el[k]).n;
-    const nucTpl = [0,1].map(leaf => {
+    const buildNuc = pos => {
       const mt=new Float32Array(nucN*16), cl=new Float32Array(nucN*4); let ni=0;
       for(let k=0;k<LN;k++){ const e=lipid.el[k], A=info(e).n, Z=info(e).z;
-        const px=tPos[leaf][k*3], py=tPos[leaf][k*3+1], pz=tPos[leaf][k*3+2];
+        const px=pos[k*3], py=pos[k*3+1], pz=pos[k*3+2];
         for(let i=0;i<A;i++){ const proton=Math.floor((i+1)*Z/A)>Math.floor(i*Z/A), o=ni*16;
           mt[o]=1;mt[o+5]=1;mt[o+10]=1;mt[o+15]=1;
           mt[o+12]=px+fcc[i][0]*SPACING; mt[o+13]=py+fcc[i][1]*SPACING; mt[o+14]=pz+fcc[i][2]*SPACING;
           const c=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62];
           cl[ni*4]=c[0];cl[ni*4+1]=c[1];cl[ni*4+2]=c[2];cl[ni*4+3]=0; ni++; } }
       return {mt,cl};
-    });
+    };
+    const nucTplV = [ Array.from({length:NV},(_,v)=>buildNuc(tPosV[0][v])), Array.from({length:NV},(_,v)=>buildNuc(tPosV[1][v])) ];
     const _zeroOff = new BABYLON.Vector3(0,0,0);
     const nucMatL = new BABYLON.ShaderMaterial('lipNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
@@ -2489,7 +2826,7 @@ async function run(){
       defines:['#define LIPTILE','#define MEMFADE'] });   // LIPTILE isolates tileOff; MEMFADE = cross-cut fade so lipid nuclei vanish WITH their lipid
     nucMatL.setFloat('radius',NUCLEON_R); nucMatL.setFloat('isShell',0); nucMatL.setFloat('bubbleR',1e9);
     nucMatL.setFloat('protonOutline',0); nucMatL.setFloat('coneCos',-1.0); nucMatL.backFaceCulling=false;
-    nucMatL.setFloat('depthBias', NUC_BIAS); nucMatL.disableDepthWrite = true;
+    realAlpha(nucMatL); nucMatL.setFloat('depthBias', NUC_BIAS); nucMatL.disableDepthWrite = true;   // nuclei keep their own no-depth-write pass
     nucMatL.onBindObservable.add(mesh => { const eff=nucMatL.getEffect(); if(!eff) return;
       eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane nuclei only inside the close cone
       eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);
@@ -2501,10 +2838,10 @@ async function run(){
     for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
       const mesh=BABYLON.MeshBuilder.CreatePlane('lipNuc'+leaf+'_'+p,{size:2},scene);
       mesh.material=nucMatL; mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true; mesh.renderingGroupId=1;
-      mesh.thinInstanceSetBuffer('instanceColor', nucTpl[leaf].cl,4,true);
-      mesh.thinInstanceSetBuffer('matrix', nucTpl[leaf].mt,16,true);
+      mesh.thinInstanceSetBuffer('instanceColor', nucTplV[leaf][0].cl,4,true);
+      mesh.thinInstanceSetBuffer('matrix', nucTplV[leaf][0].mt,16,true);
       mesh.thinInstanceCount=nucN; mesh.setEnabled(false);
-      mesh.metadata={ off:new BABYLON.Vector3(0,0,0) };
+      mesh.metadata={ off:new BABYLON.Vector3(0,0,0), v:0 };   // v = which rotamer buffer is currently loaded
       nucPool.push(mesh);
     }
     const nearTiles=[];
@@ -2516,13 +2853,17 @@ async function run(){
           const gi=gi0+di, gj=gj0+dj; if(gi<0||gj<0||gi>=Gx||gj>=Gz) continue;
           const ox=bilayerCen.x+gi*S-halfX, oz=bilayerCen.z+gj*S-halfZ;
           const dx=ox-cp.x, dz=oz-cp.z, d2=dx*dx+dz*dz;
-          if(d2 < NEAR_R*NEAR_R) nearTiles.push({ox,oz,d2});
+          if(d2 < NEAR_R*NEAR_R) nearTiles.push({gi,gj,d2});
         }
         nearTiles.sort((a,b)=>a.d2-b.d2);
       }
       for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
         const mesh=nucPool[leaf*POOL+p], t=nearTiles[p];
-        if(t){ mesh.metadata.off.set(t.ox, bilayerCen.y, t.oz); mesh.setEnabled(true); }
+        if(t){ const v=tileVar(t.gi,t.gj,leaf), jt=tileJit(t.gi,t.gj,leaf);   // match this tile's rotamer + jitter
+          mesh.metadata.off.set(bilayerCen.x+t.gi*S-halfX+jt[0], bilayerCen.y+jt[1], bilayerCen.z+t.gj*S-halfZ+jt[2]);
+          if(mesh.metadata.v!==v){ mesh.thinInstanceSetBuffer('instanceColor', nucTplV[leaf][v].cl,4,true);
+            mesh.thinInstanceSetBuffer('matrix', nucTplV[leaf][v].mt,16,true); mesh.thinInstanceCount=nucN; mesh.metadata.v=v; }
+          mesh.setEnabled(true); }
         else mesh.setEnabled(false);
       }
     });
@@ -2639,8 +2980,11 @@ async function run(){
     // Near clip must shrink as you approach an atom, or the near plane slices the nucleus flat.
     // Only drops small at close range; stays 0.15 when zoomed out so depth precision holds.
     cam.minZ = Math.min(0.15, Math.max(0.02, ar*0.03));
-    scene.fogStart = Math.max(0.1, ar - modelR*0.55);           // steeper ramp = more contrast
-    scene.fogEnd   = ar + modelR*0.6;
+    if(gGfxMode === 2) gConeCos = coneTanNow();                 // keep the cone matched to the live viewport aspect
+    if(gOrtho) syncOrtho();                                     // 2D mode: ortho frustum tracks zoom + viewport aspect
+    // Fog is OFF by design: colours must stay accurate at every distance (no olive wash on the far
+    // membrane). Pinned far beyond maxZ so every shader's fog factor evaluates to 1 → col unchanged.
+    scene.fogStart = 1e8; scene.fogEnd = 1e9;
     const zoom = fitRadius / Math.max(0.01, ar);
     if(zoomEl) zoomEl.textContent = zoom.toFixed(1) + '×';
     if(gMacroSel && !wholeInView()) deselectMacro();   // zoomed back in → drop the macromolecule selection, atoms become selectable
@@ -2662,14 +3006,22 @@ async function run(){
     //   elev  — the camera actually sits near the membrane's Y-plane (not hovering above it).
     // Gating on elevation kills the stray "free nuclei" (half-dithered lipids) that used to linger
     // whenever you were high above the sheet but happened to be looking horizontally.
+    // The cut is BINARY with a timed transition — never a standing half-transparent membrane. The two
+    // conditions below form a single on/off threshold (with hysteresis so it can't chatter on the
+    // boundary), and gCut[2] then eases to that target over MEM_FADE_S seconds. At rest it is always
+    // exactly 0 or 1, so lipids are either fully solid or completely gone.
     const fy = Math.abs(f.y);                                        // 0 = looking horizontally, 1 = straight down/up
-    const look = 1.0 - Math.max(0, Math.min(1, (fy-0.12)/(0.5-0.12)));
     const elevAbs = Math.abs(cp.y - bilayerCen.y);                   // camera height above/below the membrane plane
-    const inR = Math.max(40, ar*0.12), outR = Math.max(220, ar*0.55); // "at membrane level" scales with zoom distance
-    const elev = 1.0 - Math.max(0, Math.min(1, (elevAbs - inR)/(outR - inR)));
+    const elevLim = Math.max(220, ar*0.55);                          // "at membrane level" scales with zoom distance
+    const wantCut = memCutOn                                          // hysteresis: wider band to stay on than to switch on
+      ? (fy < 0.42 && elevAbs < elevLim*1.25)
+      : (fy < 0.30 && elevAbs < elevLim);
+    memCutOn = wantCut;
+    const step = Math.min(engine.getDeltaTime(), 50) / (MEM_FADE_S * 1000);
+    gCut[2] += Math.max(-step, Math.min(step, (wantCut ? 1 : 0) - gCut[2]));   // 2.5 s linear fade to full-on / full-off
+    if(gCut[2] < 0.001) gCut[2] = 0; else if(gCut[2] > 0.999) gCut[2] = 1;
     gCut[0] = bilayerCen.z;                                          // cut plane (membrane centre z)
     gCut[1] = (cp.z - bilayerCen.z) >= 0 ? 1 : -1;                   // which side is toward the camera
-    gCut[2] = look * elev;                                           // fade strength: full only when edge-on AND at membrane height
     for(const cell of cellList){
       const cR = cell.r;
       let wcx, wcy, wcz;
@@ -2703,18 +3055,19 @@ async function run(){
      A single emissive sphere follows the atom under the cursor; double-click
      pulses it and eases the camera onto that atom. */
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
-  const mkOutlineMat = (nm, col, rimLo, rimHi) => {
+  const mkOutlineMat = (nm, col, rimLo, rimHi, rimW) => {
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
-      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','uT']
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT']
     });
-    mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi);
+    mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi); mat.setFloat('rimW', rimW || 2.6);
     mat.alpha = 0.999; mat.backFaceCulling = true; mat.needDepthPrePass = false;   // cull backs → ONE contour per lobe (not a front+back pair)
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
     mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
     return mat;
   };
-  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66);                 // hover = white, hugs the lobe edge
-  const selMat = mkOutlineMat('selMat', new BABYLON.Color3(1,1,1), 0.85, 0.66);                 // selection = white too → reads as a highlight, not a 2nd (blue) orbital
+  const SAGE = new BABYLON.Color3(0.60,0.72,0.53);                                              // muted sage green — the one selection colour, everywhere
+  const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66, 2.6);            // hover = thin white, hugs the lobe edge
+  const selMat = mkOutlineMat('selMat', SAGE,                      0.85, 0.66, 7.0);            // selection = THICK sage stroke → unmistakable against the muted palette
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 3;                                     // outlines drawn topmost (Babylon allows only groups 0-3)
@@ -2890,18 +3243,14 @@ async function run(){
   // When zoomed out far enough that the whole PSII fits, a left-click selects the MACROMOLECULE
   // (white bounding box) and a position gizmo lets you drag the whole protein around.
   const psiiCenter = new BABYLON.Vector3((bMiX+bMaX)/2, (bMiY+bMaY)/2, (bMiZ+bMaZ)/2);
-  // White glow-outline around the whole protein's SILHOUETTE (HighlightLayer), shown on hover/select.
-  // Low mainTextureRatio on purpose: at coarse resolution the thousands of tiny orbital lobes
-  // merge into one solid protein shape in the highlight buffer, so outerGlow traces just the whole
-  // SILHOUETTE (a clean white halo) instead of speckling a rim around every individual lobe.
-  const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 0.8, blurVerticalSize: 0.8, mainTextureRatio: 0.18 });
-  psiiHL.innerGlow = false; psiiHL.outerGlow = true;
-  // Outline the PSII cells only (not the membrane), from their always-on orbital meshes.
-  for(const cell of cellList){ if(!cell.macro) continue;
-    for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
-    if(cell.sphere) psiiHL.addMesh(cell.sphere, new BABYLON.Color3(1,1,1)); }
-  psiiHL.isEnabled = false;   // only rendered while hovering/selecting the macromolecule
-  const setOutline = on => { if(psiiHL.isEnabled !== on) psiiHL.isEnabled = on; };
+  /* Selected COMPLEX → a sage rim on EVERY one of its atoms, painted by the imp/orb/bond shaders
+     (uniform selModel = the selected model's index, matched per-instance against modelId).
+     A HighlightLayer cannot do this here: it rasterises each impostor as its raw camera-facing QUAD,
+     so thousands of overlapping quads merge into one filled blob and the protein just turned solid
+     green. Rimming each atom individually means the interior rims are hidden behind the atoms in
+     front of them, and what survives is exactly the protein's outer contour. */
+  const setOutline = () => {};   // legacy hover hook — the macro (whole-PSII) path is disabled
+  const highlightModel = () => {};   // selection now rides on gSelModel through the shaders
   const macroGizmoNode = new BABYLON.TransformNode('macroGizmo', scene);
   macroGizmoNode.position.copyFrom(psiiCenter);
   const gizmoLayer = new BABYLON.UtilityLayerRenderer(scene);
@@ -2967,7 +3316,10 @@ async function run(){
   const selectModel = mid => { gSelModel = mid; const mi=mInfo[mid];
     modelNode.position.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]);
     modelNode.rotationQuaternion = new BABYLON.Quaternion(gModelQuat[mid*4], gModelQuat[mid*4+1], gModelQuat[mid*4+2], gModelQuat[mid*4+3]);
-    modelGizmo.attachedNode = modelNode; modelRotGizmo.attachedNode = modelNode; refreshModelLabel(); };
+    modelGizmo.attachedNode = modelNode; modelRotGizmo.attachedNode = modelNode; refreshModelLabel();
+    highlightModel(mid);                                   // thick sage silhouette on the selected complex
+    orbitLocked = true;                                    // camera orbits the complex you picked
+    orbitCenter.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]); };
   modelGizmo.onDragObservable.add(applyModelTransform);
   modelRotGizmo.onDragObservable.add(applyModelTransform);
   // Rebuild a model's baked transform matrix straight from gModelOff/gModelQuat (used by undo, which
@@ -2992,6 +3344,7 @@ async function run(){
   window.addEventListener('keydown', e => {
     if((e.ctrlKey||e.metaKey) && !e.shiftKey && !e.altKey && (e.key==='z'||e.key==='Z')){ e.preventDefault(); undoModel(); }
   });
+  let _modelPickT = Infinity;   // ray-entry distance to the last model picked (Infinity = miss) → close/far test
   const pickModelAtCursor = () => {   // accurate: nearest model whose CURRENT bounding box the cursor ray enters
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const o=ray.origin, d=ray.direction; let best=-1, bt=Infinity;
@@ -3003,6 +3356,7 @@ async function run(){
         if(Math.abs(rd)<1e-9){ if(ro<lo||ro>hi){ miss=true; break; } }
         else { let t1=(lo-ro)/rd, t2=(hi-ro)/rd; if(t1>t2){ const tt=t1;t1=t2;t2=tt; } tmin=Math.max(tmin,t1); tmax=Math.min(tmax,t2); } }
       if(!miss && tmin<=tmax && tmax>0){ const t=Math.max(tmin,0); if(t<bt){ bt=t; best=mi.mi; } } }
+    _modelPickT = bt;
     return best;
   };
   // Project a WORLD point to CSS pixels (canvas client size — NOT the render buffer, which is
@@ -3010,7 +3364,7 @@ async function run(){
   const projectCss = wp => { const cv=engine.getRenderingCanvas();
     return BABYLON.Vector3.Project(wp, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), cam.viewport.toGlobal(cv.clientWidth, cv.clientHeight)); };
   scene.registerAfterRender(() => {   // keep the model label pinned above the moved complex
-    if(gSelModel<0 || !modelLabel._w) return;
+    if((gSelModel<0 && etcSel<0) || !modelLabel._w) return;   // label serves both a selected complex and a selected cofactor
     const p = projectCss(modelLabel._w);
     const vis = p.z>0 && p.z<1; modelLabel.style.display = vis?'block':'none';
     if(vis){ modelLabel.style.left=(p.x-modelLabel.offsetWidth/2)+'px'; modelLabel.style.top=(p.y-modelLabel.offsetHeight-34)+'px'; }
@@ -3052,6 +3406,43 @@ async function run(){
     const p = macroPlanePoint(); if(!p) return;
     if(_mdHas){ gPsiiOffset.addInPlace(p.subtract(_mdPrev)); followGizmo(); }
     _mdPrev.copyFrom(p); _mdHas=true;
+  };
+
+  /* ── ETC cofactor (whole-molecule) selection ───────────────────────────────
+     A thick sage outline traced around every atom of the picked cofactor, using the same rim shader
+     as the atom selection so the highlight language stays consistent. */
+  const etcSelOut = BABYLON.MeshBuilder.CreateSphere('etcSelOut', {diameter:1, segments:8}, scene);
+  etcSelOut.material = selMat; etcSelOut.isPickable = false; etcSelOut.setEnabled(false);
+  etcSelOut.renderingGroupId = 3; etcSelOut.alwaysSelectAsActiveMesh = true;
+  const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
+  const showEtcSel = gi => {
+    etcSel = gi;
+    if(gi < 0 || !etcGroupPos){ etcSelOut.setEnabled(false); modelLabel.style.display='none'; return; }
+    const g = etcGroups[gi], {gx,gy,gz} = etcGroupPos, n = Math.min(g.atoms.length, 400);
+    const buf = new Float32Array(n*16);
+    for(let i=0;i<n;i++){ const a=g.atoms[i], o=i*16, r=(etcR[a]||1.6)*1.28;   // a touch larger → the rim clears the sphere
+      buf[o]=r; buf[o+5]=r; buf[o+10]=r; buf[o+15]=1;
+      buf[o+12]=gx[a]; buf[o+13]=gy[a]; buf[o+14]=gz[a]; }
+    etcSelOut.thinInstanceSetBuffer('matrix', buf, 16, true);
+    etcSelOut.thinInstanceCount = n; etcSelOut.setEnabled(true);
+    orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
+    modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
+    modelLabel._w = new BABYLON.Vector3(g.cx, g.cy, g.cz);
+  };
+  const clearEtcSel = () => showEtcSel(-1);
+  // Ray vs the cofactor groups' bounding spheres → nearest group index, or −1.
+  const pickEtcGroup = () => {
+    if(!gEtc || !etcGroups.length) return -1;
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const o=ray.origin, d=ray.direction; let best=-1, bt=Infinity;
+    for(let i=0;i<etcGroups.length;i++){ const g=etcGroups[i];
+      const px=g.cx-o.x, py=g.cy-o.y, pz=g.cz-o.z, tca=px*d.x+py*d.y+pz*d.z;
+      if(tca <= 0) continue;
+      const d2 = px*px+py*py+pz*pz - tca*tca; if(d2 > g.r*g.r) continue;
+      const t = tca - Math.sqrt(g.r*g.r - d2);
+      if(t > 0 && t < bt){ bt = t; best = i; }
+    }
+    return best;
   };
 
   // Accurate pick: broad-phase against each atom's bounding sphere, then narrow-phase
@@ -3453,10 +3844,19 @@ async function run(){
     econfPanel.style.display = 'block';
   };
 
-  const centerOnAtom = () => {
-    const a = pickAtom(); if(!a) return;
+  // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
+  const clearAtomSel = () => {
+    selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false);
+    hideSelElec(); orbitLocked = false; orbitCenter.set(1e6,1e6,1e6); selAtom = null; gFocusId = -1; hideConfig();
+  };
+  // Clear the current MODEL selection (detach the move/rotate gizmos, drop the sage halo + label).
+  const deselectModel = () => { gSelModel = -1; modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
+    modelLabel.style.display = 'none'; highlightModel(-1); };
+  const centerOnAtom = (a) => {
+    if(!a) a = pickAtom(); if(!a) return;
     selCenter.copyFrom(a.center);   // marks the selected atom
-    orbitLocked = true;             // rotation orbits this atom until the user pans away
+    orbitCenter.copyFrom(a.center); // …and becomes the camera pivot
+    orbitLocked = true;             // rotation always orbits this atom while it stays selected
     selAtom = a; gFocusId = -1;      // new selection → show all its orbitals
     setSelOut(a);                   // persistent blue outline tracing all its orbital + bonding lobes, topmost
     setSelNuc(a);                   // show the nucleus on top of the orbitals
