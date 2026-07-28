@@ -7,68 +7,81 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;overflow:hidden;background:#000}
 #c{width:100%;height:100%;display:block;touch-action:none}
+/* ── Solukko palette: dark brown, beige/paper, light green/sage — cartoony & round ── */
+:root{
+  --paper:#f2e6c9; --paper2:#e7d4ac; --brown:#4a3320; --ink:#3a2716;
+  --sage:#a3b881; --sage2:#82a058; --sageink:#2f3d1c;
+}
+body.dark-mode{
+  --paper:#3a2c1c; --paper2:#2d2113; --brown:#7c5c39; --ink:#f0e2c4;
+  --sage:#88a35f; --sage2:#a6bd7d; --sageink:#f1f5e2;
+}
 #overlay{position:absolute;inset:0;z-index:20;display:flex;
-  align-items:center;justify-content:center;background:#fffef9;transition:opacity .8s}
+  align-items:center;justify-content:center;background:#f2e6c9;transition:opacity .8s}
 #overlay.gone{opacity:0;pointer-events:none}
-.ptr{width:280px;height:5px;background:#e7dcc7;border-radius:3px;overflow:hidden}
-.pfil{height:100%;width:100%;background:#8a5a2b;border-radius:3px;
+.ptr{width:280px;height:10px;background:#e7d4ac;border:2.5px solid #4a3320;border-radius:99px;overflow:hidden}
+.pfil{height:100%;width:100%;background:#82a058;border-radius:99px;
   transform:scaleX(0);transform-origin:left center;transition:transform .3s linear}
-.mlbl{position:absolute;z-index:9;pointer-events:none;color:#dff;
-  background:rgba(0,10,28,0.72);border:1px solid #2a5070;border-radius:4px;
-  padding:1px 6px;font-family:'Courier New',monospace;font-size:10px;
-  white-space:nowrap;display:none}
-#zoomval{position:absolute;top:12px;right:16px;z-index:10;color:#4c5a48;
-  font-family:'Courier New',monospace;font-size:14px;pointer-events:none}
+.mlbl{position:absolute;z-index:9;pointer-events:none;color:var(--ink);
+  background:var(--paper);border:2.5px solid var(--brown);border-radius:10px;
+  padding:2px 8px;font-family:'Courier New',monospace;font-size:11px;font-weight:bold;
+  white-space:nowrap;display:none;box-shadow:0 2.5px 0 var(--brown)}
+#zoomval{position:absolute;top:14px;right:16px;z-index:10;color:var(--brown);
+  font-family:'Courier New',monospace;font-size:15px;font-weight:bold;pointer-events:none}
 #zoomtips{position:absolute;right:18px;bottom:18px;z-index:10;
-  display:flex;flex-direction:column;align-items:center;gap:6px;
+  display:flex;flex-direction:column;align-items:center;gap:8px;
   opacity:0;transition:opacity .5s;pointer-events:none;
   font-family:'Courier New',monospace}
 #zoomtips.show{opacity:1;pointer-events:auto}
-.zt{width:38px;height:38px;font-size:18px;line-height:1;cursor:pointer;
-  color:#5a3a1b;background:#fffef9;border:1px solid #8a5a2b;border-radius:7px;
-  box-shadow:0 2px 0 #8a5a2b;touch-action:manipulation;user-select:none;
+.zt{width:46px;height:46px;font-size:24px;font-weight:bold;line-height:1;cursor:pointer;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:15px;
+  box-shadow:0 4px 0 var(--brown);touch-action:manipulation;user-select:none;
   display:flex;align-items:center;justify-content:center}
-.zt:active{transform:translateY(1px);box-shadow:0 1px 0 #8a5a2b}
-.ztlabel{font-size:10px;color:#8a5a2b;letter-spacing:1px}
-/* ── Dark-mode toggle (warm-brown palette, styled like Solukko's "Teema" pill) ── */
+.zt:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+.ztlabel{font-size:11px;font-weight:bold;color:var(--brown);letter-spacing:1px}
 #darkmode-btn{position:absolute;left:16px;top:12px;z-index:12;touch-action:manipulation;
-  font-family:'Courier New',monospace;font-size:12px;letter-spacing:.5px;
-  color:#6b6055;background:#fffef9;border:1px solid #d4cec4;border-radius:999px;cursor:pointer;
-  box-shadow:0 2px 8px rgba(0,0,0,0.12);padding:7px 13px;display:inline-flex;align-items:center;gap:6px;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
   line-height:1;user-select:none;-webkit-user-select:none;
-  transition:transform .1s ease,box-shadow .1s ease,background-color .25s,color .25s,border-color .25s}
-#darkmode-btn:active{transform:scale(0.92);box-shadow:0 2px 6px rgba(0,0,0,0.18)}
-#darkmode-icon{font-size:15px;line-height:1}
-body.dark-mode #darkmode-btn{background:#3a312b;border-color:#6d5f52;color:#cbb89b}
-body.dark-mode #zoomval{color:#cbb89b}
-body.dark-mode .zt{color:#eadfce;background:#3a312b;border-color:#6d5f52;box-shadow:0 2px 0 #6d5f52}
-body.dark-mode .zt:active{box-shadow:0 1px 0 #6d5f52}
-body.dark-mode .ztlabel{color:#cbb89b}
-body.dark-mode #speedbox{color:#cbb89b}
-body.dark-mode #econf{background:rgba(42,33,27,0.82)!important;border-color:#6d5f52!important}
+  transition:transform .1s ease,box-shadow .1s ease}
+#darkmode-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#darkmode-icon{font-size:16px;line-height:1}
+#speedbox{color:var(--brown)!important}
+#speedbox #speedval{font-weight:bold}
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
 #br-stack{position:absolute;right:14px;bottom:14px;z-index:25;display:flex;flex-direction:column;
-  align-items:flex-end;gap:10px;pointer-events:none}
+  align-items:flex-end;gap:12px;pointer-events:none}
 #br-stack>*{pointer-events:auto}
-#eltable{font-family:'Courier New',monospace;background:rgba(6,14,26,0.72);color:#cfe;
-  border:1px solid #2a6;border-radius:8px;padding:8px 9px;user-select:none;max-width:272px}
-#eltable .elhdr{font-size:11px;color:#8fe;letter-spacing:.5px;margin-bottom:6px;
+/* Panels — thick brown outline, big round corners, chunky drop shadow */
+#econf,#eltable{font-family:'Courier New',monospace;background:var(--paper);color:var(--ink);
+  border:3px solid var(--brown);border-radius:18px;box-shadow:0 5px 0 var(--brown);user-select:none}
+#eltable{padding:10px 11px;max-width:280px}
+#eltable .elhdr{font-size:12px;font-weight:bold;color:var(--brown);letter-spacing:.5px;margin-bottom:8px;
   display:flex;justify-content:space-between;align-items:center;gap:10px}
-#eltable .elclear{font-family:inherit;font-size:10px;color:#bcd;background:rgba(40,90,140,0.4);
-  border:1px solid #397;border-radius:5px;padding:2px 7px;cursor:pointer}
-#eltable .elgrid{display:grid;grid-template-columns:repeat(6,34px);gap:4px}
-.elbtn{font-family:inherit;font-size:13px;font-weight:bold;color:#eef;background:rgba(40,90,140,0.35);
-  border:1px solid #2a5070;border-radius:5px;padding:4px 0;cursor:pointer;display:flex;
-  flex-direction:column;align-items:center;gap:2px;transition:background .12s,border-color .12s}
-.elbtn:hover{background:rgba(60,120,180,0.5)}
-.elbtn .eldot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,0.3)}
-.elbtn.on{background:rgba(90,180,255,0.92);color:#012;border-color:#bdf;box-shadow:0 0 0 2px rgba(90,180,255,0.4)}
-body.dark-mode #eltable{background:rgba(42,33,27,0.86);border-color:#6d5f52;color:#eadfce}
-body.dark-mode #eltable .elhdr{color:#d9c496}
-body.dark-mode #eltable .elclear{background:#3a312b;border-color:#6d5f52;color:#cbb89b}
-body.dark-mode .elbtn{background:#3a312b;border-color:#6d5f52;color:#eadfce}
-body.dark-mode .elbtn:hover{background:#4a4038}
-body.dark-mode .elbtn.on{background:#eadfce;color:#2b211b;border-color:#eadfce;box-shadow:0 0 0 2px rgba(234,223,206,0.4)}
+#eltable .elclear{font-family:inherit;font-size:11px;font-weight:bold;color:var(--sageink);background:var(--sage);
+  border:2.5px solid var(--brown);border-radius:99px;padding:3px 11px;cursor:pointer;box-shadow:0 2px 0 var(--brown)}
+#eltable .elclear:active{transform:translateY(1px);box-shadow:0 1px 0 var(--brown)}
+#eltable .elgrid{display:grid;grid-template-columns:repeat(6,37px);gap:6px}
+.elbtn{font-family:inherit;font-size:13px;font-weight:bold;color:var(--ink);background:var(--paper2);
+  border:2.5px solid var(--brown);border-radius:12px;padding:5px 0 4px;cursor:pointer;display:flex;
+  flex-direction:column;align-items:center;gap:3px;box-shadow:0 2.5px 0 var(--brown);transition:transform .08s,box-shadow .08s}
+.elbtn:hover{background:var(--sage)}
+.elbtn:active{transform:translateY(2px);box-shadow:0 0.5px 0 var(--brown)}
+.elbtn .eldot{width:10px;height:10px;border-radius:50%;box-shadow:0 0 0 1.5px var(--brown)}
+.elbtn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 2.5px 0 var(--brown)}
+/* Orbital chips (electron-config panel) */
+.orb-chip{font-family:inherit;font-size:14px;font-weight:bold;color:var(--ink);background:var(--paper2);
+  border:2.5px solid var(--brown);border-radius:13px;padding:4px 9px 5px;cursor:pointer;display:flex;
+  flex-direction:column;align-items:center;gap:4px;line-height:1;box-shadow:0 2.5px 0 var(--brown)}
+.orb-chip.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 2.5px 0 var(--brown)}
+/* Electron dot that RADIATES expanding wave rings — same idea as the 3-D electrons */
+.orb-e{position:relative;width:7px;height:7px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#dcecff,#4f8dff 72%);box-shadow:0 0 3px rgba(79,141,255,.85)}
+.orb-e::before,.orb-e::after{content:'';position:absolute;left:50%;top:50%;width:7px;height:7px;
+  margin:-3.5px 0 0 -3.5px;border-radius:50%;border:1.5px solid rgba(95,150,255,.85);animation:eripple 1.7s ease-out infinite}
+.orb-e::after{animation-delay:.85s}
+@keyframes eripple{0%{transform:scale(.5);opacity:.9}60%{opacity:.35}100%{transform:scale(3);opacity:0}}
 #c.spawning{cursor:crosshair}
 </style>
 </head>
@@ -86,7 +99,7 @@ body.dark-mode .elbtn.on{background:#eadfce;color:#2b211b;border-color:#eadfce;b
 </div>
 <div id="speedbox" style="position:fixed; left:16px; bottom:14px; z-index:10; font:11px ui-monospace,monospace; color:#6a6a5a; user-select:none;">
   <div style="margin-bottom:4px; letter-spacing:.5px;">speed <span id="speedval">1.0×</span></div>
-  <input id="speed" type="range" min="0" max="30" value="10" style="width:130px; accent-color:#4aa3ff; cursor:pointer;">
+  <input id="speed" type="range" min="0" max="30" value="10" style="width:130px; accent-color:#82a058; cursor:pointer;">
 </div>
 
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
@@ -483,7 +496,7 @@ void main(void){
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vBcol * (0.44 + 0.60 * ndl);   // wide light→dark gradient (crevices) with a lifted ambient floor so shadows aren't crushed
+  vec3 c = vBcol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices) with a lifted ambient floor so shadows aren't crushed
   // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
@@ -542,7 +555,7 @@ void main(void){
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vCol * (0.44 + 0.60 * ndl);   // wide light→dark gradient (crevices register) but a lifted ambient floor so shadowed carbon isn't crushed too dark
+  vec3 c = vCol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices register) with a lifted ambient floor
   vec3 V = normalize(-vViewPos);
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));   // electric-blue outline
@@ -680,7 +693,7 @@ void main(void){
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vCol * (0.44 + 0.60 * ndl);   // wide light→dark gradient (crevices register) but a lifted ambient floor so shadowed carbon isn't crushed too dark
+  vec3 c = vCol * (0.44 + 0.9 * ndl);   // wide light→dark gradient (crevices register) with a lifted ambient floor
   // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
@@ -2668,9 +2681,7 @@ async function run(fileName){
   let selAtom = null;
   const econfPanel = document.createElement('div');
   econfPanel.id = 'econf';
-  econfPanel.style.cssText = 'display:none;pointer-events:auto;'
-    + 'font-family:\"Courier New\",monospace;background:rgba(6,14,26,0.72);color:#bfe;'
-    + 'border:1px solid #2a6;border-radius:8px;padding:10px 12px;max-width:300px;user-select:none;';
+  econfPanel.style.cssText = 'display:none;pointer-events:auto;padding:12px 14px;max-width:310px;';
   // Bottom-right stack: hybridisation panel on top, the spawn element table below.
   const brStack = document.createElement('div'); brStack.id = 'br-stack';
   brStack.appendChild(econfPanel);
@@ -2927,10 +2938,10 @@ async function run(fileName){
 
     const title = document.createElement('div');
     title.textContent = EL_LIST[e] + (hyb ? '  ·  ' + hyb + ' hybridised' : '');
-    title.style.cssText = 'font-size:13px;color:#8fe;margin-bottom:5px;';
+    title.style.cssText = 'font-size:13px;font-weight:bold;color:var(--sage2);margin-bottom:5px;';
     const notation = document.createElement('div');
     notation.textContent = parts.join(' ');
-    notation.style.cssText = 'font-size:16px;color:#eff;margin-bottom:8px;letter-spacing:0.5px;';
+    notation.style.cssText = 'font-size:16px;font-weight:bold;color:var(--ink);margin-bottom:8px;letter-spacing:0.5px;';
     // Vertical energy-level diagram: group the orbitals into energy levels (equal-energy
     // subshells share a rung), highest energy on top, each rung labelled with its eV.
     const items = collectOrbitals(atom).map(oid => ({ oid, energy: orbEnergyEV(e, oid, hyb, maxN) }));
@@ -2943,27 +2954,25 @@ async function run(fileName){
     const stack = document.createElement('div');
     stack.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
     const chips = [];
-    const paint = () => { for(const ch of chips){ const on = (gFocusId>=0 && +ch.dataset.t===gFocusId);
-      ch.style.background = on ? 'rgba(90,180,255,0.9)' : 'rgba(40,90,140,0.5)'; ch.style.color = on ? '#012' : '#dff'; } };
+    const paint = () => { for(const ch of chips) ch.classList.toggle('on', gFocusId>=0 && +ch.dataset.t===gFocusId); };
     for(const lv of levels){
       const rung = document.createElement('div');
-      rung.style.cssText = 'display:flex;align-items:center;gap:8px;border-top:1px solid rgba(90,150,200,0.28);padding-top:5px;';
+      rung.style.cssText = 'display:flex;align-items:center;gap:8px;border-top:2px solid var(--brown);padding-top:5px;';
       const ev = document.createElement('span');
       ev.textContent = fmtJ(lv.energy - eMin);
-      ev.style.cssText = 'font-size:11px;color:#9cf;min-width:82px;text-align:right;font-variant-numeric:tabular-nums;';
+      ev.style.cssText = 'font-size:11px;font-weight:bold;color:var(--sage2);min-width:82px;text-align:right;font-variant-numeric:tabular-nums;';
       const chipsWrap = document.createElement('div');
-      chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;';
+      chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
       for(const oid of lv.oids){
         const chip = document.createElement('button');
         chip.dataset.t = oid;
-        chip.style.cssText = 'font-family:inherit;font-size:14px;color:#dff;background:rgba(40,90,140,0.5);border:1px solid #397;border-radius:5px;padding:3px 8px 4px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;line-height:1;';
+        chip.className = 'orb-chip';
         const lab = document.createElement('span'); lab.textContent = orbLabel(oid, hyb, maxN); chip.appendChild(lab);
-        // The orbital "box": its electrons drawn as stationary paired dots (occupancy = # dots).
+        // The orbital "box": its electrons drawn as dots that RADIATE the same wave rings as the 3-D electrons.
         const ne = orbElectrons(e, oid);
         const box = document.createElement('span');
-        box.style.cssText = 'display:inline-flex;gap:4px;justify-content:center;min-height:7px;';
-        for(let k=0;k<ne;k++){ const dot=document.createElement('span');
-          dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#dcecff,#4f8dff 72%);box-shadow:0 0 3px rgba(79,141,255,0.9);'; box.appendChild(dot); }
+        box.style.cssText = 'display:inline-flex;gap:6px;justify-content:center;min-height:8px;';
+        for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className='orb-e'; box.appendChild(dot); }
         chip.appendChild(box);
         chip.title = ne + ' electron' + (ne===1?'':'s');
         chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
@@ -2973,7 +2982,7 @@ async function run(fileName){
     }
     const hint = document.createElement('div');
     hint.textContent = 'energy ↑ · click an orbital to isolate it';
-    hint.style.cssText = 'font-size:10px;color:#6ac;margin-top:7px;';
+    hint.style.cssText = 'font-size:10px;font-weight:bold;color:var(--brown);margin-top:8px;';
     econfPanel.appendChild(title); econfPanel.appendChild(notation); econfPanel.appendChild(stack); econfPanel.appendChild(hint);
     econfPanel.style.display = 'block';
   };
