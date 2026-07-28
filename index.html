@@ -3400,13 +3400,17 @@ async function run(){
   });
   /* ── WebXR / VR ─────────────────────────────────────────────────────────
      Enter VR with the auto-added goggles button. Quest-3 control scheme:
-       • RIGHT thumbstick  → fly (Y = forward/back along where the headset
-         is facing, X = strafe).
-       • LEFT  thumbstick  → turn (X = rotate the view left/right).
-       • grip / squeeze    → speed boost while held.
-     Rotation goes through Babylon's built-in movement feature, which turns
-     the WebXR reference space correctly (hand-rolled camera rotation would
-     be overwritten by the headset pose every frame). Teleportation is off. */
+       • RIGHT thumbstick → glide across the membrane. Y = back/forth,
+         X = left/right. Movement is locked to the horizontal plane (based
+         on the headset's facing, but pitch is ignored) so you don't dive
+         into the sheet when you look up or down.
+       • LEFT  thumbstick → rotate the view (X = turn left/right).
+       • grip / squeeze   → speed boost while held.
+     Rotation runs through Babylon's built-in movement feature because a turn
+     has to rotate the WebXR reference space — a camera rotation set by hand
+     would be overwritten by the headset pose every frame. Its own movement
+     is disabled; we translate the camera ourselves for exact planar control.
+     Teleportation is off. */
   try {
     if (navigator.xr) {
       const xr = await scene.createDefaultXRExperienceAsync({ disableTeleportation: true });
@@ -3415,33 +3419,43 @@ async function run(){
         try { fm.disableFeature(BABYLON.WebXRFeatureName.TELEPORTATION); } catch (e) {}
 
         const TH = BABYLON.WebXRControllerComponent.THUMBSTICK_TYPE;   // 'thumbstick'
-        const BASE_SPEED = 5;   // units/frame at the sheet's scale (~300 u/s); boosted by grip below
-        const move = fm.enableFeature(BABYLON.WebXRFeatureName.MOVEMENT, 'latest', {
+        // Built-in feature: LEFT-stick rotation only (movement handled manually below).
+        fm.enableFeature(BABYLON.WebXRFeatureName.MOVEMENT, 'latest', {
           xrInput: xr.input,
-          movementOrientationFollowsViewerPose: true,   // "forward" = where the headset looks
-          movementSpeed: BASE_SPEED,
+          movementEnabled: false,
+          rotationEnabled: true,
           rotationSpeed: 0.20,
-          movementThreshold: 0.15,
           rotationThreshold: 0.15,
           customRegistrationConfigurations: [
-            { allowedComponentTypes: [TH], forceHandedness: 'right',
-              axisChangedHandler: (axes, st) => { st.moveX = axes.x; st.moveY = axes.y; } },   // right stick = fly
             { allowedComponentTypes: [TH], forceHandedness: 'left',
-              axisChangedHandler: (axes, st) => { st.rotateX = axes.x; } },                    // left stick = turn
+              axisChangedHandler: (axes, st) => { st.rotateX = axes.x; } },   // left stick = turn
           ],
         });
 
-        // Grip boost: read either squeeze value each frame and scale the fly speed up to 6×.
+        // Manual RIGHT-stick planar translation + grip boost.
+        let rightStick = null;
         const gripState = { left: 0, right: 0 };
         xr.input.onControllerAddedObservable.add(ctrl => {
           ctrl.onMotionControllerInitObservable.add(mc => {
+            if (mc.handedness === 'right') rightStick = mc.getComponent('xr-standard-thumbstick') || rightStick;
             const grip = mc.getComponent('xr-standard-squeeze');
             if (grip) grip.onButtonStateChangedObservable.add(c => { gripState[mc.handedness] = c.value; });
           });
         });
+
+        const BASE = 5;      // units/frame at the sheet's scale (~300 u/s)
+        const DEAD = 0.15;
+        const fwd = new BABYLON.Vector3(), rgt = new BABYLON.Vector3();
         scene.onBeforeRenderObservable.add(() => {
-          if (!move || xr.baseExperience.state !== BABYLON.WebXRState.IN_XR) return;
-          move.movementSpeed = BASE_SPEED * (1 + 5 * Math.max(gripState.left, gripState.right));
+          if (xr.baseExperience.state !== BABYLON.WebXRState.IN_XR || !rightStick) return;
+          const ax = rightStick.axes;
+          if (Math.abs(ax.x) <= DEAD && Math.abs(ax.y) <= DEAD) return;
+          const camXR = xr.baseExperience.camera;
+          camXR.getDirectionToRef(BABYLON.Axis.Z, fwd); fwd.y = 0; fwd.normalize();   // horizontal forward
+          camXR.getDirectionToRef(BABYLON.Axis.X, rgt); rgt.y = 0; rgt.normalize();   // horizontal right
+          const step = BASE * (1 + 5 * Math.max(gripState.left, gripState.right));    // grip → up to 6×
+          camXR.position.addInPlace(fwd.scale(-ax.y * step));   // stick up (ax.y<0) = forward
+          camXR.position.addInPlace(rgt.scale( ax.x * step));   // stick right = strafe right
         });
         setLbl('VR ready — press the goggles button');
       }
