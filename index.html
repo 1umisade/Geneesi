@@ -69,7 +69,15 @@ body.dark-mode{
 #etc-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #etc-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #etc-icon{font-size:15px;line-height:1}
-#vr-btn{position:absolute;left:16px;top:204px;z-index:12;touch-action:manipulation;
+#proj-btn{position:absolute;left:16px;top:204px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#proj-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#proj-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#proj-icon{font-size:15px;line-height:1}
+#vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
   box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
