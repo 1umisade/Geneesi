@@ -459,6 +459,10 @@ void main(void){
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vBcol * (0.55 + 0.45 * ndl);
+  // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
+  // two shapes — the crevice between them stays visible (and the painterly pass inks it).
+  float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
+  c *= 1.0 - 0.62 * pow(fres, 2.5);
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → others' electrons dim to  5%
   if(drawElec > 0.5) electrons(c, nElec, efac);
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
@@ -646,6 +650,10 @@ void main(void){
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 c = vCol * (0.55 + 0.45 * ndl);
+  // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
+  // two shapes — the crevice between them stays visible (and the painterly pass inks it).
+  float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
+  c *= 1.0 - 0.62 * pow(fres, 2.5);
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → the others' electrons dim to  5%
   if(drawElec > 0.5) electrons(c, ne, efac);
