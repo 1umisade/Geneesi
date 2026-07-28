@@ -406,9 +406,11 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
-  float wig = fr * 0.22;
-  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
+  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
+  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
+  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
+  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
   // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
   float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
   return wave * exp(-rad*3.5);
@@ -591,9 +593,11 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
-  float wig = fr * 0.22;
-  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
+  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
+  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
+  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
+  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
   // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
   float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
   return wave * exp(-rad*3.5);
@@ -727,9 +731,11 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
-  float wig = fr * 0.22;
-  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
+  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
+  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
+  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
+  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
   // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
   float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
   return wave * exp(-rad*3.5);
@@ -803,9 +809,11 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
   float ang = atan(dot(tp, w), dot(tp, u));
   float rad = acos(clamp(d, 0.0, 1.0));               // angular distance from the electron point
-  // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
-  float wig = fr * 0.22;
-  float rr = rad + wig * sin(ang*6.0 + uT*3.0);
+  // Wiggle: SMALL amplitude, but more wiggles per ring as orbital energy rises (0 J = flat rings).
+  // The +uT term travels the wiggle around the ring so the wavefronts visibly writhe.
+  float wamp  = min(fr, 1.5) * 0.045;                 // small, capped amplitude
+  float wfreq = 4.0 + fr * 12.0;                      // wiggle frequency ∝ energy
+  float rr = rad + wamp * sin(ang*wfreq + uT*2.5);
   // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
   float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
   return wave * exp(-rad*3.5);
@@ -2299,7 +2307,11 @@ async function run(fileName){
     }
     selElec.thinInstanceSetBuffer('matrix', seM,16,true); selElec.thinInstanceSetBuffer('ocol', seCol,3,true);
     selElec.thinInstanceSetBuffer('ocen', seCen,3,true); selElec.thinInstanceSetBuffer('oid', seOid,1,true);
-    selElec.thinInstanceCount=n; selElec.setEnabled(n>0);
+    selElec.thinInstanceCount=n;
+    // Every orbital material now draws its electrons inline, so this additive pass on top only
+    // doubled the selected atom's electron brightness — which blew out the crests and made the
+    // painterly pass ink black lines around them. Keep it off.
+    selElec.setEnabled(false);
   };
   const hideSelElec = () => selElec.setEnabled(false);
   // (The selected nucleus no longer tumbles — it stays fixed relative to its atom. setSelNuc places
@@ -2310,7 +2322,7 @@ async function run(fileName){
   // (white bounding box) and a position gizmo lets you drag the whole protein around.
   const psiiCenter = new BABYLON.Vector3((bMiX+bMaX)/2, (bMiY+bMaY)/2, (bMiZ+bMaZ)/2);
   // White glow-outline around the whole protein's SILHOUETTE (HighlightLayer), shown on hover/select.
-  const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 0.5, blurVerticalSize: 0.5, mainTextureRatio: 1.0 });
+  const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 0.6, blurVerticalSize: 0.6, mainTextureRatio: 0.5 });
   psiiHL.innerGlow = false; psiiHL.outerGlow = true;
   for(const cell of cellList) for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
   psiiHL.isEnabled = false;   // only rendered while hovering/selecting the macromolecule
