@@ -409,9 +409,9 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
   float wig = fr * 0.22;
   float rr = rad + wig * sin(ang*6.0 + uT*3.0);
-  // Concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
-  return wave * exp(-rad*4.0);
+  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
+  return wave * exp(-rad*3.5);
 }
 // A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
 vec3 wanderDir(float s){
@@ -443,12 +443,12 @@ void electrons(inout vec3 c, float ne, float bri){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  // Steady baby-blue point-waves (no on/off flash) so every atom's electrons show at once.
-  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
-  vec3 eout = bb * glow * 0.16
-            + bb * bolt * 2.7
-            + vec3(0.82, 0.93, 1.0) * core * 0.85;
-  c += eout * bri;
+  // Steady blue electron: PAINT the orbital blue where the electron sits (not additive → stays
+  // blue over red lobes, no black gaps), the point-waves gently ripple that blue.
+  vec3 bb = vec3(0.34, 0.60, 1.0);   // blue
+  float blue = clamp(glow*1.2 + bolt*1.1, 0.0, 1.0);
+  c = mix(c, bb, blue * bri);
+  c += vec3(0.72, 0.86, 1.0) * core * 0.5 * bri;   // small soft highlight at the very centre
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -594,9 +594,9 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
   float wig = fr * 0.22;
   float rr = rad + wig * sin(ang*6.0 + uT*3.0);
-  // Concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
-  return wave * exp(-rad*4.0);
+  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
+  return wave * exp(-rad*3.5);
 }
 // A quasi-random wandering direction (incommensurate sines → never repeats), per-lobe phase s.
 vec3 wanderDir(float s){
@@ -628,12 +628,12 @@ void electrons(inout vec3 c, float ne, float bri){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  // Steady baby-blue point-waves (no on/off flash) so every atom's electrons show at once.
-  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
-  vec3 eout = bb * glow * 0.16
-            + bb * bolt * 2.7
-            + vec3(0.82, 0.93, 1.0) * core * 0.85;
-  c += eout * bri;
+  // Steady blue electron: PAINT the orbital blue where the electron sits (not additive → stays
+  // blue over red lobes, no black gaps), the point-waves gently ripple that blue.
+  vec3 bb = vec3(0.34, 0.60, 1.0);   // blue
+  float blue = clamp(glow*1.2 + bolt*1.1, 0.0, 1.0);
+  c = mix(c, bb, blue * bri);
+  c += vec3(0.72, 0.86, 1.0) * core * 0.5 * bri;   // small soft highlight at the very centre
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -730,9 +730,9 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
   float wig = fr * 0.22;
   float rr = rad + wig * sin(ang*6.0 + uT*3.0);
-  // Concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
-  return wave * exp(-rad*4.0);
+  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
+  return wave * exp(-rad*3.5);
 }
 vec3 wanderDir(float s){
   return normalize(vec3(
@@ -762,10 +762,9 @@ vec3 electronGlow(float ne){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
-  return bb * glow * 0.16
-       + bb * bolt * 2.7
-       + vec3(0.82, 0.93, 1.0) * core * 0.85;
+  vec3 bb = vec3(0.34, 0.60, 1.0);   // blue
+  return bb * (glow*0.9 + bolt*1.0)
+       + vec3(0.72, 0.86, 1.0) * core * 0.45;
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -807,9 +806,9 @@ float elecBolt(vec3 N, vec3 e, vec3 uref){
   // Wavefront wigglyness grows with orbital energy; 0 J stays perfectly flat (smooth rings).
   float wig = fr * 0.22;
   float rr = rad + wig * sin(ang*6.0 + uT*3.0);
-  // Concentric point-waves radiating outward from the electron at a constant base speed.
-  float wave = pow(0.5 + 0.5*sin(rr*32.0 - uT*6.0), 2.5);
-  return wave * exp(-rad*4.0);
+  // Gentle concentric point-waves radiating outward from the electron at a constant base speed.
+  float wave = 0.5 + 0.32*sin(rr*22.0 - uT*6.0);   // low amplitude, smooth (no sharp crests → no black ink)
+  return wave * exp(-rad*3.5);
 }
 vec3 wanderDir(float s){
   return normalize(vec3(
@@ -839,10 +838,9 @@ vec3 electronGlow(float ne){
     float d2 = max(dot(N, e2), 0.0);
     glow += pow(d2, 44.0); core += pow(d2, 220.0); bolt += elecBolt(N, e2, axB);
   }
-  vec3 bb = vec3(0.54, 0.81, 0.97);   // baby blue
-  return bb * glow * 0.16
-       + bb * bolt * 2.7
-       + vec3(0.82, 0.93, 1.0) * core * 0.85;
+  vec3 bb = vec3(0.34, 0.60, 1.0);   // blue
+  return bb * (glow*0.9 + bolt*1.0)
+       + vec3(0.72, 0.86, 1.0) * core * 0.45;
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -2312,7 +2310,7 @@ async function run(fileName){
   // (white bounding box) and a position gizmo lets you drag the whole protein around.
   const psiiCenter = new BABYLON.Vector3((bMiX+bMaX)/2, (bMiY+bMaY)/2, (bMiZ+bMaZ)/2);
   // White glow-outline around the whole protein's SILHOUETTE (HighlightLayer), shown on hover/select.
-  const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 1.4, blurVerticalSize: 1.4, mainTextureRatio: 0.5 });
+  const psiiHL = new BABYLON.HighlightLayer('psiiHL', scene, { blurHorizontalSize: 0.5, blurVerticalSize: 0.5, mainTextureRatio: 1.0 });
   psiiHL.innerGlow = false; psiiHL.outerGlow = true;
   for(const cell of cellList) for(const m of cell.meshes) psiiHL.addMesh(m, new BABYLON.Color3(1,1,1));
   psiiHL.isEnabled = false;   // only rendered while hovering/selecting the macromolecule
