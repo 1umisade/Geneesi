@@ -348,6 +348,9 @@ uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on proton
 uniform float depthBias;   // nuclei: push toward camera (view units) so they clear their OWN orbitals (0 elsewhere)
 uniform vec3 selCenter;    // the focused atom (its static nucleus is hidden → the spinning highlight shows instead)
 uniform float coneCos;     // reveal only atoms within this cosine of the view axis (negative disables the cone)
+#ifdef MEMFADE
+uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane dither away
+#endif
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -365,6 +368,9 @@ void main(void){
   // Screen-door cross-fade across an 8-unit band at the bubble edge, so vdW shells
   // dissolve away to reveal the orbitals inside (and cores dissolve in).
   float hsh = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+#ifdef MEMFADE
+  if(memCut.z * smoothstep(-25.0, 70.0, (vWCen.z - memCut.x)*memCut.y) > hsh) discard;   // cross-cut fade
+#endif
   float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside, 1 outside
   float perp = (vCenterV.z > 0.0) ? length(vCenterV.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
   float inCone = (coneCos < -0.5) ? 1.0 : step(perp, coneCos);   // in tube if perp <= tube radius
@@ -420,6 +426,9 @@ varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -432,6 +441,9 @@ void main(void){
 #endif
 #ifdef MACROMOVE
   wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
+#endif
+#ifdef MEMFADE
+  vMemW = wp.xyz;
 #endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
@@ -469,6 +481,9 @@ varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 varying float vOid;
 varying float vSeed;
 varying float vSel;
@@ -530,6 +545,9 @@ void electrons(inout vec3 c, float ne, float bri){
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+#ifdef MEMFADE
+  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+#endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   vec3 N = normalize(vNrmV);
@@ -590,6 +608,9 @@ varying vec3 vCol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+#ifdef MEMFADE
+  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+#endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
@@ -632,6 +653,9 @@ varying float vSeed;
 varying float vSel;
 varying float vOid;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -641,6 +665,9 @@ void main(void){
 #endif
 #ifdef MACROMOVE
   wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
+#endif
+#ifdef MEMFADE
+  vMemW = wp.xyz;
 #endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
@@ -680,6 +707,9 @@ varying float vSeed;
 varying float vSel;
 varying float vOid;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
@@ -737,6 +767,9 @@ void electrons(inout vec3 c, float ne, float bri){
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+#ifdef MEMFADE
+  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+#endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   vec3 N = normalize(vNrmV);
@@ -784,6 +817,9 @@ varying float vSeed;
 varying float vSel;
 varying float vOid;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
@@ -791,6 +827,9 @@ void main(void){
   // lobes shift together (nearly rigid) and the selection outline lines up exactly. The electron
   // phase still uses the stable per-lobe seed below, so dragging never scrambles the electrons.
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MEMFADE
+  vMemW = wp.xyz;
+#endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vLocalDir = normalize(position);
@@ -831,6 +870,9 @@ varying float vSeed;
 varying float vSel;
 varying float vOid;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
   float d = clamp(dot(N, e), -1.0, 1.0);
@@ -880,6 +922,9 @@ vec3 electronGlow(float ne){
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+#ifdef MEMFADE
+  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+#endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;
@@ -908,6 +953,9 @@ varying float vSeed;
 varying float vSel;
 varying vec3 vBcol;
 varying float vCang;
+#ifdef MEMFADE
+varying vec3 vMemW; uniform vec3 memCut;
+#endif
 float elecBolt(vec3 N, vec3 e, vec3 uref){
   float fr = (vOid >= 900.0) ? 1.5 : (0.6*max(0.0, floor(vOid/100.0) - 1.0));
   float d = clamp(dot(N, e), -1.0, 1.0);
@@ -957,6 +1005,9 @@ vec3 electronGlow(float ne){
 }
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+#ifdef MEMFADE
+  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+#endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
   float foc = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate → other orbitals' electrons dim to  5%
@@ -985,6 +1036,9 @@ vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MEMFADE
+  vMemW = wp.xyz;
+#endif
   vec4 vp = view * wp;
   vVP = vp.xyz;
   // Correct normal under non-uniform lobe scale via the cofactor matrix (= det inverse-transpose),
@@ -1056,6 +1110,9 @@ vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+#ifdef MEMFADE
+  vMemW = wp.xyz;
+#endif
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(normal, 0.0)).xyz;
@@ -1659,6 +1716,7 @@ async function run(){
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gVdw = true;            // graphics mode: true = space-filling vdW spheres (default), false = orbitals
+  const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut fade: [cutZ, cutSign, strength] (bound as memCut[])
   const MAX_MODELS = 24;
   const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model translation offset (for picking + the label)
   const gModelXform = new Float32Array(MAX_MODELS*16);   // per-model full transform (rotate around centre + translate) → bound as modelXform[]
@@ -1941,13 +1999,13 @@ async function run(){
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'],
-    defines:['#define IMPRAD'] });
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','memCut'],
+    defines:['#define IMPRAD','#define MEMFADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false;
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
-    eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
   // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
   const cellList = [];
@@ -2249,12 +2307,12 @@ async function run(){
     const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
     const mkLipMat = (nm, shader, attrs, extra) => {
       const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs,
-        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR'].concat(extra||[]),
-        defines:['#define ELECGATE'] });   // isolates the elecR uniform to its own program (no leak into protein/chlorophyll)
+        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','memCut'].concat(extra||[]),
+        defines:['#define ELECGATE','#define MEMFADE'] });   // ELECGATE isolates elecR; MEMFADE = the cross-cut fade
       mat.setFloat('bubbleR',1e9); mat.setFloat('nElec',2); mat.setFloat('coneCos',-1.0);
       mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true;   // orbitals always, electrons only up close
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
-        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
+        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setArray3('memCut', gCut);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return mat;
     };
@@ -2494,11 +2552,14 @@ async function run(){
     const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
     const REVEAL2 = REVEAL_DIST*REVEAL_DIST;
     const M=macroGizmoNode.getWorldMatrix().m, cx0=psiiCenter.x, cy0=psiiCenter.y, cz0=psiiCenter.z;   // full PSII transform (rotation+translation)
-    // Membrane extras: far-cull the huge sheet (only render where it's visible; the rest fogs out),
-    // and when viewing SIDE-ON, hide the lipids in FRONT of the model plane → cross-cut view.
-    const memZ=bilayerCen.z, memY=bilayerCen.y, dzc=cp.z-memZ, dyc=cp.y-memY;
-    const sideView = Math.abs(dzc) > Math.abs(dyc)*0.9 + 60, cutSign = dzc>=0 ? 1 : -1;
-    const memFar = scene.fogEnd*1.15, memFar2 = memFar*memFar;
+    // Membrane cross-cut is a smooth per-fragment fade done in the membrane shaders (NOT a block cull),
+    // driven by camera ELEVATION: the front lipids dissolve gradually as the view drops to the
+    // membrane's level. Here we only compute the fade parameters; the whole sheet still renders and
+    // the far edge is handled by fog.
+    const fy = Math.abs(f.y);   // 0 = looking horizontally (at membrane level), 1 = straight down/up
+    gCut[0] = bilayerCen.z;                                          // cut plane (membrane centre z)
+    gCut[1] = (cp.z - bilayerCen.z) >= 0 ? 1 : -1;                   // which side is toward the camera
+    gCut[2] = 1.0 - Math.max(0, Math.min(1, (fy-0.12)/(0.5-0.12)));  // fade strength: 1 at membrane level → 0 looking down
     for(const cell of cellList){
       const cR = cell.r;
       let wcx, wcy, wcz;
@@ -2511,10 +2572,6 @@ async function run(){
         for(let p=0;p<6;p++){ const pl=fplanes[p];
           if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ vis=false; break; }
         }
-      }
-      if(!cell.macro && vis){                            // membrane-only culls
-        if(d2 > memFar2) vis = false;                    // far edge fogs out → skip
-        else if(sideView && (cell.cz - memZ)*cutSign > 0) vis = false;   // front half → cross-cut
       }
       const near = vis && d2 < REVEAL2;                   // close enough for electrons + nuclei
       const wantOrb = vis && !gVdw;                       // orbital lobes: in view, orbital mode
