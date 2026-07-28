@@ -218,7 +218,8 @@ function extractChlorophyll(m){
   return nm;
 }
 
-/* Pull one lipid molecule (category 4) out of the model → just atoms (positions + elements). */
+/* Pull one lipid molecule (category 4) out of the model → atoms AND its internal bonds
+   (the bonds are needed to build the same hybridised σ/π/lone-pair lobes as the protein). */
 function extractLipid(m){
   if(!m.sid) return null;
   const groups = new Map();
@@ -226,9 +227,14 @@ function extractLipid(m){
   let best=null;
   for(const g of groups.values()) if(!best || g.length>best.length) best=g;   // largest = a complete lipid
   if(!best || best.length < 30) return null;
-  const na=best.length;
-  const out={ na, x:new Float32Array(na), y:new Float32Array(na), z:new Float32Array(na), el:new Uint16Array(na) };
+  const na=best.length, map=new Map();
+  best.forEach((gi,li) => map.set(gi, li));
+  const out={ na, nb:0, x:new Float32Array(na), y:new Float32Array(na), z:new Float32Array(na), el:new Uint16Array(na) };
   for(let li=0;li<na;li++){ const gi=best[li]; out.x[li]=m.x[gi]; out.y[li]=m.y[gi]; out.z[li]=m.z[gi]; out.el[li]=m.el[gi]; }
+  const b1=[], b2=[], bo=[];                      // keep only bonds internal to this residue (remapped)
+  for(let k=0;k<m.nb;k++){ const a=m.b1[k], b=m.b2[k];
+    if(map.has(a) && map.has(b)){ b1.push(map.get(a)); b2.push(map.get(b)); bo.push(m.bo[k]); } }
+  out.nb=b1.length; out.b1=Int32Array.from(b1); out.b2=Int32Array.from(b2); out.bo=Uint8Array.from(bo);
   return out;
 }
 
@@ -247,6 +253,9 @@ uniform mat4 view;
 uniform mat4 projection;
 uniform float radius;
 uniform float uT;        // thermal-shake time (0 = still)
+#ifdef LIPTILE
+uniform vec3 tileOff;    // per-mesh translation so membrane tiles can share ONE nucleon template buffer
+#endif
 #ifdef MACROMOVE
 uniform mat4 macroXform; uniform vec3 macroCenter;
 #endif
@@ -258,8 +267,12 @@ varying float vFlag;     // instance alpha → 1 for protons, 0 for neutrons
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vWCen = W[3].xyz;
-  vec3 wc = shake(W[3].xyz);
+  vec3 base = W[3].xyz;
+#ifdef LIPTILE
+  base += tileOff;
+#endif
+  vWCen = base;
+  vec3 wc = shake(base);
 #ifdef MACROMOVE
   wc = (macroXform * vec4(wc - macroCenter, 1.0)).xyz;
 #endif
@@ -388,6 +401,9 @@ uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) o
 uniform float focusId; // negative shows all, bonds/lone pairs are the hybrid/valence group (id 99)
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 uniform float drawElec; // 1 = draw electrons inline (chlorophyll), 0 = electrons come from the additive bondE pass
+#ifdef ELECGATE
+uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
+#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vLocalDir;
@@ -464,7 +480,11 @@ void main(void){
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
   c *= 1.0 - 0.62 * pow(fres, 2.5);
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → others' electrons dim to  5%
+#ifdef ELECGATE
+  if(drawElec > 0.5 && length(vViewPos) < elecR) electrons(c, nElec, efac);
+#else
   if(drawElec > 0.5) electrons(c, nElec, efac);
+#endif
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // always opaque (focus isolates via the outline, not transparency)
 }`;
@@ -579,6 +599,9 @@ uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) o
 uniform float focusId; // negative shows all, otherwise the selected atom's other subshells go 50% transparent
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 uniform float drawElec; // 1 = draw electrons inline (chlorophyll / aromatic π), 0 = electrons come from the additive orbE pass
+#ifdef ELECGATE
+uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
+#endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
 varying vec3 vCol;
@@ -656,7 +679,11 @@ void main(void){
   c *= 1.0 - 0.62 * pow(fres, 2.5);
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → the others' electrons dim to  5%
+#ifdef ELECGATE
+  if(drawElec > 0.5 && length(vViewPos) < elecR) electrons(c, ne, efac);
+#else
   if(drawElec > 0.5) electrons(c, ne, efac);
+#endif
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), 1.0);   // opaque orbital, isolation shows via outline + dimmed electrons
 }`;
@@ -1946,7 +1973,7 @@ async function run(fileName){
   const bilayerCen = new BABYLON.Vector3(0, -320, 0);
   let bilayerHalf = 0;
   if(lipid){
-    const LN = lipid.na;
+    const LN = lipid.na, NBL = lipid.nb;
     let cx=0,cy=0,cz=0; for(let k=0;k<LN;k++){ cx+=lipid.x[k]; cy+=lipid.y[k]; cz+=lipid.z[k]; } cx/=LN;cy/=LN;cz/=LN;
     // head (O/P/N) → tail (C) centroid gives the head-up axis
     let hx=0,hy=0,hz=0,hn=0, tx=0,ty=0,tz=0,tn=0;
@@ -1965,32 +1992,166 @@ async function run(fileName){
       lp[k*3]=q[0];lp[k*3+1]=q[1];lp[k*3+2]=q[2]; yMin=Math.min(yMin,q[1]);yMax=Math.max(yMax,q[1]); xr=Math.max(xr,Math.abs(q[0]));zr=Math.max(zr,Math.abs(q[2])); }
     const S=Math.max(8, Math.max(xr,zr)*0.9), G=32, half=(G-1)*S*0.5, copies=G*G*2;   // 32×32 × 2 leaflets = 2048 lipids
     bilayerHalf = half + Math.max(xr,zr);
-    const elCount=new Int32Array(nEl); for(let k=0;k<LN;k++) elCount[lipid.el[k]]++;
-    const lipM=[], lipC=[], lipIx=new Int32Array(nEl);
-    for(let e=0;e<nEl;e++) if(elCount[e]){ lipM[e]=new Float32Array(elCount[e]*copies*16); lipC[e]=new Float32Array(elCount[e]*copies*4); }
+    setLbl('Building membrane orbitals…'); await yield_();
+    // Template atom positions per leaflet (0 = heads up, 1 = mirrored so the tails meet at Y=0),
+    // relative to a tile origin. Every tile is then a pure TRANSLATION of one of these two.
+    const tPos = [new Float32Array(LN*3), new Float32Array(LN*3)];
+    for(let k=0;k<LN;k++){ const px=lp[k*3], py=lp[k*3+1], pz=lp[k*3+2];
+      tPos[0][k*3]=px; tPos[0][k*3+1]=py-yMin;  tPos[0][k*3+2]=pz;
+      tPos[1][k*3]=px; tPos[1][k*3+1]=-py+yMin; tPos[1][k*3+2]=-pz; }
+    // Build ONE lipid's lobes with exactly the protein's representation: core (non-hybridised)
+    // orbitals, hybridised σ bonds with back-knobs, π lobes, and VSEPR lone pairs.
+    const buildLobes = pos => {
+      const core={m:[],col:[],cen:[],oid:[]}, bond={m:[],tap:[],col:[],cen:[],oid:[]}, tmp=new Float32Array(16);
+      const pushCore=(c,cx,cy,cz,oid)=>{ for(let j=0;j<16;j++) core.m.push(tmp[j]);
+        core.col.push(c[0],c[1],c[2]); core.cen.push(cx,cy,cz); core.oid.push(oid); };
+      const put=(sx,sy,sz,ex,ey,ez,wid,tap,c,cx,cy,cz,oid)=>{ cylTo(sx,sy,sz,ex,ey,ez,tmp,0,wid);
+        for(let j=0;j<16;j++) bond.m.push(tmp[j]);
+        bond.tap.push(tap); bond.col.push(c[0],c[1],c[2]); bond.cen.push(cx,cy,cz); bond.oid.push(oid); };
+      for(let k=0;k<LN;k++){ const e=lipid.el[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
+        const cx=pos[k*3], cy=pos[k*3+1], cz=pos[k*3+2], c=info(e).c;
+        for(const sh of cfg){ const n=sh[0], ty=sh[1], R=n*SHELL_STEP, oid=n*100+ty*10;
+          if(maxNe>1 && n===maxNe && ty<=1) continue;   // valence s/p hybridised → the bonds represent them
+          if(ty===0){ sphereMat(cx,cy,cz,R*0.72,tmp,0); pushCore(c,cx,cy,cz,oid); }
+          else for(const d of OTMPL[ty]){ cylTo(cx,cy,cz, cx+d[0]*R,cy+d[1]*R,cz+d[2]*R, tmp,0,R*0.34); pushCore(c,cx,cy,cz,oid); } } }
+      const bd=[]; for(let k=0;k<LN;k++) bd[k]=[];
+      for(let b=0;b<NBL;b++){ const i=lipid.b1[b], j=lipid.b2[b];
+        const dx=pos[j*3]-pos[i*3], dy=pos[j*3+1]-pos[i*3+1], dz=pos[j*3+2]-pos[i*3+2];
+        bd[i].push(nrm([dx,dy,dz])); bd[j].push(nrm([-dx,-dy,-dz])); }
+      const pn=[]; for(let k=0;k<LN;k++){ const dirs=bd[k]; let nv=null;
+        for(let a=0;a<dirs.length&&!nv;a++) for(let bb=a+1;bb<dirs.length;bb++){ const cr=crs(dirs[a],dirs[bb]),l=Math.hypot(cr[0],cr[1],cr[2]); if(l>0.3){nv=[cr[0]/l,cr[1]/l,cr[2]/l];break;} } pn[k]=nv; }
+      let hyb=0;
+      for(let b=0;b<NBL;b++){ const i=lipid.b1[b], j=lipid.b2[b], bo=lipid.bo[b]||1;
+        const x1=pos[i*3],y1=pos[i*3+1],z1=pos[i*3+2], x2=pos[j*3],y2=pos[j*3+1],z2=pos[j*3+2];
+        const bx=x2-x1,by=y2-y1,bz=z2-z1, bdir=nrm([bx,by,bz]), f=0.62;
+        const c1=info(lipid.el[i]).c, c2=info(lipid.el[j]).c, kL=0.24, kW=LOBE_W*0.5;
+        put(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, LOBE_W,1.0,c1, x1,y1,z1, 1000+(hyb++));   // σ
+        put(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, LOBE_W,1.0,c2, x2,y2,z2, 1000+(hyb++));
+        if(EL_LIST[lipid.el[i]]!=='H') put(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, kW,1.0,c1, x1,y1,z1, 1000);   // back knob
+        if(EL_LIST[lipid.el[j]]!=='H') put(x2,y2,z2, x2+bx*kL,y2+by*kL,z2+bz*kL, kW,1.0,c2, x2,y2,z2, 1000);
+        if(bo>1){ let pnrm=pn[i]||pn[j];
+          if(pn[i]&&pn[j]){ const s=(pn[i][0]*pn[j][0]+pn[i][1]*pn[j][1]+pn[i][2]*pn[j][2])<0?-1:1; pnrm=nrm([pn[i][0]+pn[j][0]*s,pn[i][1]+pn[j][1]*s,pn[i][2]+pn[j][2]*s]); }
+          let per1; if(pnrm){ const dt=pnrm[0]*bdir[0]+pnrm[1]*bdir[1]+pnrm[2]*bdir[2]; per1=nrm([pnrm[0]-dt*bdir[0],pnrm[1]-dt*bdir[1],pnrm[2]-dt*bdir[2]]); }
+            else per1=nrm(crs([bx,by,bz],Math.abs(bx)<0.9?[1,0,0]:[0,1,0]));
+          const per2=nrm(crs([bx,by,bz],per1)), pw=LOBE_W*0.42, pf=0.6, dd=LOBE_W;
+          for(let pi=0;pi<bo-1;pi++){ const pp=pi===0?per1:per2;
+            for(const sgn of [1,-1]){ const gx=pp[0]*dd*sgn,gy=pp[1]*dd*sgn,gz=pp[2]*dd*sgn;
+              put(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, pw,1.0,c1, x1,y1,z1, 900);
+              put(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, pw,1.0,c2, x2,y2,z2, 900); } } } }
+      for(let k=0;k<LN;k++){ const lpn=lonePairs(lipid.el[k]); if(lpn===0||bd[k].length===0) continue;
+        const ax=pos[k*3],ay=pos[k*3+1],az=pos[k*3+2], c=info(lipid.el[k]).c; let li=0;
+        for(const d of lonePairDirs(bd[k],lpn)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az, 2000+(li++)); }
+      return {core, bond};
+    };
+    const T = [buildLobes(tPos[0]), buildLobes(tPos[1])];
+    const tiles = G*G;   // tiles per leaflet
+    let coreTot=0, bondTot=0;
+    for(const t of T){ coreTot += (t.core.m.length/16)*tiles; bondTot += (t.bond.m.length/16)*tiles; }
+    const coreM=new Float32Array(coreTot*16), coreCol=new Float32Array(coreTot*3), coreCen=new Float32Array(coreTot*3), coreOid=new Float32Array(coreTot);
+    const bM=new Float32Array(bondTot*16), bTap=new Float32Array(bondTot), bCol=new Float32Array(bondTot*3), bCen=new Float32Array(bondTot*3), bOid=new Float32Array(bondTot);
+    let ci=0, bi=0;
     for(let gi=0;gi<G;gi++) for(let gj=0;gj<G;gj++){
-      const ox=bilayerCen.x+gi*S-half, oz=bilayerCen.z+gj*S-half;
-      for(let leaf=0;leaf<2;leaf++) for(let k=0;k<LN;k++){ const e=lipid.el[k];
-        let px=lp[k*3], py=lp[k*3+1], pz=lp[k*3+2];
-        if(leaf===0){ py=py-yMin; } else { py=-py+yMin; pz=-pz; }      // top: heads up; bottom: flipped, tails meet at Y=0
-        const i=lipIx[e]++, o=i*16;
-        lipM[e][o]=1;lipM[e][o+5]=1;lipM[e][o+10]=1;lipM[e][o+15]=1;
-        lipM[e][o+12]=ox+px; lipM[e][o+13]=bilayerCen.y+py; lipM[e][o+14]=oz+pz;
-        const col=info(e).c; lipC[e][i*4]=col[0];lipC[e][i*4+1]=col[1];lipC[e][i*4+2]=col[2];lipC[e][i*4+3]=1;
+      const ox=bilayerCen.x+gi*S-half, oy=bilayerCen.y, oz=bilayerCen.z+gj*S-half;
+      for(let leaf=0;leaf<2;leaf++){ const t=T[leaf], cn=t.core.m.length/16, bn=t.bond.m.length/16;
+        for(let i=0;i<cn;i++){ const o=ci*16, s=i*16;
+          for(let j=0;j<16;j++) coreM[o+j]=t.core.m[s+j];
+          coreM[o+12]+=ox; coreM[o+13]+=oy; coreM[o+14]+=oz;
+          coreCol[ci*3]=t.core.col[i*3]; coreCol[ci*3+1]=t.core.col[i*3+1]; coreCol[ci*3+2]=t.core.col[i*3+2];
+          coreCen[ci*3]=t.core.cen[i*3]+ox; coreCen[ci*3+1]=t.core.cen[i*3+1]+oy; coreCen[ci*3+2]=t.core.cen[i*3+2]+oz;
+          coreOid[ci]=t.core.oid[i]; ci++; }
+        for(let i=0;i<bn;i++){ const o=bi*16, s=i*16;
+          for(let j=0;j<16;j++) bM[o+j]=t.bond.m[s+j];
+          bM[o+12]+=ox; bM[o+13]+=oy; bM[o+14]+=oz;
+          bTap[bi]=t.bond.tap[i]; bOid[bi]=t.bond.oid[i];
+          bCol[bi*3]=t.bond.col[i*3]; bCol[bi*3+1]=t.bond.col[i*3+1]; bCol[bi*3+2]=t.bond.col[i*3+2];
+          bCen[bi*3]=t.bond.cen[i*3]+ox; bCen[bi*3+1]=t.bond.cen[i*3+1]+oy; bCen[bi*3+2]=t.bond.cen[i*3+2]+oz;
+          bi++; } }
+    }
+    await yield_();
+    const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
+    const mkLipMat = (nm, shader, attrs, extra) => {
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs,
+        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR'].concat(extra||[]),
+        defines:['#define ELECGATE'] });   // isolates the elecR uniform to its own program (no leak into protein/chlorophyll)
+      mat.setFloat('bubbleR',1e9); mat.setFloat('nElec',2); mat.setFloat('coneCos',-1.0);
+      mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true;   // orbitals always, electrons only up close
+      mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
+        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
+        eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
+      return mat;
+    };
+    const lipCore = BABYLON.MeshBuilder.CreateSphere('lipCore',{segments:6,diameter:1},scene);
+    lipCore.material = mkLipMat('lipCoreMat','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
+    lipCore.isPickable=false; lipCore.alwaysSelectAsActiveMesh=true;
+    lipCore.thinInstanceSetBuffer('ocol',coreCol,3,true); lipCore.thinInstanceSetBuffer('ocen',coreCen,3,true);
+    lipCore.thinInstanceSetBuffer('oid',coreOid,1,true); lipCore.thinInstanceSetBuffer('matrix',coreM,16,true);
+    lipCore.thinInstanceCount=coreTot;
+    const lipBonds = BABYLON.MeshBuilder.CreateSphere('lipBonds',{segments:5,diameter:1},scene);
+    lipBonds.material = mkLipMat('lipBondMat','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']);
+    lipBonds.material.setFloat('nElec',1);
+    lipBonds.isPickable=false; lipBonds.alwaysSelectAsActiveMesh=true;
+    lipBonds.thinInstanceSetBuffer('taper',bTap,1,true); lipBonds.thinInstanceSetBuffer('bcol',bCol,3,true);
+    lipBonds.thinInstanceSetBuffer('ocen',bCen,3,true); lipBonds.thinInstanceSetBuffer('oid',bOid,1,true);
+    lipBonds.thinInstanceSetBuffer('matrix',bM,16,true); lipBonds.thinInstanceCount=bondTot;
+    await yield_();
+    /* Nucleons would be ~2 M instances across the whole membrane, so instead a small POOL of
+       meshes SHARES one nucleon template buffer per leaflet and is re-positioned (via the imp
+       shader's tileOff uniform) onto the tiles nearest the camera each frame. */
+    let nucN=0; for(let k=0;k<LN;k++) nucN += info(lipid.el[k]).n;
+    const nucTpl = [0,1].map(leaf => {
+      const mt=new Float32Array(nucN*16), cl=new Float32Array(nucN*4); let ni=0;
+      for(let k=0;k<LN;k++){ const e=lipid.el[k], A=info(e).n, Z=info(e).z;
+        const px=tPos[leaf][k*3], py=tPos[leaf][k*3+1], pz=tPos[leaf][k*3+2];
+        for(let i=0;i<A;i++){ const proton=Math.floor((i+1)*Z/A)>Math.floor(i*Z/A), o=ni*16;
+          mt[o]=1;mt[o+5]=1;mt[o+10]=1;mt[o+15]=1;
+          mt[o+12]=px+fcc[i][0]*SPACING; mt[o+13]=py+fcc[i][1]*SPACING; mt[o+14]=pz+fcc[i][2]*SPACING;
+          const c=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62];
+          cl[ni*4]=c[0];cl[ni*4+1]=c[1];cl[ni*4+2]=c[2];cl[ni*4+3]=0; ni++; } }
+      return {mt,cl};
+    });
+    const _zeroOff = new BABYLON.Vector3(0,0,0);
+    const nucMatL = new BABYLON.ShaderMaterial('lipNucMat', scene, 'imp', {
+      attributes:['position','instanceColor','world0','world1','world2','world3'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','tileOff'],
+      defines:['#define LIPTILE'] });   // isolates the tileOff uniform to its own compiled program (no leak into other imp materials)
+    nucMatL.setFloat('radius',NUCLEON_R); nucMatL.setFloat('isShell',0); nucMatL.setFloat('bubbleR',1e9);
+    nucMatL.setFloat('protonOutline',0); nucMatL.setFloat('coneCos',-1.0); nucMatL.backFaceCulling=false;
+    nucMatL.setFloat('depthBias', NUC_BIAS); nucMatL.disableDepthWrite = true;
+    nucMatL.onBindObservable.add(mesh => { const eff=nucMatL.getEffect(); if(!eff) return;
+      eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);
+      eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
+      eff.setVector3('selCenter', selCenter);
+      eff.setVector3('tileOff', (mesh && mesh.metadata && mesh.metadata.off) || _zeroOff); });
+    const POOL = 10;   // tiles per leaflet that carry nuclei at once
+    const nucPool = [];
+    for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
+      const mesh=BABYLON.MeshBuilder.CreatePlane('lipNuc'+leaf+'_'+p,{size:2},scene);
+      mesh.material=nucMatL; mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true; mesh.renderingGroupId=1;
+      mesh.thinInstanceSetBuffer('instanceColor', nucTpl[leaf].cl,4,true);
+      mesh.thinInstanceSetBuffer('matrix', nucTpl[leaf].mt,16,true);
+      mesh.thinInstanceCount=nucN; mesh.setEnabled(false);
+      mesh.metadata={ off:new BABYLON.Vector3(0,0,0) };
+      nucPool.push(mesh);
+    }
+    const nearTiles=[];
+    scene.onBeforeRenderObservable.add(()=>{
+      const cp=cam.position; nearTiles.length=0;
+      if(Math.abs(cp.y-bilayerCen.y) < NEAR_R){          // only bother when the camera is at membrane height
+        const gi0=Math.round((cp.x-bilayerCen.x+half)/S), gj0=Math.round((cp.z-bilayerCen.z+half)/S), RAD=3;
+        for(let di=-RAD;di<=RAD;di++) for(let dj=-RAD;dj<=RAD;dj++){
+          const gi=gi0+di, gj=gj0+dj; if(gi<0||gj<0||gi>=G||gj>=G) continue;
+          const ox=bilayerCen.x+gi*S-half, oz=bilayerCen.z+gj*S-half;
+          const dx=ox-cp.x, dz=oz-cp.z, d2=dx*dx+dz*dz;
+          if(d2 < NEAR_R*NEAR_R) nearTiles.push({ox,oz,d2});
+        }
+        nearTiles.sort((a,b)=>a.d2-b.d2);
       }
-    }
-    const lipMeshes=[];
-    for(let e=0;e<nEl;e++){ if(!elCount[e]) continue;
-      const mat=new BABYLON.ShaderMaterial('lipMat'+e, scene, 'imp', {
-        attributes:['position','instanceColor','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos'] });
-      mat.setFloat('radius', info(e).vr*FILL_SCALE); mat.setFloat('isShell',0); mat.setFloat('bubbleR',1e9); mat.setFloat('protonOutline',0); mat.setFloat('coneCos',-1.0); mat.backFaceCulling=false;
-      mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
-      const mesh=BABYLON.MeshBuilder.CreatePlane('lip'+e,{size:2},scene); mesh.material=mat; mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
-      mesh.thinInstanceSetBuffer('matrix', lipM[e],16,true); mesh.thinInstanceSetBuffer('instanceColor', lipC[e],4,true);
-      lipMeshes.push(mesh);
-    }
-    for(const m of lipMeshes) m.setEnabled(true);   // membrane always visible at any distance (no distance gate)
+      for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
+        const mesh=nucPool[leaf*POOL+p], t=nearTiles[p];
+        if(t){ mesh.metadata.off.set(t.ox, bilayerCen.y, t.oz); mesh.setEnabled(true); }
+        else mesh.setEnabled(false);
+      }
+    });
   }
 
   // Cell meshes start disabled; the frame loop enables only the ones the bubble touches.
