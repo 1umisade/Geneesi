@@ -54,6 +54,13 @@ body.dark-mode{
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
 #gfx-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #gfx-icon{font-size:15px;line-height:1}
+#color-btn{position:absolute;left:16px;top:108px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#color-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#color-icon{font-size:15px;line-height:1}
 #speedbox{color:var(--brown)!important}
 #speedbox #speedval{font-weight:bold}
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
@@ -99,6 +106,7 @@ body.dark-mode{
 </div>
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
 <button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
+<button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Alkuaineet</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
@@ -286,6 +294,8 @@ uniform mat4 macroXform; uniform vec3 macroCenter;
 #ifdef MODELMOVE
 attribute float modelId;         // which loaded model this instance belongs to (index into modelOff)
 uniform vec3 modelOff[24];       // per-model drag offset (for repositioning complexes)
+uniform vec3 modelCol[24];       // per-model pastel colour
+uniform float colorMode;         // 1 = colour by model (pastel), 0 = by element
 #endif
 varying vec2 vUV;
 varying vec3 vCenterV;
@@ -313,6 +323,9 @@ void main(void){
   vUV = position.xy;
   vColor = instanceColor.rgb;
   vFlag = instanceColor.a;
+#ifdef MODELMOVE
+  if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];
+#endif
   float rad = radius;
 #ifdef IMPRAD
   rad *= instR;
@@ -397,6 +410,7 @@ uniform mat4 macroXform; uniform vec3 macroCenter;
 #endif
 #ifdef MODELMOVE
 attribute float modelId; uniform vec3 modelOff[24];
+uniform vec3 modelCol[24]; uniform float colorMode;
 #endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
@@ -429,6 +443,9 @@ void main(void){
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vBcol = bcol;
+#ifdef MODELMOVE
+  if(colorMode > 0.5) vBcol = modelCol[int(modelId + 0.5)];
+#endif
   vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
@@ -605,6 +622,7 @@ uniform mat4 macroXform; uniform vec3 macroCenter;  // whole-macromolecule drag 
 #endif
 #ifdef MODELMOVE
 attribute float modelId; uniform vec3 modelOff[24];
+uniform vec3 modelCol[24]; uniform float colorMode;
 #endif
 varying vec3 vViewPos;
 varying vec3 vNrmV;
@@ -632,6 +650,9 @@ void main(void){
   vec3 wn = cross(M1,M2)*normal.x + cross(M2,M0)*normal.y + cross(M0,M1)*normal.z;
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vCol = ocol;
+#ifdef MODELMOVE
+  if(colorMode > 0.5) vCol = modelCol[int(modelId + 0.5)];
+#endif
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
@@ -778,6 +799,9 @@ void main(void){
   vec3 wn = cross(M1,M2)*normal.x + cross(M2,M0)*normal.y + cross(M0,M1)*normal.z;
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vCol = ocol;
+#ifdef MODELMOVE
+  if(colorMode > 0.5) vCol = modelCol[int(modelId + 0.5)];
+#endif
   vSel = step(distance(ocen, selCenter), 0.6);
   vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy) : 1e9;
@@ -1606,6 +1630,15 @@ async function run(){
   let gVdw = true;            // graphics mode: true = space-filling vdW spheres (default), false = orbitals
   const MAX_MODELS = 24;
   const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model drag offset (bound as modelOff[] in the movable materials)
+  let gColorMode = false;                             // false = colour by element, true = one pastel per model
+  const gModelCol = new Float32Array(MAX_MODELS*3);   // per-model pastel colour (bound as modelCol[])
+  { const N = Math.max(1, mols.length);               // spread hues → a distinct pastel per model
+    for(let i=0;i<MAX_MODELS;i++){ const h=(i/N)%1, s=0.5, l=0.74, a=s*Math.min(l,1-l);
+      const f=n=>{ const k=(n+h*12)%12; return l - a*Math.max(-1, Math.min(k-3, 9-k, 1)); };
+      gModelCol[i*3]=f(0); gModelCol[i*3+1]=f(8); gModelCol[i*3+2]=f(4); } }
+  { const cb = document.getElementById('color-btn');   // colour by element ↔ per-model pastel
+    if(cb) cb.addEventListener('click', () => { gColorMode = !gColorMode;
+      const lab=document.getElementById('color-label'); if(lab) lab.textContent = gColorMode ? 'Mallit' : 'Alkuaineet'; }); }
   { const gfxBtn = document.getElementById('gfx-btn');   // toggle orbitals ↔ vdW spheres (cull loop applies it next frame)
     if(gfxBtn) gfxBtn.addEventListener('click', () => { gVdw = !gVdw;
       const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = gVdw ? 'vdW-pallot' : 'Orbitaalit';
@@ -1718,7 +1751,7 @@ async function run(){
   const impostorMat = (name, radius, isShell, protonOutline, movable) => {
     const opts = {
       attributes: ['position','instanceColor','world0','world1','world2','world3'].concat(movable ? ['modelId'] : []),
-      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelOff'] : [])
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelOff','modelCol','colorMode'] : [])
     };
     if(movable) opts.defines = ['#define MACROMOVE','#define MODELMOVE'];   // follows the PSII gizmo AND its own per-model drag
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
@@ -1736,7 +1769,7 @@ async function run(){
       eff.setColor3('fogColor', scene.fogColor);
       eff.setFloat('fogStart', scene.fogStart);
       eff.setFloat('fogEnd', scene.fogEnd);
-      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setArray3('modelOff', gModelOff); }
+      if(movable){ eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setArray3('modelOff', gModelOff); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); }
     });
     return mat;
   };
@@ -1767,7 +1800,7 @@ async function run(){
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelOff'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelOff','modelCol','colorMode'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1);   // always fully revealed → no screen-door band
@@ -1781,13 +1814,13 @@ async function run(){
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelOff'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelOff','modelCol','colorMode'],
       defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
-      eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setArray3('modelOff', gModelOff);
+      eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setArray3('modelOff', gModelOff); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     });
@@ -1864,13 +1897,13 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelOff'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelOff','modelCol','colorMode'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
   vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false;
   vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
-    eff.setFloat('uT',gWaveT); eff.setArray3('modelOff', gModelOff); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
+    eff.setFloat('uT',gWaveT); eff.setArray3('modelOff', gModelOff); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
@@ -2696,21 +2729,26 @@ async function run(){
     gModelOff[gSelModel*3+1] = modelNode.position.y - mi.cy;
     gModelOff[gSelModel*3+2] = modelNode.position.z - mi.cz;
     refreshModelLabel(); });
-  const pickModelAtCursor = () => {   // nearest (moved) model centre to the cursor on screen
-    const vp = cam.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
-    const tm = scene.getTransformMatrix(), mx=scene.pointerX, my=scene.pointerY;
-    let best=-1, bd=1e18;
+  const pickModelAtCursor = () => {   // accurate: nearest model whose CURRENT bounding box the cursor ray enters
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const o=ray.origin, d=ray.direction; let best=-1, bt=Infinity;
     for(const mi of mInfo){ if(mi.isChl) continue;
-      const wc=new BABYLON.Vector3(mi.cx+gModelOff[mi.mi*3], mi.cy+gModelOff[mi.mi*3+1], mi.cz+gModelOff[mi.mi*3+2]);
-      const p=BABYLON.Vector3.Project(wc, BABYLON.Matrix.Identity(), tm, vp);
-      if(p.z<0||p.z>1) continue; const dx=p.x-mx, dy=p.y-my, d=dx*dx+dy*dy;
-      if(d<bd){ bd=d; best=mi.mi; } }
+      const ax=gModelOff[mi.mi*3], ay=gModelOff[mi.mi*3+1], az=gModelOff[mi.mi*3+2];
+      const bb=[[o.x,d.x,mi.x0+ax,mi.x1+ax],[o.y,d.y,mi.y0+ay,mi.y1+ay],[o.z,d.z,mi.z0+az,mi.z1+az]];
+      let tmin=-Infinity, tmax=Infinity, miss=false;
+      for(const [ro,rd,lo,hi] of bb){
+        if(Math.abs(rd)<1e-9){ if(ro<lo||ro>hi){ miss=true; break; } }
+        else { let t1=(lo-ro)/rd, t2=(hi-ro)/rd; if(t1>t2){ const tt=t1;t1=t2;t2=tt; } tmin=Math.max(tmin,t1); tmax=Math.min(tmax,t2); } }
+      if(!miss && tmin<=tmax && tmax>0){ const t=Math.max(tmin,0); if(t<bt){ bt=t; best=mi.mi; } } }
     return best;
   };
+  // Project a WORLD point to CSS pixels (canvas client size — NOT the render buffer, which is
+  // device-pixel-scaled and threw the labels across the screen on high-DPI displays).
+  const projectCss = wp => { const cv=engine.getRenderingCanvas();
+    return BABYLON.Vector3.Project(wp, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), cam.viewport.toGlobal(cv.clientWidth, cv.clientHeight)); };
   scene.registerAfterRender(() => {   // keep the model label pinned above the moved complex
     if(gSelModel<0 || !modelLabel._w) return;
-    const vp = cam.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
-    const p = BABYLON.Vector3.Project(modelLabel._w, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), vp);
+    const p = projectCss(modelLabel._w);
     const vis = p.z>0 && p.z<1; modelLabel.style.display = vis?'block':'none';
     if(vis){ modelLabel.style.left=(p.x-modelLabel.offsetWidth/2)+'px'; modelLabel.style.top=(p.y-modelLabel.offsetHeight-34)+'px'; }
   });
