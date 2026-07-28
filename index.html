@@ -197,8 +197,16 @@ const catOf = res => RES_CAT[res] ?? 6;
 // (Bulk antenna chlorophylls CLA/CHL are deliberately excluded — they'd bury the actual cofactors;
 //  P680/P700 can't be told apart from antenna Chl in this data, so we mark pheophytin + the quinones
 //  and metal clusters that flank the reaction centres instead.)
-const ETC_RES = {};
-'OEX MN CA PHO PL9 PQN HEM HEC SF4 FES FE FE2 CU'.split(' ').forEach(r=>ETC_RES[r]=1);
+// Each cofactor residue → a TYPE code (1-6) so the overlay can colour them by role, in vivid hues
+// that stand out from the muted parent-model palette.
+const ETC_RES = { OEX:1, MN:1, CA:1,   PHO:2,   PL9:3, PQN:3,   HEM:4, HEC:4,   SF4:5, FES:5, FE:5, FE2:5,   CU:6 };
+const ETC_COL = [ [0,0,0],              // 0 unused
+  [1.00,0.52,0.00],   // 1 OEC (Mn₄CaO₅)        — bright orange
+  [1.00,0.20,0.72],   // 2 pheophytin           — magenta
+  [0.05,0.90,0.92],   // 3 plasto/phyllo-quinone — cyan
+  [1.00,0.13,0.13],   // 4 heme                  — vivid red
+  [1.00,0.84,0.08],   // 5 Fe-S cluster          — yellow
+  [0.28,0.52,1.00] ]; // 6 Cu (plastocyanin)     — blue
 
 /* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
 function parseMol2(text){
@@ -235,7 +243,7 @@ function parseMol2(text){
       if(p.length < 6 || cur.ai >= cur.na) continue;
       const k = cur.ai++;
       cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
-      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0; cur.cof[k] = ETC_RES[p[7]] ? 1 : 0;
+      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0; cur.cof[k] = ETC_RES[p[7]] || 0;   // 0 = not a cofactor, else type code 1-6
     } else if(section === 'BOND'){
       const p = ln.trim().split(/\s+/);
       if(p.length < 4 || cur.bi >= cur.nb) continue;
@@ -393,7 +401,7 @@ void main(void){
   // dissolve away to reveal the orbitals inside (and cores dissolve in).
   float hsh = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-25.0, 70.0, (vWCen.z - memCut.x)*memCut.y) > hsh) discard;   // cross-cut fade
+  if(memCut.z * smoothstep(-4.0, 18.0,(vWCen.z - memCut.x)*memCut.y) > hsh) discard;   // cross-cut fade
 #endif
   float edge = smoothstep(bubbleR - 8.0, bubbleR, dist);      // 0 inside, 1 outside
   float perp = (vCenterV.z > 0.0) ? length(vCenterV.xy) : 1e9;   // ⊥ distance from the view axis (reveal tube)
@@ -570,7 +578,7 @@ void electrons(inout vec3 c, float ne, float bri){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
 #endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the bubble
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
@@ -633,7 +641,7 @@ const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
 #endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in
   vec3 N = normalize(vNrmV);
@@ -792,7 +800,7 @@ void electrons(inout vec3 c, float ne, float bri){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
 #endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in inside the camera sphere
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
@@ -947,7 +955,7 @@ vec3 electronGlow(float ne){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
 #endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
@@ -1030,7 +1038,7 @@ vec3 electronGlow(float ne){
 void main(void){
   float _h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 #ifdef MEMFADE
-  if(memCut.z * smoothstep(-25.0, 70.0, (vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
+  if(memCut.z * smoothstep(-4.0, 18.0,(vMemW.z - memCut.x)*memCut.y) > _h) discard;   // membrane cross-cut fade
 #endif
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;
   if(coneCos > -0.5 && vCang > coneCos) discard;
@@ -1603,7 +1611,7 @@ async function run(){
       _m.copyToArray(sphBuf[e], ci*16);
       const col = CAT_COLORS[m.cat[k]];
       colBuf[e][ci*4]=col[0]; colBuf[e][ci*4+1]=col[1]; colBuf[e][ci*4+2]=col[2]; colBuf[e][ci*4+3]=1;
-      cofBuf[e][ci] = (m.cof && m.cof[k]) ? 1 : 0;
+      cofBuf[e][ci] = m.cof ? m.cof[k] : 0;   // cofactor type code (0 = none)
     }
     const bd = [];                                   // per-atom bond directions
     for(let k=0;k<m.na;k++) bd[k] = [];
@@ -1989,7 +1997,7 @@ async function run(){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
       pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
-      if(cf && cf[a]){ pushN(etcM, sb, a*16, 16); etcC.push(ec[0],ec[1],ec[2],0); etcR.push(vr*1.15); }   // cofactor → overlay (slightly enlarged to pop)
+      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); }   // cofactor → overlay, coloured by type, slightly enlarged to pop
     }
     // Orbitals — bin by orbCenBuf (each lobe's atom centre).
     const oc=orbCount(e);
@@ -2054,7 +2062,7 @@ async function run(){
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false;
     etcMat.onBindObservable.add(()=>{ const eff=etcMat.getEffect(); if(!eff)return;
-      eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
+      eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode)
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
@@ -2447,15 +2455,15 @@ async function run(){
     const _zeroOff = new BABYLON.Vector3(0,0,0);
     const nucMatL = new BABYLON.ShaderMaterial('lipNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','tileOff'],
-      defines:['#define LIPTILE'] });   // isolates the tileOff uniform to its own compiled program (no leak into other imp materials)
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','tileOff','memCut'],
+      defines:['#define LIPTILE','#define MEMFADE'] });   // LIPTILE isolates tileOff; MEMFADE = cross-cut fade so lipid nuclei vanish WITH their lipid
     nucMatL.setFloat('radius',NUCLEON_R); nucMatL.setFloat('isShell',0); nucMatL.setFloat('bubbleR',1e9);
     nucMatL.setFloat('protonOutline',0); nucMatL.setFloat('coneCos',-1.0); nucMatL.backFaceCulling=false;
     nucMatL.setFloat('depthBias', NUC_BIAS); nucMatL.disableDepthWrite = true;
     nucMatL.onBindObservable.add(mesh => { const eff=nucMatL.getEffect(); if(!eff) return;
       eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);
       eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-      eff.setVector3('selCenter', selCenter);
+      eff.setVector3('selCenter', selCenter); eff.setArray3('memCut', gCut);
       eff.setVector3('tileOff', (mesh && mesh.metadata && mesh.metadata.off) || _zeroOff); });
     const POOL = 10;   // tiles per leaflet that carry nuclei at once
     const nucPool = [];
