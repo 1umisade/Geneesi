@@ -61,6 +61,21 @@ body.dark-mode{
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
 #color-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #color-icon{font-size:15px;line-height:1}
+#etc-btn{position:absolute;left:16px;top:156px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#etc-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#etc-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#etc-icon{font-size:15px;line-height:1}
+#vr-btn{position:absolute;left:16px;top:204px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#vr-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#vr-icon{font-size:15px;line-height:1}
 #speedbox{color:var(--brown)!important}
 #speedbox #speedval{font-weight:bold}
 /* ── Bottom-right stack: hybridisation panel sits ABOVE the spawn element table ── */
@@ -107,6 +122,7 @@ body.dark-mode{
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
 <button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
 <button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Alkuaineet</span></button>
+<button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (OEC, feofytiini, plastokinoni, hemit, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
@@ -177,6 +193,12 @@ const RES_CAT = {};
 'DGD LMG LHG PL9 SQD LMT'.split(' ').forEach(r=>RES_CAT[r]=4);
 'CL FE2 FE MG MN CA NA K ZN OEX BCT CU CO'.split(' ').forEach(r=>RES_CAT[r]=5);
 const catOf = res => RES_CAT[res] ?? 6;
+// Electron-transport-chain cofactors → flagged so a button can render them on top of everything.
+// (Bulk antenna chlorophylls CLA/CHL are deliberately excluded — they'd bury the actual cofactors;
+//  P680/P700 can't be told apart from antenna Chl in this data, so we mark pheophytin + the quinones
+//  and metal clusters that flank the reaction centres instead.)
+const ETC_RES = {};
+'OEX MN CA PHO PL9 PQN HEM HEC SF4 FES FE FE2 CU'.split(' ').forEach(r=>ETC_RES[r]=1);
 
 /* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
 function parseMol2(text){
@@ -201,6 +223,7 @@ function parseMol2(text){
         cur.x  = new Float32Array(cur.na); cur.y = new Float32Array(cur.na);
         cur.z  = new Float32Array(cur.na); cur.el = new Uint16Array(cur.na); cur.ai = 0;
         cur.cat = new Uint8Array(cur.na);
+        cur.cof = new Uint8Array(cur.na);  // 1 = electron-transport-chain cofactor (for the render-on-top overlay)
         cur.sid = new Int32Array(cur.na);  // subst_id (residue instance) → to extract one chlorophyll
         cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
         cur.bo = new Uint8Array(cur.nb);   // bond order (1 single, 2 double, 3 triple)
@@ -212,7 +235,7 @@ function parseMol2(text){
       if(p.length < 6 || cur.ai >= cur.na) continue;
       const k = cur.ai++;
       cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
-      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0;
+      cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0; cur.cof[k] = ETC_RES[p[7]] ? 1 : 0;
     } else if(section === 'BOND'){
       const p = ln.trim().split(/\s+/);
       if(p.length < 4 || cur.bi >= cur.nb) continue;
@@ -1302,7 +1325,7 @@ async function run(){
   { const b6f = mols.find(m => m.cfg && m.cfg.match==='1q90');
     if(b6f){ const N=b6f.na;
       const cl = { na:N, nb:b6f.nb, x:new Float32Array(N), y:new Float32Array(N), z:new Float32Array(N),
-        el:new Uint16Array(b6f.el), cat:b6f.cat, sid:b6f.sid, b1:b6f.b1, b2:b6f.b2, bo:b6f.bo };
+        el:new Uint16Array(b6f.el), cat:b6f.cat, cof:b6f.cof, sid:b6f.sid, b1:b6f.b1, b2:b6f.b2, bo:b6f.bo };
       let cx=0,cz=0; for(let k=0;k<N;k++){ cx+=b6f.x[k]; cz+=b6f.z[k]; } cx/=N; cz/=N;
       for(let k=0;k<N;k++){ cl.x[k]=2*cx-b6f.x[k]; cl.y[k]=b6f.y[k]; cl.z[k]=2*cz-b6f.z[k]; }   // 180° about Y
       cl.cfg = { match:'1q90b', x:b6f.cfg.x, y:b6f.cfg.y, z:b6f.cfg.z+58, label:'Cytochrome b6f' };
@@ -1507,7 +1530,7 @@ async function run(){
   setLbl(`Building ${mols.length} model(s)…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
-  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [],
+  const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [], cofBuf = [],
         sphIdx = new Uint32Array(nEl), cylIdx = new Uint32Array(nEl), lpIdx = new Uint32Array(nEl);
   for(let e=0;e<nEl;e++){
     sphBuf[e] = new Float32Array(atomCount[e]*16);
@@ -1521,6 +1544,7 @@ async function run(){
     lpCenBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)*3);
     lpOidBuf[e] = new Float32Array(atomCount[e]*lonePairs(e)); // per-lobe orbital id (lone pair = 2000+i)
     colBuf[e] = new Float32Array(atomCount[e]*4);   // per-instance surface colour (by component)
+    cofBuf[e] = new Uint8Array(atomCount[e]);       // 1 = ETC cofactor atom (feeds the render-on-top overlay)
   }
   const hybCnt = [];   // running hybrid-orbital count per atom → each σ (+ its knob) gets a distinct id
   for(let e=0;e<nEl;e++) hybCnt[e] = new Uint16Array(atomCount[e]);
@@ -1579,6 +1603,7 @@ async function run(){
       _m.copyToArray(sphBuf[e], ci*16);
       const col = CAT_COLORS[m.cat[k]];
       colBuf[e][ci*4]=col[0]; colBuf[e][ci*4+1]=col[1]; colBuf[e][ci*4+2]=col[2]; colBuf[e][ci*4+3]=1;
+      cofBuf[e][ci] = (m.cof && m.cof[k]) ? 1 : 0;
     }
     const bd = [];                                   // per-atom bond directions
     for(let k=0;k<m.na;k++) bd[k] = [];
@@ -1717,6 +1742,7 @@ async function run(){
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gVdw = true;            // graphics mode: true = space-filling vdW spheres (default), false = orbitals
+  let gEtc = false, etcOverlay = null;   // ETC cofactor overlay (render-on-top) toggle + its mesh (built later)
   const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut fade: [cutZ, cutSign, strength] (bound as memCut[])
   const MAX_MODELS = 24;
   const gModelOff = new Float32Array(MAX_MODELS*3);   // per-model translation offset (for picking + the label)
@@ -1736,6 +1762,11 @@ async function run(){
     if(gfxBtn) gfxBtn.addEventListener('click', () => { gVdw = !gVdw;
       const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = gVdw ? 'vdW-pallot' : 'Orbitaalit';
       const ic=document.getElementById('gfx-icon');   if(ic)  ic.textContent  = gVdw ? '⬤' : '⬡'; }); }
+  { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
+    if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
+      if(etcOverlay) etcOverlay.setEnabled(gEtc);
+      etcBtn.classList.toggle('on', gEtc);
+      const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
 
   /* ── Nucleus = packed cluster of protons (red) + neutrons (grey) ──────────
@@ -1946,10 +1977,11 @@ async function run(){
   const cells = new Map();
   const getCell = k => { let c=cells.get(k); if(!c){ c={ sphM:[],sphC:[],sphR:[], nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
+  const etcM=[], etcC=[], etcR=[];   // ETC cofactor overlay (rendered on top of everything)
 
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE;
+    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e];
     // Nucleons — A per atom, contiguous → bin by the atom centre. Also collect ONE vdW sphere per
     // atom (the space-filling representation shown when the graphics toggle is in "vdW" mode).
     const nb=nucBuf[e], nc=nucColBuf[e];
@@ -1957,6 +1989,7 @@ async function run(){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
       pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
+      if(cf && cf[a]){ pushN(etcM, sb, a*16, 16); etcC.push(ec[0],ec[1],ec[2],0); etcR.push(vr*1.15); }   // cofactor → overlay (slightly enlarged to pop)
     }
     // Orbitals — bin by orbCenBuf (each lobe's atom centre).
     const oc=orbCount(e);
@@ -2007,6 +2040,33 @@ async function run(){
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false;
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+
+  // ── ETC cofactor overlay ──────────────────────────────────────────────────
+  // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
+  // Cu) as vdW spheres, drawn in a rendering group whose depth buffer is cleared first, so they sit
+  // ON TOP of the whole scene. Follows the per-model gizmo + PSII transform like the normal spheres.
+  if(etcM.length){
+    const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
+      attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode'],
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+    etcMat.setFloat('radius',1.0); etcMat.setFloat('isShell',0); etcMat.setFloat('bubbleR',1e9);
+    etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
+    etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false;
+    etcMat.onBindObservable.add(()=>{ const eff=etcMat.getEffect(); if(!eff)return;
+      eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
+      eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+    etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
+    etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
+    etcOverlay.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
+    etcOverlay.thinInstanceSetBuffer('instanceColor', new Float32Array(etcC),4,true);
+    etcOverlay.thinInstanceSetBuffer('instR', new Float32Array(etcR),1,true);
+    etcOverlay.thinInstanceSetBuffer('modelId', mdlBuf(etcM),1,true);
+    etcOverlay.renderingGroupId=3;                              // last group…
+    scene.setRenderingAutoClearDepthStencil(3, true, true, true);   // …with its depth cleared first → always on top
+    etcOverlay.setEnabled(gEtc);
+  }
 
   // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
   const cellList = [];
@@ -2827,8 +2887,18 @@ async function run(){
   // Keep the gizmos world-aligned (upright) instead of tilting with the model's rotation.
   modelGizmo.updateGizmoRotationToMatchAttachedMesh = false;
   modelRotGizmo.updateGizmoRotationToMatchAttachedMesh = false;
+  // Undo history for per-model moves/rotations. Each entry is one model's full transform state
+  // (its translation offset + rotation quaternion) captured at the START of a drag gesture, so one
+  // Ctrl+Z reverts one complete drag. Snapshots are tiny (7 numbers), so we keep a deep stack.
+  const UNDO_MAX = 100;
+  const undoStack = [];
+  const snapshotModel = mid => { if(mid<0) return;
+    undoStack.push({ mid,
+      off:[gModelOff[mid*3], gModelOff[mid*3+1], gModelOff[mid*3+2]],
+      quat:[gModelQuat[mid*4], gModelQuat[mid*4+1], gModelQuat[mid*4+2], gModelQuat[mid*4+3]] });
+    if(undoStack.length > UNDO_MAX) undoStack.shift(); };
   for(const g of [modelGizmo, modelRotGizmo]){
-    g.onDragStartObservable.add(()=>{ gizmoDragging=true; });
+    g.onDragStartObservable.add(()=>{ gizmoDragging=true; snapshotModel(gSelModel); });
     g.onDragEndObservable.add(()=>{ gizmoDragging=false; });
   }
   let gSelModel = -1;
@@ -2861,6 +2931,28 @@ async function run(){
     modelGizmo.attachedNode = modelNode; modelRotGizmo.attachedNode = modelNode; refreshModelLabel(); };
   modelGizmo.onDragObservable.add(applyModelTransform);
   modelRotGizmo.onDragObservable.add(applyModelTransform);
+  // Rebuild a model's baked transform matrix straight from gModelOff/gModelQuat (used by undo, which
+  // may target a model that isn't the currently-selected one, so it can't go through modelNode).
+  const rebuildModelXform = mid => { const mi=mInfo[mid];
+    const q=new BABYLON.Quaternion(gModelQuat[mid*4],gModelQuat[mid*4+1],gModelQuat[mid*4+2],gModelQuat[mid*4+3]);
+    q.toRotationMatrix(_tmpR);
+    const nx=mi.cx+gModelOff[mid*3], ny=mi.cy+gModelOff[mid*3+1], nz=mi.cz+gModelOff[mid*3+2];
+    BABYLON.Matrix.Translation(-mi.cx,-mi.cy,-mi.cz).multiply(_tmpR).multiply(BABYLON.Matrix.Translation(nx,ny,nz)).copyToArray(gModelXform, mid*16); };
+  const undoModel = () => {
+    const s = undoStack.pop(); if(!s) return; const mid=s.mid;
+    gModelOff[mid*3]=s.off[0]; gModelOff[mid*3+1]=s.off[1]; gModelOff[mid*3+2]=s.off[2];
+    gModelQuat[mid*4]=s.quat[0]; gModelQuat[mid*4+1]=s.quat[1]; gModelQuat[mid*4+2]=s.quat[2]; gModelQuat[mid*4+3]=s.quat[3];
+    rebuildModelXform(mid);
+    if(gSelModel===mid){   // the reverted model is on the gizmo → move the gizmo node + label back too
+      const mi=mInfo[mid];
+      modelNode.position.set(mi.cx+s.off[0], mi.cy+s.off[1], mi.cz+s.off[2]);
+      modelNode.rotationQuaternion = new BABYLON.Quaternion(s.quat[0],s.quat[1],s.quat[2],s.quat[3]);
+      refreshModelLabel();
+    }
+  };
+  window.addEventListener('keydown', e => {
+    if((e.ctrlKey||e.metaKey) && !e.shiftKey && !e.altKey && (e.key==='z'||e.key==='Z')){ e.preventDefault(); undoModel(); }
+  });
   const pickModelAtCursor = () => {   // accurate: nearest model whose CURRENT bounding box the cursor ray enters
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const o=ray.origin, d=ray.direction; let best=-1, bt=Infinity;
