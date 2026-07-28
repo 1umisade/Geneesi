@@ -483,7 +483,7 @@ void main(void){
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vBcol * (0.28 + 0.72 * ndl);   // wide light→dark gradient so touching same-colour lobes show a crevice
+  vec3 c = vBcol * (0.44 + 0.60 * ndl);   // wide light→dark gradient (crevices) with a lifted ambient floor so shadows aren't crushed
   // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
@@ -542,7 +542,7 @@ void main(void){
   if((1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos))) < _h) discard;   // dither fade-in
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vCol * (0.28 + 0.72 * ndl);   // wide light→dark gradient so even flat-grey carbon lobes shade across posterise bands (crevices between touching lobes register)
+  vec3 c = vCol * (0.44 + 0.60 * ndl);   // wide light→dark gradient (crevices register) but a lifted ambient floor so shadowed carbon isn't crushed too dark
   vec3 V = normalize(-vViewPos);
   float fres = pow(1.0 - abs(dot(N, V)), 4.5);
   c = mix(c, vec3(0.25, 0.65, 1.0), clamp(fres*1.4, 0.0, 1.0));   // electric-blue outline
@@ -680,7 +680,7 @@ void main(void){
   if(coneCos > -0.5 && vCang > coneCos) discard;   // atoms outside the forward tube don't reveal orbitals (stay vdW)
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
-  vec3 c = vCol * (0.28 + 0.72 * ndl);   // wide light→dark gradient so even flat-grey carbon lobes shade across posterise bands (crevices between touching lobes register)
+  vec3 c = vCol * (0.44 + 0.60 * ndl);   // wide light→dark gradient (crevices register) but a lifted ambient floor so shadowed carbon isn't crushed too dark
   // Shade toward each lobe's own silhouette so two touching SAME-COLOURED lobes still read as
   // two shapes — the crevice between them stays visible (and the painterly pass inks it).
   float fres = 1.0 - max(dot(N, normalize(-vViewPos)), 0.0);
