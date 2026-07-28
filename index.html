@@ -2716,6 +2716,9 @@ async function run(){
   const modelRotGizmo = new BABYLON.RotationGizmo(gizmoLayer);
   modelGizmo.scaleRatio = 1.2; modelRotGizmo.scaleRatio = 1.2;
   modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
+  // Keep the gizmos world-aligned (upright) instead of tilting with the model's rotation.
+  modelGizmo.updateGizmoRotationToMatchAttachedMesh = false;
+  modelRotGizmo.updateGizmoRotationToMatchAttachedMesh = false;
   for(const g of [modelGizmo, modelRotGizmo]){
     g.onDragStartObservable.add(()=>{ gizmoDragging=true; });
     g.onDragEndObservable.add(()=>{ gizmoDragging=false; });
