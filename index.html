@@ -107,6 +107,7 @@ body.dark-mode{
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
 <button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
 <button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Alkuaineet</span></button>
+<button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
   <button class="zt" id="zoom-in" aria-label="Zoom in">+</button>
@@ -3412,10 +3413,24 @@ async function run(){
      is disabled; we translate the camera ourselves for exact planar control.
      Teleportation is off. */
   try {
-    if (navigator.xr) {
-      const xr = await scene.createDefaultXRExperienceAsync({ disableTeleportation: true });
+    // Only offer VR when the browser actually exposes an immersive-VR device (e.g. the Quest browser).
+    const vrOK = navigator.xr && await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
+    if (vrOK) {
+      // disableDefaultUI: we drive entry from our own big "VR" button instead of Babylon's tiny goggles icon.
+      const xr = await scene.createDefaultXRExperienceAsync({ disableTeleportation: true, disableDefaultUI: true });
       if (xr && xr.baseExperience) {
         const fm = xr.baseExperience.featuresManager;
+        // Reveal our palette button and wire it to enter/exit VR.
+        const vrBtn = document.getElementById('vr-btn');
+        if (vrBtn) {
+          vrBtn.style.display = '';
+          vrBtn.addEventListener('click', async () => {
+            try {
+              if (xr.baseExperience.state === BABYLON.WebXRState.IN_XR) await xr.baseExperience.exitXRAsync();
+              else await xr.baseExperience.enterXRAsync('immersive-vr', 'local-floor');
+            } catch (e) { setLbl('VR-tilaan siirtyminen epäonnistui: ' + (e && e.message)); }
+          });
+        }
         try { fm.disableFeature(BABYLON.WebXRFeatureName.TELEPORTATION); } catch (e) {}
 
         const TH = BABYLON.WebXRControllerComponent.THUMBSTICK_TYPE;   // 'thumbstick'
@@ -3457,7 +3472,6 @@ async function run(){
           camXR.position.addInPlace(fwd.scale(-ax.y * step));   // stick up (ax.y<0) = forward
           camXR.position.addInPlace(rgt.scale( ax.x * step));   // stick right = strafe right
         });
-        setLbl('VR ready — press the goggles button');
       }
     }
   } catch (e) { console.warn('WebXR unavailable:', e && e.message); }
