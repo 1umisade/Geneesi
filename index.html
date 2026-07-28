@@ -1187,41 +1187,50 @@ async function run(){
      functional partner. x = position along the membrane, y = 0 membrane / + stroma /
      − lumen, z = depth into the membrane plane. */
   const MEMBRANE_Y = 0;
+  // The .mol2 FILENAMES are mislabelled (shuffled, plus one duplicate PSII), so each complex is
+  // identified by its INTERNAL name / PDB-or-AlphaFold code — robust to the filename shuffle.
+  // x = along the membrane, y = 0 membrane / + stroma / − lumen, z = depth into the plane.
   const MODELS = [
-    {file:'PSII.mol2',                       x:-560, y:0,    z:0,    label:'Photosystem II'},
-    {file:'cytochrome_b6f.mol2',             x:-190, y:0,    z:0,    label:'Cytochrome b6f'},
-    {file:'photosystem_I.mol2',              x:170,  y:0,    z:0,    label:'Photosystem I'},
-    {file:'NDH-1.mol2',                      x:490,  y:0,    z:30,   label:'NDH-1'},
-    {file:'ATP_synthase.mol2',               x:760,  y:0,    z:0,    label:'ATP synthase'},
-    {file:'plastocyanin.mol2',               x:-10,  y:-190, z:0,    label:'Plastocyanin'},
-    {file:'Violaxanthin_de-epoxidase.mol2',  x:-600, y:-190, z:10,   label:'Violaxanthin de-epoxidase'},
-    {file:'ferredoxin.mol2',                 x:230,  y:250,  z:20,   label:'Ferredoxin'},
-    {file:'FNR.mol2',                        x:400,  y:290,  z:80,   label:'FNR'},
-    {file:'RuBisCO.mol2',                    x:600,  y:380,  z:-80,  label:'RuBisCO'},
-    {file:'Thioredoxin_M.mol2',              x:660,  y:250,  z:70,   label:'Thioredoxin M'},
-    {file:'PGR5.mol2',                       x:-40,  y:220,  z:90,   label:'PGR5'},
-    {file:'PGRL1.mol2',                      x:30,   y:185,  z:-90,  label:'PGRL1'},
-    {file:'STN7.mol2',                       x:-360, y:230,  z:90,   label:'STN7'},
-    {file:'PPH1.mol2',                       x:-470, y:220,  z:-80,  label:'PPH1'},
-    {file:'Zeaxanthin_epoxidase.mol2',       x:-640, y:230,  z:0,    label:'Zeaxanthin epoxidase'},
+    {match:'3jcu',   x:-560, y:0,    z:0,    label:'Photosystem II'},
+    {match:'1q90',   x:-190, y:0,    z:0,    label:'Cytochrome b6f'},
+    {match:'9e0j',   x:170,  y:0,    z:0,    label:'Photosystem I'},
+    {match:'6l7o',   x:490,  y:0,    z:30,   label:'NDH-1'},
+    {match:'6vm1',   x:760,  y:0,    z:0,    label:'ATP synthase'},
+    {match:'1ag6',   x:-10,  y:-190, z:0,    label:'Plastocyanin'},
+    {match:'q39249', x:-600, y:-190, z:10,   label:'Violaxanthin de-epoxidase'},
+    {match:'1a70',   x:230,  y:250,  z:20,   label:'Ferredoxin'},
+    {match:'1gjr',   x:400,  y:290,  z:80,   label:'FNR'},
+    {match:'1rcx',   x:600,  y:380,  z:-80,  label:'RuBisCO'},
+    {match:'q9sl05', x:-40,  y:220,  z:90,   label:'PGR5'},
+    {match:'q8h112', x:30,   y:185,  z:-90,  label:'PGRL1'},
+    {match:'q9s713', x:-360, y:230,  z:90,   label:'STN7'},
+    {match:'4yzg',   x:-470, y:220,  z:-80,  label:'PPH1'},
+    {match:'q9fgc7', x:-640, y:230,  z:0,    label:'Zeaxanthin epoxidase'},
   ];
+  const FILES = ['PSII.mol2','photosystem_I.mol2','cytochrome_b6f.mol2','ATP_synthase.mol2','NDH-1.mol2',
+    'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','Thioredoxin_M.mol2','plastocyanin.mol2','PGR5.mol2',
+    'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2'];
   const barEl = document.getElementById('load-bar');
   setLbl('Fetching thylakoid models…');
   const mols = [];
-  for(let i=0;i<MODELS.length;i++){ const cfg=MODELS[i];
-    setLbl(`Fetching ${cfg.file}…`); setBar((i/MODELS.length)*45);
+  for(let i=0;i<FILES.length;i++){ const fn=FILES[i];
+    setLbl(`Fetching ${fn}…`); setBar((i/FILES.length)*45);
     try{
-      const res = await fetch('./'+cfg.file);
-      if(!res.ok){ console.warn('skip (HTTP '+res.status+')', cfg.file); continue; }
+      const res = await fetch('./'+fn);
+      if(!res.ok){ console.warn('skip (HTTP '+res.status+')', fn); continue; }
       const ab = await res.arrayBuffer();
       const parsed = parseMol2(new TextDecoder().decode(new Uint8Array(ab)));
-      for(const m of parsed){ if(m.na>0){ m.cfg = cfg; m.name = cfg.label; mols.push(m); } }
-    }catch(err){ console.warn('failed to load', cfg.file, err); }
+      for(const m of parsed){ if(m.na<=0) continue;
+        const nm = (m.name||'').toLowerCase();
+        const cfg = MODELS.find(e => !e._used && nm.includes(e.match));   // match by internal name/code
+        if(!cfg){ console.log('unmatched molecule "'+m.name+'" in '+fn+' (skipped)'); continue; }
+        cfg._used = true; cfg.file = fn; m.cfg = cfg; m.name = cfg.label; mols.push(m); }
+    }catch(err){ console.warn('failed to load', fn, err); }
     await yield_();
   }
   if(mols.length === 0) throw new Error('No models loaded — are the .mol2 files next to index.html?');
   setLbl('Placing complexes…'); await yield_();
-  const psii = mols.find(m => m.cfg && m.cfg.file==='PSII.mol2') || mols[0];
+  const psii = mols.find(m => m.cfg && m.cfg.match==='3jcu') || mols[0];
   const chl = extractChlorophyll(psii);          // one chlorophyll extracted from PSII, animated
   const lipid = extractLipid(psii);              // one lipid → tiled into the bilayer
 
