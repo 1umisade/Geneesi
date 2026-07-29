@@ -520,7 +520,8 @@ void main(void){
   float perp = (vCenterV.z > 0.0) ? length(vCenterV.xy)/vCenterV.z : 1e9;   // tan(angle) from the view axis → forward cone (matches the orbital shaders)
   float inCone = (coneCos < -0.5) ? 1.0 : 1.0 - smoothstep(coneCos*0.86, coneCos, perp);   // soft-edged cone rim
   float reveal = (1.0 - edge) * inCone;                       // 1 = orbitals/nuclei show here, 0 = vdW shell
-  alpha *= (isShell < 0.5) ? reveal : mix(1.0, shellMin, reveal);   // core fades IN where revealed, shell fades to shellMin (50% in orbital mode) so orbitals show through
+  float rimGlass = mix(shellMin, 0.72, smoothstep(0.34, 1.0, r2));   // revealed shell = a glass bubble, near-clear centre and a visible rim, so the orbitals inside stand out
+  alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
   if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
   posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
@@ -1940,7 +1941,7 @@ async function run(){
     gConeCos = -1.0;
     gBubbleR = (gGfxMode === 1) ? REVEAL_DIST : 1e9;
     gShell   = (gGfxMode === 1) ? 1 : 0;
-    gShellMin = (gGfxMode === 1) ? 0.5 : 0.0;
+    gShellMin = (gGfxMode === 1) ? 0.22 : 0.0;   // revealed shell: near-clear at the CENTRE so orbitals show through (a rim in the shader keeps the sphere readable)
     const g = GFX_MODES[gGfxMode];
     const lab=document.getElementById('gfx-label'); if(lab) lab.textContent = g.label;
     const ic=document.getElementById('gfx-icon');   if(ic)  ic.textContent  = g.icon;
@@ -2475,6 +2476,31 @@ async function run(){
 
     // Chlorophyll centre → gate rendering on camera proximity (hide the detail when zoomed out).
     let chlCx=0,chlCy=0,chlCz=0; for(let k=0;k<N;k++){ chlCx+=rest[k*3]; chlCy+=rest[k*3+1]; chlCz+=rest[k*3+2]; } chlCx/=N;chlCy/=N;chlCz/=N;
+    // vdW spheres for the chlorophyll — the SAME graphics-mode treatment as every other atom, instead
+    // of the old always-full-orbitals showcase: mode 0 = solid vdW; mode 1 = 50%-transparent shell
+    // with the orbitals revealed inside when the camera is in range.
+    const chlSphMat = new BABYLON.ShaderMaterial('chlSphMat', scene, 'imp', {
+      attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','selModel','selCol'] });
+    chlSphMat.setFloat('radius',1.0); chlSphMat.setFloat('protonOutline',0); chlSphMat.setFloat('depthBias',0);
+    chlSphMat.setFloat('selModel',-1); chlSphMat.setColor3('selCol', new BABYLON.Color3(0.6,0.72,0.53));
+    chlSphMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); chlSphMat.backFaceCulling=false; realAlpha(chlSphMat);
+    chlSphMat.onBindObservable.add(()=>{ const eff=chlSphMat.getEffect(); if(!eff)return;
+      eff.setFloat('isShell',gShell); eff.setFloat('shellMin',gShellMin); eff.setFloat('bubbleR',gBubbleR); eff.setFloat('coneCos',gConeCos);
+      eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); eff.setVector3('selCenter', selCenter); });
+    const chlSph = BABYLON.MeshBuilder.CreatePlane('chlSph',{size:2},scene);
+    chlSph.material=chlSphMat; chlSph.isPickable=false; chlSph.alwaysSelectAsActiveMesh=true; chlSph.renderingGroupId=1;
+    { const sm=new Float32Array(N*16), sc=new Float32Array(N*4), sr=new Float32Array(N);
+      for(let k=0;k<N;k++){ const e=chl.el[k], c=info(e).c, o=k*16;
+        sm[o]=1;sm[o+5]=1;sm[o+10]=1;sm[o+15]=1; sm[o+12]=rest[k*3]; sm[o+13]=rest[k*3+1]; sm[o+14]=rest[k*3+2];
+        sc[k*4]=c[0];sc[k*4+1]=c[1];sc[k*4+2]=c[2];sc[k*4+3]=0; sr[k]=info(e).vr*FILL_SCALE; }
+      chlSph.thinInstanceSetBuffer('instanceColor',sc,4,true); chlSph.thinInstanceSetBuffer('instR',sr,1,true); chlSph.thinInstanceSetBuffer('matrix',sm,16,true); chlSph.thinInstanceCount=N; }
+    // Follow the graphics mode: orbitals only in mode 1 AND when the camera is in range; vdW always on.
+    scene.onBeforeRenderObservable.add(()=>{
+      const dx=cam.position.x-chlCx, dy=cam.position.y-chlCy, dz=cam.position.z-chlCz;
+      const orbOn = gGfxMode === 1 && (dx*dx+dy*dy+dz*dz < REVEAL_DIST*REVEAL_DIST);
+      chlCore.setEnabled(orbOn); chlBonds.setEnabled(orbOn); chlNuc.setEnabled(orbOn);
+    });
     // Chlorophyll is ALWAYS shown (never gated away) and built once at rest — the shader shakeOff
     // then wiggles it exactly like the protein (same thermal-shake as every other atom).
     const cpos=new Float32Array(N*3); let chlBuilt=false;
