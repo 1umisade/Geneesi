@@ -2562,21 +2562,16 @@ async function run(){
       for(let k=0;k<LN;k++){ const s=EL_LIST[lipid.el[k]], y=lp[k*3+1];
         if(s==='O'||s==='P'||s==='N'){pY+=y;pN++;} else if(s==='C'){cY+=y;cN++;} }
       if(pN&&cN && pY/pN < cY/cN){ for(let k=0;k<LN;k++) lp[k*3+1]=-lp[k*3+1]; const t=-yMin; yMin=-yMax; yMax=t; } }
-    // RECTANGULAR bilayer spanning the embedded complexes (wide in X, shallow in Z). Tile spacing S
-    // is raised as needed to keep the total lipid count bounded (TARGET_LIPIDS) so a very wide
-    // membrane doesn't explode into millions of lobes. DENSER packing (footprint*0.7) + per-tile
-    // random spin/jitter (below) make the sheet read as a crowded, disordered membrane.
-    // DENSITY FIRST: the tile pitch is set by the lipid's own footprint (tails interdigitating), never
-    // by "spread N lipids over the whole sheet" — that was what left visible rows and gaps. The sheet
-    // then extends as far as the instance budget allows at that density (buffers for the WHOLE sheet
-    // are uploaded up front, so the budget is a hard memory ceiling — ~75 KB of GPU buffers per lipid).
-    const TARGET_LIPIDS = 16000;   // ~1.2 GB of instance buffers — the practical ceiling on a desktop GPU
-    const S = Math.max(Math.max(xr,zr)*0.46, 5);   // tight interdigitated packing → a solid bilayer
-    let Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
-    if(Gx*Gz > TARGET_LIPIDS/2){                    // too many tiles at this density → shrink the SHEET, keep the density
-      const k = Math.sqrt((TARGET_LIPIDS/2)/(Gx*Gz));
-      Gx = Math.max(4, Math.round(Gx*k)); Gz = Math.max(4, Math.round(Gz*k));
-    }
+    // RECTANGULAR bilayer that ALWAYS spans the FULL embedded-complex extent (wide in X, shallow in Z).
+    // The whole sheet's instance buffers are uploaded up front (~75 KB per lipid), so TARGET_LIPIDS is a
+    // hard memory ceiling. Rather than shrink the sheet to hit that ceiling (which collapsed it into a
+    // small dense patch), we SPREAD the budget over the whole area: the pitch S is the larger of the
+    // tight interdigitated packing and the area-budget pitch, so the sheet fills the box at the densest
+    // packing the budget allows over that full span.
+    const TARGET_LIPIDS = 20000;   // ~1.5 GB of instance buffers
+    const areaPitch = Math.sqrt((4*memHalfX*memHalfZ) / Math.max(1, TARGET_LIPIDS/2));   // pitch that spreads the budget over the whole sheet
+    const S = Math.max(Math.max(xr,zr)*0.46, areaPitch, 5);
+    const Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
     const halfX=(Gx-1)*S*0.5, halfZ=(Gz-1)*S*0.5;
     const JIT = S*0.16;   // per-tile in-plane position jitter → breaks the crystalline grid
     bilayerHalf = Math.max(halfX, halfZ) + Math.max(xr,zr) + JIT;
@@ -2829,14 +2824,10 @@ async function run(){
     const box=BABYLON.MeshBuilder.CreateLineSystem('cbox',{lines:E.map(e=>[new BABYLON.Vector3(...V[e[0]]), new BABYLON.Vector3(...V[e[1]])])},scene);
     box.color=new BABYLON.Color3(0.42,0.5,0.6); box.alpha=0.5; box.isPickable=false;
 
-    // Inner reference cage, centred on the molecule. Its mid-Z plane is the flat 2-D
-    // sheet onto which hand-spawned atoms are dropped (all share this z).
+    // Spawn plane for hand-dropped atoms: the mid-Z plane through the scene centre, bounded to a
+    // region around the models. (The inner reference cage that used to visualise this was removed.)
     const gcx=(gMiX+gMaX)/2, gcy=(gMiY+gMaY)/2, gcz=(gMiZ+gMaZ)/2;
-    const iw=(gMaX-gMiX)*0.28+6, ih=(gMaY-gMiY)*0.28+6, id=(gMaZ-gMiZ)*0.28+6;
-    const iV=[[gcx-iw,gcy-ih,gcz-id],[gcx+iw,gcy-ih,gcz-id],[gcx+iw,gcy-ih,gcz+id],[gcx-iw,gcy-ih,gcz+id],
-              [gcx-iw,gcy+ih,gcz-id],[gcx+iw,gcy+ih,gcz-id],[gcx+iw,gcy+ih,gcz+id],[gcx-iw,gcy+ih,gcz+id]];
-    const ibox=BABYLON.MeshBuilder.CreateLineSystem('cboxInner',{lines:E.map(e=>[new BABYLON.Vector3(...iV[e[0]]), new BABYLON.Vector3(...iV[e[1]])])},scene);
-    ibox.color=new BABYLON.Color3(0.62,0.55,0.4); ibox.alpha=0.55; ibox.isPickable=false;
+    const iw=(gMaX-gMiX)*0.28+6, ih=(gMaY-gMiY)*0.28+6;
     gSpawnPlaneZ = gcz;
     gSpawnBounds = {x0:gcx-iw, x1:gcx+iw, y0:gcy-ih, y1:gcy+ih};
 
