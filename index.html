@@ -1638,20 +1638,22 @@ async function run(){
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
       showTips();
-      if(e.button === 2){   // RIGHT = grab-pan only (never rotates). Anchor the depth to whatever is under the cursor.
-        panning = true; dragging = true;
-        pickModelAtCursor(); panDepth = isFinite(_modelPickT) ? _modelPickT : Math.abs(cam.radius);
+      if(e.button === 2){   // RIGHT = grab-pan only (never rotates). Anchor the depth to the EXACT point
+        panning = true; dragging = true;                    // under the cursor so it stays glued there while panning.
+        scene.stopAnimation(cam);   // a focus animation (from selecting an atom) would otherwise keep resetting the target → pan looked dead
+        cam.inertialPanningX = cam.inertialPanningY = cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
+        const a = pickAtom();
+        if(a) panDepth = BABYLON.Vector3.Distance(cam.position, a.center);   // grabbed an atom → its true depth
+        else { pickModelAtCursor();   // else a complex's surface; if the camera is INSIDE its box (entry ≈ 0,
+          panDepth = (isFinite(_modelPickT) && _modelPickT > 0.5) ? _modelPickT : Math.abs(cam.radius); }  // e.g. focused on a selected atom) fall back to the pivot distance, never 0
         return;
       }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;
         if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it instead of rotating
-        // Left-drag on the ALREADY-SELECTED complex moves it (selection itself is double-click only).
-        if(!spawnEl && gSelModel >= 0 && pickModelAtCursor() === gSelModel){ startModelDrag(gSelModel); return; }
-        dragging = true; snappedDrag = false; }
+        dragging = true; snappedDrag = false; }   // moving a complex is done with the 3-D gizmo now, not a body-drag
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
       if(e.button === 2){ panning = false; return; }
-      if(modelDrag >= 0){ endModelDrag(); return; }             // finished moving a complex
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0]; return; }   // finished moving a spawned atom
       if(e.button === 0){
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
@@ -1662,7 +1664,6 @@ async function run(){
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
       if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // right-drag grab-pan
-      if(modelDrag >= 0){ modelDragMove(); return; }           // dragging the selected complex
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
       if(e.buttons & 4){ dragZoom(e.movementY || 0); showTips(); return; }   // middle held = zoom
       // Left-drag rotation ALWAYS orbits the current selection (atom or whole complex): on the first
@@ -3193,11 +3194,16 @@ async function run(){
   modelNode.rotationQuaternion = BABYLON.Quaternion.Identity();
   const modelGizmo = new BABYLON.PositionGizmo(gizmoLayer);
   const modelRotGizmo = new BABYLON.RotationGizmo(gizmoLayer);
-  modelGizmo.scaleRatio = 1.2; modelRotGizmo.scaleRatio = 1.2;
+  modelGizmo.scaleRatio = 0.5; modelRotGizmo.scaleRatio = 0.5;   // smaller than the old 1.2
   modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
   // Keep the gizmos world-aligned (upright) instead of tilting with the model's rotation.
   modelGizmo.updateGizmoRotationToMatchAttachedMesh = false;
   modelRotGizmo.updateGizmoRotationToMatchAttachedMesh = false;
+  // Recolour the axes to the Solukko palette: X = dark brown, Y = sage, Z = beige (instead of RGB).
+  { const SAGE3=new BABYLON.Color3(0.55,0.68,0.47), BROWN3=new BABYLON.Color3(0.29,0.20,0.125), BEIGE3=new BABYLON.Color3(0.85,0.74,0.55);
+    const paint=(ax,col)=>{ for(const key of ['coloredMaterial','disableMaterial']){ const m=ax[key]; if(m){ m.diffuseColor=col.clone(); m.emissiveColor=col.clone(); } }
+      if(ax.hoverMaterial){ ax.hoverMaterial.diffuseColor=col.scale(1.4); ax.hoverMaterial.emissiveColor=col.scale(1.4); } };
+    for(const G of [modelGizmo, modelRotGizmo]){ paint(G.xGizmo, BROWN3); paint(G.yGizmo, SAGE3); paint(G.zGizmo, BEIGE3); } }
   // Undo history for per-model moves/rotations. Each entry is one model's full transform state
   // (its translation offset + rotation quaternion) captured at the START of a drag gesture, so one
   // Ctrl+Z reverts one complete drag. Snapshots are tiny (7 numbers), so we keep a deep stack.
@@ -3239,21 +3245,14 @@ async function run(){
   const selectModel = mid => { gSelModel = mid; const mi=mInfo[mid];
     modelNode.position.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]);
     modelNode.rotationQuaternion = new BABYLON.Quaternion(gModelQuat[mid*4], gModelQuat[mid*4+1], gModelQuat[mid*4+2], gModelQuat[mid*4+3]);
-    refreshModelLabel(); showGizmoUI(mid);                 // the move/rotate handles live in the UI panel now (not on the model)
+    refreshModelLabel();
+    modelGizmo.attachedNode = modelNode; modelRotGizmo.attachedNode = modelNode;   // the 3-D move/rotate gizmo, back on the model
     highlightModel(mid);                                   // thick sage silhouette on the selected complex
     orbitLocked = true;                                    // camera orbits the complex you picked
     orbitCenter.set(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]); };
-  // Direct left-drag on the selected complex moves it in the camera plane (mirrors the UI move pad).
-  const _mdPlanePt = () => { const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
-    const n = cam.getForwardRay(1).direction, c = modelNode.position;
-    const denom = BABYLON.Vector3.Dot(ray.direction, n); if(Math.abs(denom) < 1e-6) return null;
-    return ray.origin.add(ray.direction.scale(BABYLON.Vector3.Dot(c.subtract(ray.origin), n) / denom)); };
-  const _mdPrevPt = new BABYLON.Vector3(); let _mdHasPt = false;
-  const startModelDrag = mid => { modelDrag = mid; _mdHasPt = false; snapshotModel(mid); cam.detachControl(); dragging = false; };
-  const modelDragMove = () => { const q = _mdPlanePt(); if(!q) return;
-    if(_mdHasPt){ modelNode.position.addInPlace(q.subtract(_mdPrevPt)); applyModelTransform(); }
-    _mdPrevPt.copyFrom(q); _mdHasPt = true; };
-  const endModelDrag = () => { if(modelDrag < 0) return; modelDrag = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [0]; };
+  // Dragging a gizmo axis moves modelNode → bake that into the model's baked transform + label.
+  modelGizmo.onDragObservable.add(applyModelTransform);
+  modelRotGizmo.onDragObservable.add(applyModelTransform);
 
   /* ── UI gizmo panel (sits in the corner above the speed slider, NOT on the model) ───────────────
      Two drag pads drive the SELECTED complex: "kierrä" rotates it about the camera's own axes,
@@ -3927,7 +3926,7 @@ async function run(){
     hideSelElec(); orbitLocked = false; orbitCenter.set(1e6,1e6,1e6); selAtom = null; gFocusId = -1; hideConfig();
   };
   // Clear the current MODEL selection (hide the UI gizmo panel, drop the sage halo + label).
-  const deselectModel = () => { gSelModel = -1; hideGizmoUI();
+  const deselectModel = () => { gSelModel = -1; modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
     modelLabel.style.display = 'none'; highlightModel(-1); };
   const centerOnAtom = (a) => {
     if(!a) a = pickAtom(); if(!a) return;
