@@ -156,7 +156,7 @@ body.dark-mode{
 </div>
 <button id="darkmode-btn" title="Vaihda tummatila"><span id="darkmode-icon">☀️</span>Teema</button>
 <button id="gfx-btn" title="Vaihda esitystapa (orbitaalit ↔ vdW-pallot)"><span id="gfx-icon">⬤</span><span id="gfx-label">vdW-pallot</span></button>
-<button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Alkuaineet</span></button>
+<button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Mallit</span></button>
 <button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (klorofyllit, karotenoidit, kinonit, hemit, feofytiini, Tyr Z, OEC, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
 <button id="dev-btn" title="Dev-tila: mallien siirto/kierto-työkalu + sijaintimerkinnät"><span id="dev-icon">🛠️</span><span id="dev-label">Dev</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
@@ -1931,7 +1931,7 @@ async function run(){
   const gModelXform = new Float32Array(MAX_MODELS*16);   // per-model full transform (rotate around centre + translate) → bound as modelXform[]
   const gModelQuat = new Float32Array(MAX_MODELS*4);     // per-model rotation quaternion (x,y,z,w)
   for(let i=0;i<MAX_MODELS;i++){ gModelXform[i*16]=1; gModelXform[i*16+5]=1; gModelXform[i*16+10]=1; gModelXform[i*16+15]=1; gModelQuat[i*4+3]=1; }   // identity
-  let gColorMode = false;                             // false = colour by element, true = one pastel per model
+  let gColorMode = true;                              // false = colour by element, true = one pastel per model (DEFAULT)
   const gModelCol = new Float32Array(MAX_MODELS*3);   // per-model pastel colour (bound as modelCol[])
   { const N = Math.max(1, mols.length);               // spread hues → a distinct pastel per model
     for(let i=0;i<MAX_MODELS;i++){ const h=(i/N)%1, s=0.5, l=0.74, a=s*Math.min(l,1-l);
@@ -2631,6 +2631,8 @@ async function run(){
     const tPosV = [ Array.from({length:NV},(_,v)=>applyVar(tPos[0],v)), Array.from({length:NV},(_,v)=>applyVar(tPos[1],v)) ];
     // Build ONE lipid's lobes with exactly the protein's representation: core (non-hybridised)
     // orbitals, hybridised σ bonds with back-knobs, π lobes, and VSEPR lone pairs.
+    // Membrane palette: yellow overall, POLAR heads (O/P/N) orange — instead of per-element colours.
+    const lipCol = e => { const s = EL_LIST[e]; return (s==='O'||s==='P'||s==='N') ? [1.0,0.55,0.10] : [0.96,0.80,0.28]; };
     const buildLobes = pos => {
       const core={m:[],col:[],cen:[],oid:[]}, bond={m:[],tap:[],col:[],cen:[],oid:[]}, tmp=new Float32Array(16);
       const pushCore=(c,cx,cy,cz,oid)=>{ for(let j=0;j<16;j++) core.m.push(tmp[j]);
@@ -2639,7 +2641,7 @@ async function run(){
         for(let j=0;j<16;j++) bond.m.push(tmp[j]);
         bond.tap.push(tap); bond.col.push(c[0],c[1],c[2]); bond.cen.push(cx,cy,cz); bond.oid.push(oid); };
       for(let k=0;k<LN;k++){ const e=lipid.el[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
-        const cx=pos[k*3], cy=pos[k*3+1], cz=pos[k*3+2], c=info(e).c;
+        const cx=pos[k*3], cy=pos[k*3+1], cz=pos[k*3+2], c=lipCol(e);
         for(const sh of cfg){ const n=sh[0], ty=sh[1], R=n*SHELL_STEP, oid=n*100+ty*10;
           if(maxNe>1 && n===maxNe && ty<=1) continue;   // valence s/p hybridised → the bonds represent them
           if(ty===0){ sphereMat(cx,cy,cz,R*0.72,tmp,0); pushCore(c,cx,cy,cz,oid); }
@@ -2654,7 +2656,7 @@ async function run(){
       for(let b=0;b<NBL;b++){ const i=lipid.b1[b], j=lipid.b2[b], bo=lipid.bo[b]||1;
         const x1=pos[i*3],y1=pos[i*3+1],z1=pos[i*3+2], x2=pos[j*3],y2=pos[j*3+1],z2=pos[j*3+2];
         const bx=x2-x1,by=y2-y1,bz=z2-z1, bdir=nrm([bx,by,bz]), f=0.62;
-        const c1=info(lipid.el[i]).c, c2=info(lipid.el[j]).c, kL=0.24, kW=LOBE_W*0.5;
+        const c1=lipCol(lipid.el[i]), c2=lipCol(lipid.el[j]), kL=0.24, kW=LOBE_W*0.5;
         put(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, LOBE_W,1.0,c1, x1,y1,z1, 1000+(hyb++));   // σ
         put(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, LOBE_W,1.0,c2, x2,y2,z2, 1000+(hyb++));
         if(EL_LIST[lipid.el[i]]!=='H') put(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, kW,1.0,c1, x1,y1,z1, 1000);   // back knob
@@ -2669,7 +2671,7 @@ async function run(){
               put(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, pw,1.0,c1, x1,y1,z1, 900);
               put(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, pw,1.0,c2, x2,y2,z2, 900); } } } }
       for(let k=0;k<LN;k++){ const lpn=lonePairs(lipid.el[k]); if(lpn===0||bd[k].length===0) continue;
-        const ax=pos[k*3],ay=pos[k*3+1],az=pos[k*3+2], c=info(lipid.el[k]).c; let li=0;
+        const ax=pos[k*3],ay=pos[k*3+1],az=pos[k*3+2], c=lipCol(lipid.el[k]); let li=0;
         for(const d of lonePairDirs(bd[k],lpn)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az, 2000+(li++)); }
       return {core, bond};
     };
@@ -2704,7 +2706,7 @@ async function run(){
         for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
           const v=tileVar(gi,gj,leaf), jt=tileJit(gi,gj,leaf), tp=tPosV[leaf][v], t=TV[leaf][v];   // per-tile rotamer + jitter
           const ox=bilayerCen.x+gi*S-halfX+jt[0], oy=bilayerCen.y+jt[1], oz=bilayerCen.z+gj*S-halfZ+jt[2]; bcx+=ox; bcz+=oz;
-          for(let k=0;k<LN;k++){ const el=lipid.el[k], cc=info(el).c, o=si*16;
+          for(let k=0;k<LN;k++){ const el=lipid.el[k], cc=lipCol(el), o=si*16;
             sM[o]=1;sM[o+5]=1;sM[o+10]=1;sM[o+15]=1;
             sM[o+12]=tp[k*3]+ox; sM[o+13]=tp[k*3+1]+oy; sM[o+14]=tp[k*3+2]+oz;
             sC[si*4]=cc[0];sC[si*4+1]=cc[1];sC[si*4+2]=cc[2];sC[si*4+3]=0; sR[si]=info(el).vr*FILL_SCALE; si++; }
@@ -3005,7 +3007,9 @@ async function run(){
   };
   const SAGE = new BABYLON.Color3(0.60,0.72,0.53);                                              // muted sage green — the one selection colour, everywhere
   const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66, 2.6);            // hover = thin white, hugs the lobe edge
-  const selMat = mkOutlineMat('selMat', SAGE,                      0.85, 0.66, 7.0);            // selection = THICK sage stroke → unmistakable against the muted palette
+  const selMat = mkOutlineMat('selMat', SAGE,                      0.85, 0.66, 7.0);            // cofactor selection outline (etcSelOut) = sage
+  const flashMat = mkOutlineMat('flashMat', new BABYLON.Color3(0.05,0.30,0.08), 0.80, 0.66, 12.0);   // atom-select FLASH: thick dark green
+  const focusMat = mkOutlineMat('focusMat', new BABYLON.Color3(0.29,0.20,0.125), 0.86, 0.66, 5.0);   // panel orbital-isolate: dark brown, on the one orbital
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
   hl.renderingGroupId = 3;                                     // outlines drawn topmost (Babylon allows only groups 0-3)
@@ -3040,10 +3044,17 @@ async function run(){
       return m;
     }
     const e = atom.e, cnt = orbCount(e), ob = orbBuf[e], oidb = orbIdBuf[e], base = atom.idx*cnt*16, oidBase = atom.idx*cnt;
+    // The panel lists ATOMIC orbitals. A core orbital (e.g. 1s) maps to its own lobe by exact oid. A valence
+    // s/p (2s/2p, i.e. n = maxN, l ≤ 1) may be either atomic (unbonded atom → still in orbBuf by exact oid) OR
+    // hybridised (bonded atom → its atomic lobe is zeroed, the real lobes are the σ/π/lone-pairs at oid ≥ 900).
+    // So a valence isolate matches EITHER the exact atomic oid OR any valence lobe.
+    const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
+    const focValence = foc >= 0 && Math.floor(foc/100) === maxN && Math.floor((foc%100)/10) <= 1;
+    const lobeMatch = lo => (Math.abs(lo - foc) < 0.5) || (focValence && lo >= 900.0);
     let n = 0;
     for(let i=0;i<cnt;i++){ const s=base+i*16;
       if(ob[s]*ob[s]+ob[s+1]*ob[s+1]+ob[s+2]*ob[s+2] < 1e-9) continue;   // skip invisible (hybridised) lobe
-      if(foc >= 0 && Math.abs(oidb[oidBase+i] - foc) > 0.5) continue;    // focus filter
+      if(foc >= 0 && !lobeMatch(oidb[oidBase+i])) continue;    // focus filter
       const o=n*16; for(let j=0;j<16;j++) buf[o+j]=ob[s+j]; n++;
     }
     const cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
@@ -3058,14 +3069,14 @@ async function run(){
       if(kf[i]) continue;                                // skip the small back-knobs → clean outline (no central scribble)
       const dx=ce[i*3]-cx, dy=ce[i*3+1]-cy, dz=ce[i*3+2]-cz;
       if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
-      if(foc >= 0 && Math.abs(co[i] - foc) > 0.5) continue;   // focus filter (per orbital)
+      if(foc >= 0 && !lobeMatch(co[i])) continue;   // focus filter (per orbital; valence → hybrid σ/π lobes)
       copyLobe(cb, i*16, wb[i]);
     }
     const lb=lpBuf[e], le=lpCenBuf[e], lo=lpOidBuf[e];   // lone pairs (taper = 1)
     if(lb) for(let i=0;i<lpIdx[e] && n<OUT_MAX;i++){
       const dx=le[i*3]-cx, dy=le[i*3+1]-cy, dz=le[i*3+2]-cz;
       if(dx*dx+dy*dy+dz*dz > 1e-4) continue;
-      if(foc >= 0 && Math.abs(lo[i] - foc) > 0.5) continue;   // focus filter (per orbital)
+      if(foc >= 0 && !lobeMatch(lo[i])) continue;   // focus filter (per orbital; valence → lone pairs)
       copyLobe(lb, i*16, 1.0);
     }
     return n;
@@ -3075,7 +3086,7 @@ async function run(){
      thin BLUE outline tracing every one of its orbital lobes AND its bonding lobes,
      drawn topmost (group 1, depth pre-cleared, no self-occlusion). */
   const selOut = BABYLON.MeshBuilder.CreateSphere('selOut', {diameter:1, segments:8}, scene);
-  selOut.material = selMat; selOut.isPickable = false; selOut.setEnabled(false);
+  selOut.material = flashMat; selOut.isPickable = false; selOut.setEnabled(false);   // material swaps: flashMat on select, focusMat on panel isolate
   selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
@@ -3088,6 +3099,19 @@ async function run(){
     selMask.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selMask.thinInstanceCount = n;
     selMask.setEnabled(true);
+  };
+  // Atom-select highlight: a thick dark-green outline that FLASHES 3× then vanishes (no persistent
+  // orbital outline). The nucleus/electron/mask stay; only this stroke blinks.
+  let flashTimer = null;
+  const flashOutline = () => {
+    clearTimeout(flashTimer);
+    selOut.material = flashMat;
+    const seq = [true,false,true,false,true,false];   // three on-flashes
+    let i = 0;
+    const tick = () => { selOut.setEnabled(seq[i]); i++;
+      if(i < seq.length) flashTimer = setTimeout(tick, 175);
+      else { selOut.setEnabled(false); flashTimer = null; } };
+    tick();
   };
 
   /* Stencil mask: the selected atom's own lobes rendered solid (colour-write off) with the
@@ -3935,7 +3959,11 @@ async function run(){
         for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className='orb-e'; box.appendChild(dot); }
         chip.appendChild(box);
         chip.title = ne + ' electron' + (ne===1?'':'s');
-        chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t; setSelOut(atom); paint(); };
+        chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t;
+          clearTimeout(flashTimer); flashTimer = null;   // isolating an orbital cancels the select-flash
+          if(gFocusId >= 0){ selOut.material = focusMat; setSelOut(atom); }   // persistent dark-brown outline on the isolated orbital
+          else { setSelOut(atom); selOut.setEnabled(false); }                 // de-isolate → rebuild the mask, hide the outline
+          paint(); };
         chips.push(chip); chipsWrap.appendChild(chip);
       }
       rung.appendChild(ev); rung.appendChild(chipsWrap); stack.appendChild(rung);
@@ -3947,6 +3975,7 @@ async function run(){
 
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
   const clearAtomSel = () => {
+    clearTimeout(flashTimer); flashTimer = null;   // stop a running flash so it can't re-show the outline
     selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false);
     hideSelElec(); orbitLocked = false; orbitCenter.set(1e6,1e6,1e6); selAtom = null; gFocusId = -1; hideConfig();
   };
@@ -3959,7 +3988,8 @@ async function run(){
     orbitCenter.copyFrom(a.center); // …and becomes the camera pivot
     orbitLocked = true;             // rotation always orbits this atom while it stays selected
     selAtom = a; gFocusId = -1;      // new selection → show all its orbitals
-    setSelOut(a);                   // persistent blue outline tracing all its orbital + bonding lobes, topmost
+    setSelOut(a);                   // build the atom's lobe geometry (feeds the mask + the flash)
+    flashOutline();                 // dark-green thick outline flashes 3× to highlight the atom, then vanishes
     setSelNuc(a);                   // show the nucleus on top of the orbitals
     setSelElec(a);                  // electron poke-through, this atom only
     showConfig(a);                  // electron-configuration panel, bottom-right
