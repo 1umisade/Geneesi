@@ -615,10 +615,7 @@ void main(void){
   vec3 wn = cross(M1,M2)*sn.x + cross(M2,M0)*sn.y + cross(M0,M1)*sn.z;
   vNrmV = (view * vec4(wn, 0.0)).xyz;
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
-  vBcol = bcol;
-#ifdef MODELMOVE
-  if(colorMode > 0.5) vBcol = modelCol[int(modelId + 0.5)];
-#endif
+  vBcol = bcol;   // bonding lobes ALWAYS keep their element colour — per-model pastel applies to the vdW spheres only
   vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;   // ⊥ distance from the view axis (reveal tube)
   gl_Position = projection * vp;
@@ -857,10 +854,7 @@ void main(void){
   vec3 M0=world0.xyz, M1=world1.xyz, M2=world2.xyz;   // cofactor matrix → correct normal under the lobe's non-uniform scale
   vec3 wn = cross(M1,M2)*normal.x + cross(M2,M0)*normal.y + cross(M0,M1)*normal.z;
   vNrmV = (view * vec4(wn, 0.0)).xyz;
-  vCol = ocol;
-#ifdef MODELMOVE
-  if(colorMode > 0.5) vCol = modelCol[int(modelId + 0.5)];
-#endif
+  vCol = ocol;   // orbitals ALWAYS keep their element colour — per-model pastel applies to the vdW spheres only
   vSel = step(distance(ocen, selCenter), 0.6);   // 1 = belongs to the selected atom
   vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;   // ⊥ distance from the view axis (reveal tube)
@@ -1025,10 +1019,7 @@ void main(void){
   vec3 M0=world0.xyz, M1=world1.xyz, M2=world2.xyz;
   vec3 wn = cross(M1,M2)*normal.x + cross(M2,M0)*normal.y + cross(M0,M1)*normal.z;
   vNrmV = (view * vec4(wn, 0.0)).xyz;
-  vCol = ocol;
-#ifdef MODELMOVE
-  if(colorMode > 0.5) vCol = modelCol[int(modelId + 0.5)];
-#endif
+  vCol = ocol;   // orbitals ALWAYS keep their element colour — per-model pastel applies to the vdW spheres only
   vSel = step(distance(ocen, selCenter), 0.6);
   vOid = oid;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;
