@@ -530,7 +530,10 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
-  float rim = smoothstep(0.86, 1.0, r2);   // slightly wider+deeper ink band → crevices read on mid-gray carbon too
+  // Ink outline band. Normally starts at 0.86 (width 0.14). For atoms REVEALING orbitals (glass shells)
+  // start it at 0.965 (width 0.035 ≈ 4× thinner) so the thin rim doesn't obscure the orbitals inside.
+  float rimStart = mix(0.86, 0.965, (isShell > 0.5) ? reveal : 0.0);
+  float rim = smoothstep(rimStart, 1.0, r2);
   if(protonOutline > 0.5 && vFlag > 0.5){
     float pf = pow(1.0 - zc, 1.6);                           // broad, soft Fresnel (zc = sqrt(1-r2)) → hazy edge
     col = mix(col, vec3(1.0, 0.18, 0.18), pf) + vec3(0.40, 0.0, 0.0) * pf;   // hazy red glow on protons
@@ -1448,10 +1451,11 @@ async function run(){
     {match:'q9s713', x:-360, y:230,  z:90,   label:'STN7'},
     {match:'4yzg',   x:-470, y:220,  z:-80,  label:'PPH1'},
     {match:'q9fgc7', x:-640, y:230,  z:0,    label:'Zeaxanthin epoxidase'},
+    {match:'chlorophyll', x:-560, y:150, z:130, label:'Chlorophyll'},   // one CLA plucked from PSII → its own file
   ];
   const FILES = ['PSII.mol2','photosystem_I.mol2','cytochrome_b6f.mol2','ATP_synthase.mol2','NDH-1.mol2',
     'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','plastocyanin.mol2','PGR5.mol2',
-    'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2'];
+    'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2','chlorophyll.mol2'];
   const barEl = document.getElementById('load-bar');
   setLbl('Fetching thylakoid models…');
   const mols = [];
@@ -1475,7 +1479,7 @@ async function run(){
   if(mols.length === 0) throw new Error('No models loaded — are the .mol2 files next to index.html?');
   setLbl('Placing complexes…'); await yield_();
   const psii = mols.find(m => m.cfg && m.cfg.match==='3jcu') || mols[0];
-  const chl = extractChlorophyll(psii);          // one chlorophyll extracted from PSII, animated
+  const chl = null;   // chlorophyll is now a normal model (chlorophyll.mol2), not a runtime-extracted showcase — every `if(chl)`/`m===chl` guard below no-ops
   const lipid = extractLipid(psii);              // one lipid → tiled into the bilayer
 
   // Rotate every model 90° about Z (as before) so complexes stand upright-ish across the membrane.
@@ -2277,13 +2281,14 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
-    etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('bubbleR',1e9);
+    etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
     etcMat.onBindObservable.add(()=>{ const eff=etcMat.getEffect(); if(!eff)return;
       eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode)
+      eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
