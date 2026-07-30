@@ -234,6 +234,16 @@ const ELEM_NAME = {
   CL:'Chlorine', NA:'Sodium', K:'Potassium', CO:'Cobalt', FB:'Atom',
 };
 const elemName = code => ELEM_NAME[EL_LIST[code]] || EL_LIST[code] || 'Atom';
+/* Finnish element names → the panel title reads "<name>atomi" (e.g. Hiili → "Hiiliatomi"). */
+const ELEM_NAME_FI = {
+  H:'Vety', C:'Hiili', N:'Typpi', O:'Happi', S:'Rikki', P:'Fosfori',
+  MG:'Magnesium', FE:'Rauta', MN:'Mangaani', CA:'Kalsium', ZN:'Sinkki', CU:'Kupari',
+  CL:'Kloori', NA:'Natrium', K:'Kalium', CO:'Koboltti',
+};
+const elemNameFi = code => { const n = ELEM_NAME_FI[EL_LIST[code]];
+  if(!n) return 'Atomi';
+  return n + (/a$/i.test(n) ? '-' : '') + 'atomi';   // "Rauta" → "Rauta-atomi" (a+a needs a hyphen), else just append
+};
 
 /* ── Element registry (symbol ↔ small integer code) ───────────────────── */
 const EL_CODE = new Map(), EL_LIST = [];
@@ -3829,7 +3839,7 @@ async function run(){
   let selAtom = null;
   const econfPanel = document.createElement('div');
   econfPanel.id = 'econf';
-  econfPanel.style.cssText = 'display:none;pointer-events:auto;padding:16px 18px;max-width:none;width:max-content;';
+  econfPanel.style.cssText = 'display:none;pointer-events:auto;padding:16px 18px;max-width:none;width:max-content;max-height:92vh;overflow-y:auto;';
   // Bottom-right stack: hybridisation panel on top, the spawn element table below.
   const brStack = document.createElement('div'); brStack.id = 'br-stack';
   brStack.appendChild(econfPanel);
@@ -4120,7 +4130,7 @@ async function run(){
   prevOrbMat.setFloat('bubbleR',1e9); prevOrbMat.setFloat('nElec',2); prevOrbMat.setFloat('coneCos',-1.0);
   prevOrbMat.setFloat('drawElec',1); prevOrbMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6));
   prevOrbMat.setFloat('focusId',-1); prevOrbMat.backFaceCulling=true;
-  prevOrbMat.onBindObservable.add(()=>{ const eff=prevOrbMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
+  prevOrbMat.onBindObservable.add(()=>{ const eff=prevOrbMat.getEffect(); if(!eff)return; eff.setFloat('uT',0.0);   // uT=0 → static capture (no thermal jitter)
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9); });
   const prevOrb = BABYLON.MeshBuilder.CreateSphere('prevOrb',{segments:10,diameter:1},scene);
   prevOrb.material=prevOrbMat; prevOrb.isPickable=false; prevOrb.alwaysSelectAsActiveMesh=true; prevOrb.layerMask=PREV_MASK; prevOrb.thinInstanceCount=0;
@@ -4136,30 +4146,69 @@ async function run(){
   const prevNuc = BABYLON.MeshBuilder.CreatePlane('prevNuc',{size:2},scene);
   prevNuc.material=prevNucMat; prevNuc.isPickable=false; prevNuc.alwaysSelectAsActiveMesh=true; prevNuc.layerMask=PREV_MASK; prevNuc.renderingGroupId=1; prevNuc.thinInstanceCount=0;
   prevRTT.renderList = [prevOrb, prevNuc];
-  const renderAtomPreview = (atom, canvas) => {
-    const e = atom.e;
-    // The panel header now shows the NUCLEUS (protons red · neutrons grey) — no orbital lobes.
-    prevOrb.thinInstanceCount = 0;
-    const A = info(e).n, Zz = info(e).z, nM=new Float32Array(A*16), nC=new Float32Array(A*4);
+  const prevOrbBuf = new Float32Array(OUT_MAX*16);
+  // prevOrb ← the atom's real lobes (core shells + σ/π hybrids + lone pairs), centred on the origin so
+  // the preview camera frames them. Same 'orb' shader as the 3-D scene. Returns the bounding radius.
+  const buildOrb = atom => {
+    const e = atom.e, col = info(e).c;
+    const n = fillOutline(prevOrbBuf, atom, false);            // every lobe (ignore any orbital-isolate)
+    const cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    const oc = new Float32Array(n*3), cen = new Float32Array(n*3), oid = new Float32Array(n);
+    let maxR = 0.6;
+    for(let i=0;i<n;i++){ const o=i*16;
+      prevOrbBuf[o+12]-=cx; prevOrbBuf[o+13]-=cy; prevOrbBuf[o+14]-=cz;   // centre on the origin
+      oc[i*3]=col[0]; oc[i*3+1]=col[1]; oc[i*3+2]=col[2];
+      const s0=Math.hypot(prevOrbBuf[o],prevOrbBuf[o+1],prevOrbBuf[o+2]);
+      const s1=Math.hypot(prevOrbBuf[o+4],prevOrbBuf[o+5],prevOrbBuf[o+6]);
+      const s2=Math.hypot(prevOrbBuf[o+8],prevOrbBuf[o+9],prevOrbBuf[o+10]);
+      const reach = Math.hypot(prevOrbBuf[o+12],prevOrbBuf[o+13],prevOrbBuf[o+14]) + 0.5*Math.max(s0,s1,s2);
+      if(reach>maxR) maxR=reach; }
+    prevOrb.thinInstanceSetBuffer('matrix', prevOrbBuf.subarray(0,n*16),16,true);
+    prevOrb.thinInstanceSetBuffer('ocol', oc,3,true);
+    prevOrb.thinInstanceSetBuffer('ocen', cen,3,true);
+    prevOrb.thinInstanceSetBuffer('oid', oid,1,true);
+    prevOrb.thinInstanceCount = n;
+    return maxR;
+  };
+  // prevNuc ← the nucleons (protons red · neutrons grey), centred.
+  const buildNuc = atom => {
+    const e = atom.e, A = info(e).n, Zz = info(e).z, nM=new Float32Array(A*16), nC=new Float32Array(A*4);
     for(let i=0;i<A;i++){ const proton=Math.floor((i+1)*Zz/A)>Math.floor(i*Zz/A), o=i*16;
       nM[o]=1;nM[o+5]=1;nM[o+10]=1;nM[o+15]=1;
       nM[o+12]=fcc[i][0]*SPACING; nM[o+13]=fcc[i][1]*SPACING; nM[o+14]=fcc[i][2]*SPACING;
       const cc=proton?[1.0,0.5,0.5]:[0.62,0.62,0.62]; nC[i*4]=cc[0];nC[i*4+1]=cc[1];nC[i*4+2]=cc[2];nC[i*4+3]=0; }
     prevNuc.thinInstanceSetBuffer('instanceColor',nC,4,true); prevNuc.thinInstanceSetBuffer('matrix',nM,16,true); prevNuc.thinInstanceCount=A;
-    prevCam.setTarget(BABYLON.Vector3.Zero()); prevCam.radius = Math.max(0.11, nucClusterR(e) * 3.0);   // frame the whole nucleus
-    // Render + capture. Retry until the shaders are ready (RTT comes back with opaque pixels).
-    const capture = tries => { prevRTT.render();
-      Promise.resolve(prevRTT.readPixels()).then(buf => { if(!buf) return;
+  };
+  // Render whatever is on prevRTT.renderList into `canvas`, retrying until the pixels come back opaque.
+  const capturePreview = canvas => new Promise(resolve => {
+    const cap = tries => { prevRTT.render();
+      Promise.resolve(prevRTT.readPixels()).then(buf => { if(!buf){ resolve(); return; }
         let opaque=false; for(let i=3;i<buf.length;i+=4){ if(buf[i]>8){ opaque=true; break; } }
-        if(!opaque && tries>0){ requestAnimationFrame(()=>capture(tries-1)); return; }
+        if(!opaque && tries>0){ requestAnimationFrame(()=>cap(tries-1)); return; }
         const sz=prevRTT.getSize(), W=sz.width, H=sz.height, cw=canvas.width, ch=canvas.height;
         const ctx=canvas.getContext('2d'), img=ctx.createImageData(cw,ch);
         for(let y=0;y<ch;y++){ const sy=Math.min(H-1, Math.floor((ch-1-y)*H/ch));
           for(let x=0;x<cw;x++){ const sx=Math.min(W-1, Math.floor(x*W/cw)), si=(sy*W+sx)*4, di=(y*cw+x)*4;
             img.data[di]=buf[si]; img.data[di+1]=buf[si+1]; img.data[di+2]=buf[si+2]; img.data[di+3]=buf[si+3]; } }
-        ctx.putImageData(img,0,0);
+        ctx.putImageData(img,0,0); resolve();
       }); };
-    capture(10);
+    cap(10);
+  });
+  // Two SEQUENTIAL captures (shared RTT → they must not overlap): orbitals → the big top canvas, then
+  // the nucleus → the small ydin canvas.
+  let prevGen = 0;
+  const renderPreviews = (atom, orbCanvas, nucCanvas) => {
+    const gen = ++prevGen;
+    const maxR = buildOrb(atom); buildNuc(atom);
+    prevCam.setTarget(BABYLON.Vector3.Zero());
+    prevCam.radius = Math.max(0.5, maxR * 2.0);   // frame the whole orbital cloud
+    prevRTT.renderList = [prevOrb];
+    capturePreview(orbCanvas).then(() => {
+      if(gen !== prevGen) return;   // a newer selection superseded this one → leave the shared RTT alone
+      prevCam.radius = Math.max(0.11, nucClusterR(atom.e) * 3.0);   // frame the whole nucleus
+      prevRTT.renderList = [prevNuc];
+      capturePreview(nucCanvas);
+    });
   };
 
   // A tiny SVG of the orbital's REAL shape for its config-panel button: s = sphere, p (π) = dumbbell,
@@ -4189,34 +4238,18 @@ async function run(){
     const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
     const bonds = (!atom.spawn && bondCntEA[e]) ? bondCntEA[e][atom.idx] : 0, sn = bonds + lonePairs(e);   // spawned atoms are unbonded
     const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
-    // Big full element NAME on top (e.g. "Carbon") — the shorthand symbol is no longer shown.
+    // ── Big orbital render on top (the atom's real lobes — same 'orb' shader as the 3-D scene) ──
+    const orbViz = document.createElement('canvas');
+    orbViz.width = orbViz.height = 256;
+    orbViz.style.cssText = 'width:270px;height:270px;display:block;margin:0 auto 2px;';
+    // Title: Finnish element name + "atomi" (e.g. "Hiiliatomi"), serif face like the sketch.
     const title = document.createElement('div');
-    title.textContent = elemName(e);
-    title.style.cssText = 'font-size:24px;font-weight:bold;color:var(--brown);margin-bottom:9px;letter-spacing:.3px;';
-    // A small STATIC render of the atom's NUCLEUS (protons red · neutrons grey), drawn ONCE with the
-    // scene's own imp shader (renderAtomPreview) so it matches the live look but never animates.
-    const atomViz = document.createElement('canvas');
-    atomViz.width = atomViz.height = 128;
-    atomViz.style.cssText = 'width:80px;height:80px;flex:0 0 auto;';
-    // ── ydin (nucleus) ──: a "ydin" caption, then the nucleus render + its proton/neutron count.
-    const ydinLbl = document.createElement('div');
-    ydinLbl.textContent = 'ydin';
-    ydinLbl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--brown);opacity:.7;margin-bottom:4px;';
-    const Nn = Math.max(0, info(e).n - Z);
-    const counts = document.createElement('div');
-    counts.style.cssText = 'font-size:16px;font-weight:bold;color:var(--ink);line-height:1.55;';
-    counts.innerHTML = '<span style="color:#c0403a;">'+Z+' protonia</span>'
-                     + (Nn>0 ? '<br><span style="color:#6a6a5a;">'+Nn+' neutronia</span>' : '');   // hide neutrons when there are none (H)
-    const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;gap:15px;margin-bottom:10px;';
-    header.appendChild(atomViz); header.appendChild(counts);
+    title.textContent = elemNameFi(e);
+    title.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:32px;font-weight:bold;color:var(--brown);text-align:center;margin:0 0 12px;letter-spacing:.3px;";
 
-    // ── elektronipilvi (electron cloud) ── ONE css-grid so every column shares an edge (perfect
-    //    alignment); the per-cell left borders join into continuous rules with no row gap. Rows are
-    //    grouped by shell ("1. kuori", "2. kuori" …) — orbitals in a shell share their energy.
-    const cloudLbl = document.createElement('div');
-    cloudLbl.textContent = 'elektronipilvi';
-    cloudLbl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--brown);opacity:.75;border-top:3px solid var(--brown);padding-top:9px;margin-bottom:2px;';
+    // ── Electron-cloud table ── one css-grid so every column shares an edge; per-cell left borders join
+    //    into continuous rules (no row gap). Shells run valence-first (top) → core (bottom), separated by
+    //    a plain horizontal rule (the "N. kuori" text is intentionally omitted).
     const EV_AJ = 0.1602176634;                        // 1 eV = 0.16022 aJ   (1 aJ = 1e-18 J)
     const fmtAJ = ev => { const a = Math.abs(ev) * EV_AJ; return (a >= 10 ? a.toFixed(0) : a.toFixed(2)).replace('.', ',') + ' aJ'; };
     const grid = document.createElement('div');
@@ -4230,17 +4263,16 @@ async function run(){
     // Group the atom's real orbitals by shell n (hybrids / π / lone pairs sit in the valence shell).
     const shellN = oid => oid >= 900 ? maxN : Math.floor(oid/100);
     const rows = actualOrbitals(atom).map(oid => ({ oid, ev: orbEnergyEV(e, oid, hyb, maxN), n: shellN(oid) }));
-    const shells = [...new Set(rows.map(r => r.n))].sort((a,b)=> a-b);
+    const shells = [...new Set(rows.map(r => r.n))].sort((a,b)=> b-a);   // valence shell (highest n) on top, core at the bottom
     const cellsByOid = new Map();
     let hovOid = -1;
     const repaint = () => { for(const [t,cells] of cellsByOid){ const on = (+t===gFocusId), hv = (+t===hovOid);
       const bg = on ? 'var(--sage)' : (hv ? 'var(--paper2)' : 'transparent');
       for(const c of cells) c.style.background = bg; } };
     for(const n of shells){
-      const head = document.createElement('div');   // "N. kuori" band spanning the whole width
-      head.textContent = n + '. kuori';
-      head.style.cssText = 'grid-column:1/-1;font-size:12px;font-weight:bold;color:var(--brown);opacity:.8;border-top:2px solid var(--brown);padding:5px 2px 3px;';
-      grid.appendChild(head);
+      const rule = document.createElement('div');   // plain horizontal rule between shells (no "kuori" text)
+      rule.style.cssText = 'grid-column:1/-1;border-top:2px solid var(--brown);margin-top:4px;';
+      grid.appendChild(rule);
       for(const {oid, ev} of rows.filter(r => r.n===n).sort((a,b)=> a.ev - b.ev)){
         const ne = orbElectrons(e, oid);
         const nameC = gcell(0,'font-size:16px;font-weight:bold;'); nameC.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN)+'</span>';
@@ -4263,10 +4295,22 @@ async function run(){
       }
     }
     repaint();
-    econfPanel.appendChild(title); econfPanel.appendChild(ydinLbl); econfPanel.appendChild(header);
-    econfPanel.appendChild(cloudLbl); econfPanel.appendChild(grid);   // name → ydin (nucleus) → elektronipilvi (shell-grouped orbital grid)
+    // ── ydin (nucleus) footer at the bottom: "ydin" · nucleon render · proton/neutron counts ──
+    const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
+    nucViz.style.cssText = 'width:66px;height:66px;flex:0 0 auto;';
+    const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'ydin';
+    ydinLbl.style.cssText = 'font-size:17px;font-weight:bold;color:var(--brown);opacity:.75;';
+    const Nn = Math.max(0, info(e).n - Z);
+    const counts = document.createElement('div');
+    counts.style.cssText = 'font-size:16px;font-weight:bold;color:var(--ink);line-height:1.55;';
+    counts.innerHTML = '<span style="color:#c0403a;">'+Z+' protonia</span>'
+                     + (Nn>0 ? '<br><span style="color:#6a6a5a;">'+Nn+' neutronia</span>' : '');   // hide neutrons when there are none (H)
+    const ydinRow = document.createElement('div');
+    ydinRow.style.cssText = 'display:flex;align-items:center;gap:13px;border-top:3px solid var(--brown);padding-top:10px;margin-top:9px;';
+    ydinRow.appendChild(ydinLbl); ydinRow.appendChild(nucViz); ydinRow.appendChild(counts);
+    econfPanel.appendChild(orbViz); econfPanel.appendChild(title); econfPanel.appendChild(grid); econfPanel.appendChild(ydinRow);   // orbital render → Xatomi → table → ydin footer
     econfPanel.style.display = 'block';
-    renderAtomPreview(atom, atomViz);   // draw the static nucleus render into the header canvas
+    renderPreviews(atom, orbViz, nucViz);   // orbitals → top canvas, nucleus → ydin canvas (two sequential captures)
   };
 
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
