@@ -1383,6 +1383,19 @@ void main(void){
 BABYLON.Effect.ShadersStore['maskFragmentShader'] = `
 precision highp float;
 void main(void){ gl_FragColor = vec4(0.0); }`;
+/* Flat solid colour (shakes with the atoms) — the inverted-hull shell for the whole-molecule outline. */
+BABYLON.Effect.ShadersStore['flatVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
+uniform mat4 view; uniform mat4 projection; uniform float uT;
+vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+void main(void){ mat4 W = mat4(world0, world1, world2, world3);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  gl_Position = projection * view * wp; }`;
+BABYLON.Effect.ShadersStore['flatFragmentShader'] = `
+precision highp float; uniform vec3 oc;
+void main(void){ gl_FragColor = vec4(oc, 1.0); }`;
 
 /* Aromatic delocalised-pi cloud: a translucent torus above/below each aromatic ring,
    with a bright arc that orbits it (the ring current). */
@@ -3717,34 +3730,38 @@ async function run(){
   /* ── ETC cofactor (whole-molecule) selection ───────────────────────────────
      A thick sage outline traced around every atom of the picked cofactor, using the same rim shader
      as the atom selection so the highlight language stays consistent. */
-  const etcSelOut = BABYLON.MeshBuilder.CreateSphere('etcSelOut', {diameter:1, segments:8}, scene);
-  etcSelOut.material = selMat; etcSelOut.isPickable = false; etcSelOut.setEnabled(false);
-  etcSelOut.renderingGroupId = 3; etcSelOut.alphaIndex = 1; etcSelOut.alwaysSelectAsActiveMesh = true;
-  // HOVER twin (white rim, like the atom hover) → far-hovering a cofactor outlines the WHOLE molecule, not one atom.
-  const etcHl = BABYLON.MeshBuilder.CreateSphere('etcHl', {diameter:1, segments:8}, scene);
-  etcHl.material = hlMatMol; etcHl.isPickable = false; etcHl.setEnabled(false);
-  etcHl.renderingGroupId = 3; etcHl.alphaIndex = 1; etcHl.alwaysSelectAsActiveMesh = true;
-  // Depth-only MASK: each atom's solid front hemisphere (no colour, but WRITES depth) drawn BEFORE the rims
-  // (alphaIndex 0 < 1) → a front atom hides the rims of the atoms behind it, so only the molecule's OUTER
-  // silhouette shows, never the interior atoms' rims.
+  // Whole-molecule outline as an INVERTED HULL, so ONLY the outer silhouette is drawn (no interior atom rings):
+  //   1. a depth MASK of atom-size solid spheres marks the molecule's surface (writes depth, no colour);
+  //   2. enlarged BACK-facing shells in the outline colour draw only where they poke PAST that mask (depth
+  //      test hides them wherever the molecule itself is in front) → a clean band around the outer edge.
   const maskMol = new BABYLON.ShaderMaterial('maskMol', scene, 'mask', {
     attributes:['position','world0','world1','world2','world3'], uniforms:['view','projection','uT'] });
-  maskMol.alpha = 0.999; maskMol.backFaceCulling = true; maskMol.forceDepthWrite = true;   // transparent (alpha-0 output = no colour) but FORCE depth write so it occludes the rims behind
+  maskMol.alpha = 0.999; maskMol.backFaceCulling = true; maskMol.forceDepthWrite = true;   // no colour (alpha-0 output) but writes depth
   maskMol.onBindObservable.add(()=>{ const eff=maskMol.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
-  const mkEtcMask = nm => { const m = BABYLON.MeshBuilder.CreateSphere(nm,{diameter:1,segments:8},scene);
+  const mkFlat = (nm, col) => { const m = new BABYLON.ShaderMaterial(nm, scene, 'flat', {
+      attributes:['position','world0','world1','world2','world3'], uniforms:['view','projection','uT','oc'] });
+    m.setColor3('oc', col); m.alpha = 0.999; m.backFaceCulling = true; m.disableDepthWrite = true;   // depth-TEST against the mask, never write
+    m.onBindObservable.add(()=>{ const eff=m.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
+    return m; };
+  const flatMatSel = mkFlat('flatSel', new BABYLON.Color3(0.11,0.48,0.16));   // cofactor SELECTION outline = clear green
+  const flatMatHl  = mkFlat('flatHl',  new BABYLON.Color3(1,1,1));            // cofactor HOVER outline = white
+  const mkEtcMask = nm => { const m = BABYLON.MeshBuilder.CreateSphere(nm,{diameter:1,segments:12},scene);
     m.material = maskMol; m.isPickable=false; m.setEnabled(false); m.renderingGroupId=3; m.alphaIndex=0; m.alwaysSelectAsActiveMesh=true; return m; };
+  const mkEtcOut = (nm, mat) => { const m = BABYLON.MeshBuilder.CreateSphere(nm,{diameter:1,segments:12,sideOrientation:BABYLON.Mesh.BACKSIDE},scene);
+    m.material = mat; m.isPickable=false; m.setEnabled(false); m.renderingGroupId=3; m.alphaIndex=1; m.alwaysSelectAsActiveMesh=true; return m; };
   const etcSelMask = mkEtcMask('etcSelMask'), etcHlMask = mkEtcMask('etcHlMask');
+  const etcSelOut  = mkEtcOut('etcSelOut', flatMatSel), etcHl = mkEtcOut('etcHl', flatMatHl);
   const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
-  // Fill the rim outline `mesh` AND its depth `mask` for cofactor group `gi` (shared by select + hover).
+  // Fill the enlarged outline shell `mesh` (radius ×1.22) and its atom-size depth `mask` for cofactor `gi`.
   const fillEtcOutline = (mesh, mask, gi) => {
     if(gi < 0 || !etcGroupPos){ mesh.setEnabled(false); mask.setEnabled(false); return false; }
     const g = etcGroups[gi], {gx,gy,gz} = etcGroupPos, n = Math.min(g.atoms.length, 400);
-    const buf = new Float32Array(n*16);
-    for(let i=0;i<n;i++){ const a=g.atoms[i], o=i*16, r=(etcR[a]||1.6)*1.28;   // a touch larger → the rim clears the sphere
-      buf[o]=r; buf[o+5]=r; buf[o+10]=r; buf[o+15]=1;
-      buf[o+12]=gx[a]; buf[o+13]=gy[a]; buf[o+14]=gz[a]; }
-    mesh.thinInstanceSetBuffer('matrix', buf, 16, true); mesh.thinInstanceCount = n; mesh.setEnabled(true);
-    mask.thinInstanceSetBuffer('matrix', buf, 16, true); mask.thinInstanceCount = n; mask.setEnabled(true);
+    const mBuf = new Float32Array(n*16), oBuf = new Float32Array(n*16);
+    for(let i=0;i<n;i++){ const a=g.atoms[i], o=i*16, x=gx[a], y=gy[a], z=gz[a], r=(etcR[a]||1.6), R=r*1.22;
+      mBuf[o]=r; mBuf[o+5]=r; mBuf[o+10]=r; mBuf[o+15]=1; mBuf[o+12]=x; mBuf[o+13]=y; mBuf[o+14]=z;
+      oBuf[o]=R; oBuf[o+5]=R; oBuf[o+10]=R; oBuf[o+15]=1; oBuf[o+12]=x; oBuf[o+13]=y; oBuf[o+14]=z; }
+    mask.thinInstanceSetBuffer('matrix', mBuf, 16, true); mask.thinInstanceCount = n; mask.setEnabled(true);
+    mesh.thinInstanceSetBuffer('matrix', oBuf, 16, true); mesh.thinInstanceCount = n; mesh.setEnabled(true);
     return true;
   };
   const showEtcSel = gi => {
