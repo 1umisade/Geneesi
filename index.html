@@ -1348,6 +1348,7 @@ uniform vec3 oc;      // outline colour
 uniform float rimLo;  // rim band start (higher = thinner)
 uniform float rimHi;  // rim band end
 uniform float rimW;   // stroke width in fwidth units (hover = thin, selection = thick)
+uniform float solidDepth;   // 1 = keep the (invisible) interior so the WHOLE front hemisphere writes depth → clean molecule silhouette
 varying vec3 vVP;
 varying vec3 vN;
 void main(void){
@@ -1355,7 +1356,7 @@ void main(void){
   float f = 1.0 - max(dot(N, V), 0.0);             // 0 face-on … 1 at the silhouette (front faces only)
   float w = fwidth(f);                             // screen-space gradient → normalise the band to a constant pixel width
   float a = 1.0 - smoothstep(0.0, w*rimW, abs(f - rimLo));   // even stroke along the f=rimLo contour
-  if(a < 0.04) discard;
+  if(solidDepth < 0.5 && a < 0.04) discard;        // atoms: rim-only. Molecules: keep the interior (alpha≈0) so it writes depth and hides rims behind it.
   gl_FragColor = vec4(oc, a);
 }`;
 
@@ -3175,9 +3176,9 @@ async function run(){
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
   const mkOutlineMat = (nm, col, rimLo, rimHi, rimW) => {
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
-      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT']
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth']
     });
-    mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi); mat.setFloat('rimW', rimW || 2.6);
+    mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi); mat.setFloat('rimW', rimW || 2.6); mat.setFloat('solidDepth', 0.0);
     mat.alpha = 0.999; mat.backFaceCulling = true; mat.needDepthPrePass = false;   // cull backs → ONE contour per lobe (not a front+back pair)
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
     mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
@@ -3187,6 +3188,9 @@ async function run(){
   const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66, 2.6);            // hover = thin white, hugs the lobe edge
   const selMat = mkOutlineMat('selMat', new BABYLON.Color3(0.11, 0.48, 0.16), 0.85, 0.66, 8.0);   // cofactor selection outline (etcSelOut) = clear green
   const flashMat = mkOutlineMat('flashMat', new BABYLON.Color3(0.05,0.30,0.08), 0.80, 0.66, 12.0);   // atom-select FLASH: thick dark green
+  // Cofactor (whole-molecule) outlines stay rim-only; a separate depth-only MASK (see etcSelMask below)
+  // makes them show only the molecule's OUTER silhouette, never the interior atoms' rims.
+  const hlMatMol = mkOutlineMat('hlMatMol', new BABYLON.Color3(1,1,1), 0.85, 0.66, 6.0);   // cofactor HOVER outline = white
   const focusMat = mkOutlineMat('focusMat', new BABYLON.Color3(0.29,0.20,0.125), 0.86, 0.66, 5.0);   // panel orbital-isolate: dark brown, on the one orbital
   const hl = BABYLON.MeshBuilder.CreateSphere('hl', {diameter:1, segments:8}, scene);   // smooth rings (no faceted octagon) around each lobe
   hl.material = hlMat; hl.isPickable = false; hl.setEnabled(false);
@@ -3715,28 +3719,38 @@ async function run(){
      as the atom selection so the highlight language stays consistent. */
   const etcSelOut = BABYLON.MeshBuilder.CreateSphere('etcSelOut', {diameter:1, segments:8}, scene);
   etcSelOut.material = selMat; etcSelOut.isPickable = false; etcSelOut.setEnabled(false);
-  etcSelOut.renderingGroupId = 3; etcSelOut.alwaysSelectAsActiveMesh = true;
+  etcSelOut.renderingGroupId = 3; etcSelOut.alphaIndex = 1; etcSelOut.alwaysSelectAsActiveMesh = true;
   // HOVER twin (white rim, like the atom hover) → far-hovering a cofactor outlines the WHOLE molecule, not one atom.
   const etcHl = BABYLON.MeshBuilder.CreateSphere('etcHl', {diameter:1, segments:8}, scene);
-  etcHl.material = hlMat; etcHl.isPickable = false; etcHl.setEnabled(false);
-  etcHl.renderingGroupId = 3; etcHl.alwaysSelectAsActiveMesh = true;
+  etcHl.material = hlMatMol; etcHl.isPickable = false; etcHl.setEnabled(false);
+  etcHl.renderingGroupId = 3; etcHl.alphaIndex = 1; etcHl.alwaysSelectAsActiveMesh = true;
+  // Depth-only MASK: each atom's solid front hemisphere (no colour, but WRITES depth) drawn BEFORE the rims
+  // (alphaIndex 0 < 1) → a front atom hides the rims of the atoms behind it, so only the molecule's OUTER
+  // silhouette shows, never the interior atoms' rims.
+  const maskMol = new BABYLON.ShaderMaterial('maskMol', scene, 'mask', {
+    attributes:['position','world0','world1','world2','world3'], uniforms:['view','projection','uT'] });
+  maskMol.alpha = 0.999; maskMol.backFaceCulling = true; maskMol.forceDepthWrite = true;   // transparent (alpha-0 output = no colour) but FORCE depth write so it occludes the rims behind
+  maskMol.onBindObservable.add(()=>{ const eff=maskMol.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
+  const mkEtcMask = nm => { const m = BABYLON.MeshBuilder.CreateSphere(nm,{diameter:1,segments:8},scene);
+    m.material = maskMol; m.isPickable=false; m.setEnabled(false); m.renderingGroupId=3; m.alphaIndex=0; m.alwaysSelectAsActiveMesh=true; return m; };
+  const etcSelMask = mkEtcMask('etcSelMask'), etcHlMask = mkEtcMask('etcHlMask');
   const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
-  // Trace a rim outline around every atom of cofactor group `gi` onto `mesh` (shared by select + hover).
-  const fillEtcOutline = (mesh, gi) => {
-    if(gi < 0 || !etcGroupPos){ mesh.setEnabled(false); return false; }
+  // Fill the rim outline `mesh` AND its depth `mask` for cofactor group `gi` (shared by select + hover).
+  const fillEtcOutline = (mesh, mask, gi) => {
+    if(gi < 0 || !etcGroupPos){ mesh.setEnabled(false); mask.setEnabled(false); return false; }
     const g = etcGroups[gi], {gx,gy,gz} = etcGroupPos, n = Math.min(g.atoms.length, 400);
     const buf = new Float32Array(n*16);
     for(let i=0;i<n;i++){ const a=g.atoms[i], o=i*16, r=(etcR[a]||1.6)*1.28;   // a touch larger → the rim clears the sphere
       buf[o]=r; buf[o+5]=r; buf[o+10]=r; buf[o+15]=1;
       buf[o+12]=gx[a]; buf[o+13]=gy[a]; buf[o+14]=gz[a]; }
-    mesh.thinInstanceSetBuffer('matrix', buf, 16, true);
-    mesh.thinInstanceCount = n; mesh.setEnabled(true);
+    mesh.thinInstanceSetBuffer('matrix', buf, 16, true); mesh.thinInstanceCount = n; mesh.setEnabled(true);
+    mask.thinInstanceSetBuffer('matrix', buf, 16, true); mask.thinInstanceCount = n; mask.setEnabled(true);
     return true;
   };
   const showEtcSel = gi => {
     etcSel = gi;
-    if(!fillEtcOutline(etcSelOut, gi)){ modelLabel.style.display='none'; return; }
-    etcHl.setEnabled(false);                                     // the green selection replaces any white hover twin
+    if(!fillEtcOutline(etcSelOut, etcSelMask, gi)){ modelLabel.style.display='none'; return; }
+    etcHl.setEnabled(false); etcHlMask.setEnabled(false);        // the green selection replaces any white hover twin
     const g = etcGroups[gi];
     orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
     modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
@@ -4401,12 +4415,12 @@ async function run(){
       if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){   // CLOSE → hover the ATOM (same tier as selecting)
         // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
         if(BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a); else hl.setEnabled(false);
-        etcHl.setEnabled(false);
+        etcHl.setEnabled(false); etcHlMask.setEnabled(false);
       } else {                                                            // FAR → hover the whole MOLECULE (cofactor), not an atom
         hl.setEnabled(false);
         const gi = pickEtcGroup();
-        if(gi >= 0 && gi !== etcSel) fillEtcOutline(etcHl, gi);           // white outline of the cofactor (skip the already-green-selected one)
-        else etcHl.setEnabled(false);
+        if(gi >= 0 && gi !== etcSel) fillEtcOutline(etcHl, etcHlMask, gi);   // white outline of the cofactor (skip the already-green-selected one)
+        else { etcHl.setEnabled(false); etcHlMask.setEnabled(false); }
       }
     }
   });
