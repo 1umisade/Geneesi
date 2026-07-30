@@ -1780,6 +1780,7 @@ async function run(){
      under the cursor when the pan began (a complex if one was hit, else the pivot distance). */
   const worldPerPixelAt = R => 2 * Math.abs(R) * Math.tan(cam.fov / 2) / Math.max(1, canvas.clientHeight);
   const panBy = (dxPx, dyPx) => { const wpp = worldPerPixelAt(panDepth);
+    orbitLocked = false;   // panning breaks the lock so the follow stops (you deliberately moved away)
     const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(-dxPx * wpp)).addInPlace(up.scale(dyPx * wpp)); };
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
@@ -4345,17 +4346,12 @@ async function run(){
     setSelNuc(a);                   // show the nucleus on top of the orbitals
     setSelElec(a);                  // electron poke-through, this atom only
     showConfig(a);                  // electron-configuration panel, bottom-right
-    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
-    // Recentre WITHOUT changing zoom: end radius = current camera→atom distance, so the atom
-    // keeps its exact on-screen size (the camera swivels to centre it, never dollies in/out).
-    const keepR = Math.max(cam.lowerRadiusLimit, BABYLON.Vector3.Distance(cam.position, a.center));
-    BABYLON.Animation.CreateAndStartAnimation('center', cam, 'target', 60, 22,        // focus
-      cam.target.clone(), a.center.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
-    BABYLON.Animation.CreateAndStartAnimation('centerR', cam, 'radius', 60, 22,       // keep scale
-      cam.radius, keepR, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    // The continuous-follow observer (see below) swivels the camera to centre this atom and then keeps
+    // it centred — no one-shot animation needed. Swivelling in place preserves the camera position, so
+    // the atom keeps its on-screen size (no dolly).
   };
   // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
   // Double-click → select the nearest complex for moving (gizmo + live coord label).
@@ -4364,7 +4360,7 @@ async function run(){
   const onDouble = () => {
     if(spawnEl) return;
     const a = pickAtom();
-    if(a){ clearEtcSel(); centerOnAtom(a); return; }
+    if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15) — farther, fall through to the molecule it belongs to
     const gi = pickEtcGroup();
     if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
     // Whole-complex selection (→ move/rotate gizmo) is a DEV-mode tool only.
@@ -4373,6 +4369,15 @@ async function run(){
     clearAtomSel(); clearEtcSel(); deselectModel(); viewPerp();
   };
   canvas.addEventListener('dblclick', onDouble);                                    // desktop
+  // Camera FOLLOW: while something is selected (orbitLocked), smoothly keep it centred — this both
+  // swivels the camera onto it when you pick it AND tracks it if it moves (e.g. a dragged complex).
+  // Swivel-in-place keeps the camera position, so on-screen size is preserved. Panning clears the lock.
+  scene.onBeforeRenderObservable.add(() => {
+    if(!orbitLocked || orbitCenter.x > 1e5) return;
+    if(gSelModel >= 0 && mInfo[gSelModel]){ const mi = mInfo[gSelModel];   // dragged complex → keep the pivot on its live centre
+      orbitCenter.set(mi.cx+gModelOff[gSelModel*3], mi.cy+gModelOff[gSelModel*3+1], mi.cz+gModelOff[gSelModel*3+2]); }
+    cam.setTarget(BABYLON.Vector3.Lerp(cam.getTarget(), orbitCenter, 0.16));
+  });
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
     if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
