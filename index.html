@@ -1599,8 +1599,38 @@ async function run(){
 
   /* Engine/scene */
   const canvas = document.getElementById('c');
-  engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
+  // Prefer WebGPU, fall back to WebGL2. run() is async, so we can await the WebGPU init. gBackend is
+  // read by the dev panel (shows which renderer is live). If WebGPU isn't supported OR init throws
+  // (e.g. the GLSL→WGSL transpiler can't load), we build a WebGL2 engine instead.
+  let gBackend = 'WebGL';
+  // WebGPU is wired up + falls back to WebGL, but the custom impostor/frag-depth shaders don't yet render
+  // on WebGPU (geometry is invisible), so it's OPT-IN via ?webgpu until that's solved — the default stays
+  // on WebGL, which renders correctly. Remove the `wantWebGPU &&` guard once WebGPU rendering is fixed.
+  const wantWebGPU = /[?#&]webgpu\b/i.test(location.href);
+  try {
+    if (wantWebGPU && BABYLON.WebGPUEngine && await BABYLON.WebGPUEngine.IsSupportedAsync) {
+      const wgpu = new BABYLON.WebGPUEngine(canvas, { stencil: true, antialias: true });
+      await wgpu.initAsync();          // fetches the GLSL→WGSL transpiler (twgsl) from the Babylon CDN
+      engine = wgpu;
+      gBackend = 'WebGPU';
+    }
+  } catch (e) {
+    console.warn('WebGPU init failed — using WebGL:', e);
+    engine = null;
+  }
+  if (!engine) engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
   engine.enableOfflineSupport = false;   // perf: skip the .manifest network probe per scene file
+  // WebGPU uses a [0,1] NDC z-range; WebGL uses [-1,1]. Our impostor shaders write gl_FragDepth by hand as
+  // clip.z/clip.w*0.5+0.5 (the WebGL remap). On WebGPU clip.z/clip.w is ALREADY [0,1], so drop the remap —
+  // otherwise every sphere/nucleus gets a wrong depth and the whole scene reads as empty. Patch the shader
+  // source once, before any material compiles.
+  if (gBackend === 'WebGPU') {
+    for (const k in BABYLON.Effect.ShadersStore) {
+      const src = BABYLON.Effect.ShadersStore[k];
+      if (typeof src === 'string' && src.indexOf('gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;') !== -1)
+        BABYLON.Effect.ShadersStore[k] = src.split('gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;').join('gl_FragDepthEXT = clip.z / clip.w;');
+    }
+  }
   // Supersample: render at higher internal res so the shader-drawn sphere edges /
   // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
@@ -2334,7 +2364,7 @@ async function run(){
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
-    eff.setFloat('uT',gWaveT); eff.setArray3('memCut', gCut); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    eff.setFloat('uT',gWaveT); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -2748,7 +2778,7 @@ async function run(){
       mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true; mat.setFloat('selModel', -1);   // orbitals always, electrons only up close
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane orbitals only inside the close forward cone
-        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setArray3('memCut', gCut);
+        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return realAlpha(mat);
     };
@@ -2833,7 +2863,7 @@ async function run(){
       eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane nuclei only inside the close cone
       eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);
       eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-      eff.setVector3('selCenter', selCenter); eff.setArray3('memCut', gCut);
+      eff.setVector3('selCenter', selCenter); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
       eff.setVector3('tileOff', (mesh && mesh.metadata && mesh.metadata.off) || _zeroOff); });
     const POOL = 10;   // tiles per leaflet that carry nuclei at once
     const nucPool = [];
@@ -3505,7 +3535,9 @@ async function run(){
     else { gDevCone = 0.20 + (v/100)*3.30; coneValEl.textContent = gDevCone.toFixed(2); }   // higher = wider forward cone
     gConeCos = gDevCone; };                                                                 // live (materials read gConeCos each frame)
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
-  devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(camRow);
+  const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
+  backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
