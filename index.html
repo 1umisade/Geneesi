@@ -559,7 +559,7 @@ void main(void){
   // Ink outline band. Normally starts at 0.86 (width 0.14). For atoms REVEALING orbitals (glass shells)
   // start it at 0.965 (width 0.035 ≈ 4× thinner) so the thin rim doesn't obscure the orbitals inside.
   float rimStart = mix(0.86, 0.965, (isShell > 0.5) ? reveal : 0.0);
-  float rim = smoothstep(rimStart - min(aa, 0.008), 1.0, r2);   // thin ink band (matches the orbitals'); tiny aa only, so revealed shells don't get a fat outline
+  float rim = smoothstep(rimStart - min(aa, 0.008), 1.0, r2);   // thin ink band like the orbital lobes, tiny aa only so revealed shells do not get a fat outline
   // Subtle electric-blue shimmer: a faint cool sheen that rides the sphere's grazing edge and drifts in time.
   if(protonOutline < 0.5){
     float fres = pow(1.0 - zc, 2.3);
@@ -1600,6 +1600,7 @@ async function run(){
   /* Engine/scene */
   const canvas = document.getElementById('c');
   engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
+  engine.enableOfflineSupport = false;   // perf: skip the .manifest network probe per scene file
   // Supersample: render at higher internal res so the shader-drawn sphere edges /
   // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
@@ -1607,6 +1608,7 @@ async function run(){
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));   // crisp supersample (quality over FPS)
   const scene = new BABYLON.Scene(engine);
+  scene.skipPointerMovePicking = true;   // perf: we never auto-pick on pointer-move (all picking is done manually in our own handlers)
   scene.clearColor = new BABYLON.Color4(0.055,0.135,0.082,1);   // static dark green (matches the bg quad)
   scene.fogMode  = BABYLON.Scene.FOGMODE_NONE;                 // NO distance darkening — every atom keeps its true colour at any depth
   scene.fogColor = new BABYLON.Color3(0.16,0.17,0.13);         // kept only to satisfy the shaders' fogColor uniform (fog factor is pinned to 1 → never mixed in)
@@ -1974,8 +1976,8 @@ async function run(){
   // Reveal parameters — only mode 1 turns them on. The imp/orb shaders read these to reveal an atom's
   // orbitals when the camera is IN RANGE of it, and to make that atom's vdW sphere 50% transparent so
   // the orbitals show through. Set when the mode changes.
-  let gConeCos = 0.93;        // cone half-angle as tan (−1 = disabled → reveal by range alone). Default 0.93.
-  let gDevCone = 0.93;        // dev override for the reveal/culling cone (−1 = off); the dev slider drives it. Default 0.93.
+  let gConeCos = -1.0;        // cone half-angle as tan (−1 = disabled → reveal by range alone). OFF by default so the whole scene renders.
+  let gDevCone = -1.0;        // dev override for the reveal/culling cone (−1 = off); the dev slider drives it. OFF by default (0.93 culls everything outside a 43° cone).
   let gBubbleR = 1e9;         // reveal only within this camera distance (1e9 = everywhere)
   let gShell   = 0;           // vdW spheres: 1 = translucent where the atom reveals orbitals, 0 = always solid
   let gShellMin = 0.0;        // alpha the vdW shell fades TO where revealed (0 = fully hidden, 0.5 = half-transparent)
@@ -3494,9 +3496,9 @@ async function run(){
     + 'font:11px ui-monospace,monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);'
     + 'border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 11px;user-select:none;min-width:196px;';
   const coneRow = document.createElement('div');
-  coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">0.93</b>';   // default 0.93 (matches gDevCone init)
+  coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
-  coneSld.type='range'; coneSld.min='0'; coneSld.max='100'; coneSld.value='22'; coneSld.style.cssText='width:100%;cursor:pointer;';   // 22 → 0.93
+  coneSld.type='range'; coneSld.min='0'; coneSld.max='100'; coneSld.value='0'; coneSld.style.cssText='width:100%;cursor:pointer;';   // 0 = off
   const coneValEl = coneRow.querySelector('#dev-cone-val');
   coneSld.oninput = () => { const v = +coneSld.value;
     if(v===0){ gDevCone = -1.0; coneValEl.textContent = 'off'; }
@@ -4293,6 +4295,12 @@ async function run(){
     }
   } catch (e) { console.warn('WebXR unavailable:', e && e.message); }
 
+  // ── Performance note: the SAFE global flags are set up front (engine.enableOfflineSupport=false,
+  //    scene.skipPointerMovePicking=true). We deliberately do NOT use scene.freezeActiveMeshes()
+  //    (the cull loop enables/disables cells every frame), material.freeze() (shader uniforms are pushed
+  //    every frame via onBind), scene.blockMaterialDirtyMechanism (it stalled late vdW-shader compilation
+  //    → blank scene), or freezeWorldMatrix() on the cells — every one of those breaks this scene's
+  //    dynamic culling / deferred shader compilation.
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
 }
