@@ -3716,17 +3716,28 @@ async function run(){
   const etcSelOut = BABYLON.MeshBuilder.CreateSphere('etcSelOut', {diameter:1, segments:8}, scene);
   etcSelOut.material = selMat; etcSelOut.isPickable = false; etcSelOut.setEnabled(false);
   etcSelOut.renderingGroupId = 3; etcSelOut.alwaysSelectAsActiveMesh = true;
+  // HOVER twin (white rim, like the atom hover) → far-hovering a cofactor outlines the WHOLE molecule, not one atom.
+  const etcHl = BABYLON.MeshBuilder.CreateSphere('etcHl', {diameter:1, segments:8}, scene);
+  etcHl.material = hlMat; etcHl.isPickable = false; etcHl.setEnabled(false);
+  etcHl.renderingGroupId = 3; etcHl.alwaysSelectAsActiveMesh = true;
   const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
-  const showEtcSel = gi => {
-    etcSel = gi;
-    if(gi < 0 || !etcGroupPos){ etcSelOut.setEnabled(false); modelLabel.style.display='none'; return; }
+  // Trace a rim outline around every atom of cofactor group `gi` onto `mesh` (shared by select + hover).
+  const fillEtcOutline = (mesh, gi) => {
+    if(gi < 0 || !etcGroupPos){ mesh.setEnabled(false); return false; }
     const g = etcGroups[gi], {gx,gy,gz} = etcGroupPos, n = Math.min(g.atoms.length, 400);
     const buf = new Float32Array(n*16);
     for(let i=0;i<n;i++){ const a=g.atoms[i], o=i*16, r=(etcR[a]||1.6)*1.28;   // a touch larger → the rim clears the sphere
       buf[o]=r; buf[o+5]=r; buf[o+10]=r; buf[o+15]=1;
       buf[o+12]=gx[a]; buf[o+13]=gy[a]; buf[o+14]=gz[a]; }
-    etcSelOut.thinInstanceSetBuffer('matrix', buf, 16, true);
-    etcSelOut.thinInstanceCount = n; etcSelOut.setEnabled(true);
+    mesh.thinInstanceSetBuffer('matrix', buf, 16, true);
+    mesh.thinInstanceCount = n; mesh.setEnabled(true);
+    return true;
+  };
+  const showEtcSel = gi => {
+    etcSel = gi;
+    if(!fillEtcOutline(etcSelOut, gi)){ modelLabel.style.display='none'; return; }
+    etcHl.setEnabled(false);                                     // the green selection replaces any white hover twin
+    const g = etcGroups[gi];
     orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
     modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
     modelLabel._w = new BABYLON.Vector3(g.cx, g.cy, g.cz);
@@ -4387,9 +4398,16 @@ async function run(){
       if(wholeInView()){ macroHover(); hl.setEnabled(false); return; }   // zoomed out → hover the whole protein (white box), not atoms
       if(gMacroHover){ gMacroHover=false; if(!gMacroSel) setOutline(false); }
       const a = pickAtom();
-      // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
-      if(a && BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a);
-      else hl.setEnabled(false);   // white stroke exactly on each orbital + bonding lobe
+      if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){   // CLOSE → hover the ATOM (same tier as selecting)
+        // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
+        if(BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a); else hl.setEnabled(false);
+        etcHl.setEnabled(false);
+      } else {                                                            // FAR → hover the whole MOLECULE (cofactor), not an atom
+        hl.setEnabled(false);
+        const gi = pickEtcGroup();
+        if(gi >= 0 && gi !== etcSel) fillEtcOutline(etcHl, gi);           // white outline of the cofactor (skip the already-green-selected one)
+        else etcHl.setEnabled(false);
+      }
     }
   });
 
