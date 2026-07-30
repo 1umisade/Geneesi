@@ -3829,7 +3829,7 @@ async function run(){
   let selAtom = null;
   const econfPanel = document.createElement('div');
   econfPanel.id = 'econf';
-  econfPanel.style.cssText = 'display:none;pointer-events:auto;padding:12px 14px;max-width:310px;';
+  econfPanel.style.cssText = 'display:none;pointer-events:auto;padding:16px 18px;max-width:none;width:max-content;';
   // Bottom-right stack: hybridisation panel on top, the spawn element table below.
   const brStack = document.createElement('div'); brStack.id = 'br-stack';
   brStack.appendChild(econfPanel);
@@ -4192,68 +4192,79 @@ async function run(){
     // Big full element NAME on top (e.g. "Carbon") — the shorthand symbol is no longer shown.
     const title = document.createElement('div');
     title.textContent = elemName(e);
-    title.style.cssText = 'font-size:19px;font-weight:bold;color:var(--brown);margin-bottom:7px;letter-spacing:.3px;';
+    title.style.cssText = 'font-size:24px;font-weight:bold;color:var(--brown);margin-bottom:9px;letter-spacing:.3px;';
     // A small STATIC render of the atom's NUCLEUS (protons red · neutrons grey), drawn ONCE with the
     // scene's own imp shader (renderAtomPreview) so it matches the live look but never animates.
     const atomViz = document.createElement('canvas');
     atomViz.width = atomViz.height = 128;
-    atomViz.style.cssText = 'width:62px;height:62px;flex:0 0 auto;';
-    // ── ydin (nucleus) ──: a small "ydin" caption, then the nucleus render + its proton/neutron count.
+    atomViz.style.cssText = 'width:80px;height:80px;flex:0 0 auto;';
+    // ── ydin (nucleus) ──: a "ydin" caption, then the nucleus render + its proton/neutron count.
     const ydinLbl = document.createElement('div');
     ydinLbl.textContent = 'ydin';
-    ydinLbl.style.cssText = 'font-size:12px;font-weight:bold;color:var(--brown);opacity:.7;margin-bottom:3px;';
+    ydinLbl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--brown);opacity:.7;margin-bottom:4px;';
     const Nn = Math.max(0, info(e).n - Z);
     const counts = document.createElement('div');
-    counts.style.cssText = 'font-size:13px;font-weight:bold;color:var(--ink);line-height:1.5;';
+    counts.style.cssText = 'font-size:16px;font-weight:bold;color:var(--ink);line-height:1.55;';
     counts.innerHTML = '<span style="color:#c0403a;">'+Z+' protonia</span>'
                      + (Nn>0 ? '<br><span style="color:#6a6a5a;">'+Nn+' neutronia</span>' : '');   // hide neutrons when there are none (H)
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:8px;';
+    header.style.cssText = 'display:flex;align-items:center;gap:15px;margin-bottom:10px;';
     header.appendChild(atomViz); header.appendChild(counts);
 
-    // ── elektronipilvi (electron cloud) ──: a table, one row per orbital, columns divided by rules:
-    //    orbitaali (name) | muoto (shape) | elektroneja (electron dots) | energia (binding energy in aJ).
+    // ── elektronipilvi (electron cloud) ── ONE css-grid so every column shares an edge (perfect
+    //    alignment); the per-cell left borders join into continuous rules with no row gap. Rows are
+    //    grouped by shell ("1. kuori", "2. kuori" …) — orbitals in a shell share their energy.
     const cloudLbl = document.createElement('div');
     cloudLbl.textContent = 'elektronipilvi';
-    cloudLbl.style.cssText = 'font-size:12px;font-weight:bold;color:var(--brown);opacity:.7;border-top:2px solid var(--brown);padding-top:6px;margin-bottom:5px;';
-    const COLW = ['52px','40px','54px','66px'];       // orbitaali | muoto | elektroneja | energia
+    cloudLbl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--brown);opacity:.75;border-top:3px solid var(--brown);padding-top:9px;margin-bottom:2px;';
     const EV_AJ = 0.1602176634;                        // 1 eV = 0.16022 aJ   (1 aJ = 1e-18 J)
-    const fmtAJ = ev => { const a = Math.abs(ev) * EV_AJ;   // binding-energy magnitude, in attojoules
-      return (a >= 10 ? a.toFixed(0) : a.toFixed(2)).replace('.', ',') + ' aJ'; };
-    const mkCell = i => { const d = document.createElement('span');
-      d.style.cssText = 'display:flex;align-items:center;justify-content:center;width:'+COLW[i]+';padding:3px 2px;'
-        + (i>0 ? 'border-left:2px solid var(--brown);' : '');
+    const fmtAJ = ev => { const a = Math.abs(ev) * EV_AJ; return (a >= 10 ? a.toFixed(0) : a.toFixed(2)).replace('.', ',') + ' aJ'; };
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,auto);align-items:stretch;';
+    const gcell = (col, css) => { const d = document.createElement('div');
+      d.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:6px 10px;'
+        + (col>0 ? 'border-left:2px solid var(--brown);' : '') + (css||'');
       return d; };
-    const table = document.createElement('div');
-    table.style.cssText = 'display:flex;flex-direction:column;';
-    const hrow = document.createElement('div'); hrow.style.cssText = 'display:flex;align-items:flex-end;';
-    ['orbitaali','muoto','elektroneja','energia'].forEach((t,i)=>{ const c = mkCell(i);
-      c.textContent = t; c.className = 'orb-cap'; c.style.fontSize = '9px'; hrow.appendChild(c); });
-    table.appendChild(hrow);
-    // One row per real orbital, ordered by binding energy (most-bound first).
-    const rows = actualOrbitals(atom).map(oid => ({ oid, ev: orbEnergyEV(e, oid, hyb, maxN) })).sort((a,b)=> a.ev - b.ev);
-    const chips = [];
-    const paint = () => { for(const ch of chips) ch.classList.toggle('on', gFocusId>=0 && +ch.dataset.t===gFocusId); };
-    for(const {oid, ev} of rows){
-      const row = document.createElement('button'); row.dataset.t = oid; row.className = 'orb-chip';
-      row.style.cssText = 'display:flex;align-items:stretch;width:100%;padding:0;';
-      const c0 = mkCell(0); c0.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN)+'</span>'; c0.style.fontWeight='bold'; c0.style.fontSize='12px';
-      const c1 = mkCell(1); c1.innerHTML = orbShapeSVG(+oid, rgbCss(info(e).c));   // muoto = the orbital's real shape
-      const c2 = mkCell(2); const box = document.createElement('span'); box.className='orb-box';
-      const ne = orbElectrons(e, oid); for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className='orb-e'; box.appendChild(dot); }
-      c2.appendChild(box);
-      const c3 = mkCell(3); c3.textContent = fmtAJ(ev); c3.style.cssText += 'font-size:11px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;';
-      row.appendChild(c0); row.appendChild(c1); row.appendChild(c2); row.appendChild(c3);
-      row.title = ne + ' elektronia';
-      row.onclick = () => { const t = +row.dataset.t; gFocusId = (gFocusId===t) ? -1 : t;
-        clearTimeout(flashTimer); flashTimer = null;   // isolating an orbital cancels the select-flash
-        if(gFocusId >= 0){ selOut.material = focusMat; setSelOut(atom); }   // persistent dark-brown outline on the isolated orbital
-        else { setSelOut(atom); selOut.setEnabled(false); }                 // de-isolate → rebuild the mask, hide the outline
-        paint(); };
-      chips.push(row); table.appendChild(row);
+    ['orbitaali','muoto','elektroneja','energia'].forEach((t,i)=>{ const c = gcell(i,'font-size:11px;font-weight:bold;opacity:.6;padding-bottom:5px;');
+      c.textContent = t; grid.appendChild(c); });
+    // Group the atom's real orbitals by shell n (hybrids / π / lone pairs sit in the valence shell).
+    const shellN = oid => oid >= 900 ? maxN : Math.floor(oid/100);
+    const rows = actualOrbitals(atom).map(oid => ({ oid, ev: orbEnergyEV(e, oid, hyb, maxN), n: shellN(oid) }));
+    const shells = [...new Set(rows.map(r => r.n))].sort((a,b)=> a-b);
+    const cellsByOid = new Map();
+    let hovOid = -1;
+    const repaint = () => { for(const [t,cells] of cellsByOid){ const on = (+t===gFocusId), hv = (+t===hovOid);
+      const bg = on ? 'var(--sage)' : (hv ? 'var(--paper2)' : 'transparent');
+      for(const c of cells) c.style.background = bg; } };
+    for(const n of shells){
+      const head = document.createElement('div');   // "N. kuori" band spanning the whole width
+      head.textContent = n + '. kuori';
+      head.style.cssText = 'grid-column:1/-1;font-size:12px;font-weight:bold;color:var(--brown);opacity:.8;border-top:2px solid var(--brown);padding:5px 2px 3px;';
+      grid.appendChild(head);
+      for(const {oid, ev} of rows.filter(r => r.n===n).sort((a,b)=> a.ev - b.ev)){
+        const ne = orbElectrons(e, oid);
+        const nameC = gcell(0,'font-size:16px;font-weight:bold;'); nameC.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN)+'</span>';
+        const shapeC = gcell(1); shapeC.innerHTML = orbShapeSVG(+oid, rgbCss(info(e).c));   // muoto = the orbital's real shape
+        const box = document.createElement('span'); box.className = 'orb-box';
+        for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className='orb-e'; box.appendChild(dot); }
+        const elecC = gcell(2); elecC.appendChild(box);
+        const enC = gcell(3,'font-size:14px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;'); enC.textContent = fmtAJ(ev);
+        const cells = [nameC, shapeC, elecC, enC];
+        cellsByOid.set(oid, cells);
+        for(const c of cells){ c.style.cursor = 'pointer'; c.title = ne + ' elektronia';
+          c.onmouseenter = () => { hovOid = oid; repaint(); };
+          c.onmouseleave = () => { hovOid = -1; repaint(); };
+          c.onclick = () => { gFocusId = (gFocusId===oid) ? -1 : oid;
+            clearTimeout(flashTimer); flashTimer = null;   // isolating an orbital cancels the select-flash
+            if(gFocusId >= 0){ selOut.material = focusMat; setSelOut(atom); }   // persistent dark-brown outline on the isolated orbital
+            else { setSelOut(atom); selOut.setEnabled(false); }                 // de-isolate → rebuild the mask, hide the outline
+            repaint(); };
+          grid.appendChild(c); }
+      }
     }
+    repaint();
     econfPanel.appendChild(title); econfPanel.appendChild(ydinLbl); econfPanel.appendChild(header);
-    econfPanel.appendChild(cloudLbl); econfPanel.appendChild(table);   // name → ydin (nucleus) → elektronipilvi (orbital table)
+    econfPanel.appendChild(cloudLbl); econfPanel.appendChild(grid);   // name → ydin (nucleus) → elektronipilvi (shell-grouped orbital grid)
     econfPanel.style.display = 'block';
     renderAtomPreview(atom, atomViz);   // draw the static nucleus render into the header canvas
   };
