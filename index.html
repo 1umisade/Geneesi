@@ -154,11 +154,17 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 .elbtn:active{transform:translateY(2px);box-shadow:0 0.5px 0 var(--brown)}
 .elbtn .eldot{width:10px;height:10px;border-radius:50%;box-shadow:0 0 0 1.5px var(--brown)}
 .elbtn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 2.5px 0 var(--brown)}
-/* Orbital chips (electron-config panel) */
-.orb-chip{font-family:inherit;font-size:14px;font-weight:bold;color:var(--brown);background:var(--paper2);
-  border:2.5px solid var(--brown);border-radius:13px;padding:4px 9px 5px;cursor:pointer;display:flex;
-  flex-direction:column;align-items:center;gap:4px;line-height:1;box-shadow:0 2.5px 0 var(--brown)}
-.orb-chip.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 2.5px 0 var(--brown)}
+/* Orbital chips (electron-config panel): electron boxes on the LEFT, then the orbital's REAL shape as the
+   button icon (s = sphere, p = dumbbell, sp/sp²/sp³ + lone pair = hybrid lobe), then its identifier text. */
+.orb-chip{font-family:inherit;color:var(--brown);background:transparent;border:2px solid transparent;
+  border-radius:11px;padding:3px 10px 3px 5px;cursor:pointer;display:flex;flex-direction:row;
+  align-items:center;gap:9px;line-height:1.15;text-align:left}
+.orb-chip:hover{background:var(--paper2)}
+.orb-chip.on{background:var(--sage);color:var(--sageink);border-color:var(--sage2)}
+.orb-box{display:inline-flex;gap:5px;align-items:center;min-width:16px;justify-content:center}
+.orb-shape{flex:0 0 auto;display:block}
+.orb-cap{font-size:10px;font-weight:bold;opacity:.65}
+.orb-name{font-size:15px;font-weight:bold}
 /* Electron dot that RADIATES expanding wave rings — same idea as the 3-D electrons */
 .orb-e{position:relative;width:7px;height:7px;border-radius:50%;
   background:radial-gradient(circle at 35% 30%,#dcecff,#4f8dff 72%);box-shadow:0 0 3px rgba(79,141,255,.85)}
@@ -4090,6 +4096,27 @@ async function run(){
     capture(10);
   };
 
+  // A tiny SVG of the orbital's REAL shape for its config-panel button: s = sphere, p (π) = dumbbell,
+  // sp/sp²/sp³ hybrids AND lone pairs = an asymmetric hybrid lobe (big front lobe + small back lobe),
+  // d/f = a 4-lobe clover. Filled with the element's colour, dark-brown outline — matches the 3-D look.
+  const rgbCss = c => 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')';
+  const orbShapeSVG = (oid, fill) => {
+    const stroke = '#4a3320', sw = 2;
+    const lobe = (cx,cy,rx,ry) => '<ellipse cx="'+cx+'" cy="'+cy+'" rx="'+rx+'" ry="'+ry+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>';
+    let inner;
+    if(oid >= 1000){                       // hybrid (1000+) OR lone pair (2000+) → big lobe + small back lobe
+      inner = lobe(20,31,4.6,6) + lobe(20,13,9,12);
+    } else if(oid === 900){                // π = unhybridised valence p → dumbbell
+      inner = lobe(20,11,8,10) + lobe(20,29,8,10);
+    } else {
+      const type = Math.floor((oid % 100)/10);
+      if(type === 1) inner = lobe(20,11,8,10) + lobe(20,29,8,10);                                   // atomic p → dumbbell
+      else if(type >= 2) inner = lobe(11,11,6,7)+lobe(29,11,6,7)+lobe(11,29,6,7)+lobe(29,29,6,7);    // d/f → clover
+      else inner = '<circle cx="20" cy="20" r="12" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>';   // s → sphere
+    }
+    return '<svg class="orb-shape" width="28" height="28" viewBox="0 0 40 40" aria-hidden="true">'+inner+'</svg>';
+  };
+
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
     econfPanel.innerHTML = '';
@@ -4109,8 +4136,8 @@ async function run(){
     const Nn = Math.max(0, info(e).n - Z);
     const counts = document.createElement('div');
     counts.style.cssText = 'font-size:13px;font-weight:bold;color:var(--ink);line-height:1.5;';
-    counts.innerHTML = '<span style="color:#c0403a;">'+Z+' proton'+(Z===1?'':'s')+'</span><br>'
-                     + '<span style="color:#6a6a5a;">'+Nn+' neutron'+(Nn===1?'':'s')+'</span>';
+    counts.innerHTML = '<span style="color:#c0403a;">'+Z+' proton'+(Z===1?'':'s')+'</span>'
+                     + (Nn>0 ? '<br><span style="color:#6a6a5a;">'+Nn+' neutron'+(Nn===1?'':'s')+'</span>' : '');   // hide neutrons when there are none (H)
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:8px;';
     header.appendChild(atomViz); header.appendChild(counts);
@@ -4134,19 +4161,22 @@ async function run(){
       ev.textContent = fmtJ(lv.energy - eMin);
       ev.style.cssText = 'font-size:11px;font-weight:bold;color:var(--brown);min-width:82px;text-align:right;font-variant-numeric:tabular-nums;';
       const chipsWrap = document.createElement('div');
-      chipsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+      chipsWrap.style.cssText = 'display:flex;flex-direction:column;gap:5px;align-items:flex-start;';
       for(const oid of lv.oids){
         const chip = document.createElement('button');
         chip.dataset.t = oid;
         chip.className = 'orb-chip';
-        const lab = document.createElement('span'); lab.textContent = orbLabel(oid, hyb, maxN); chip.appendChild(lab);
-        // The orbital "box": its electrons drawn as dots that RADIATE the same wave rings as the 3-D electrons.
+        // Electron dots, on the LEFT (each RADIATES expanding wave rings like the 3-D electrons).
         const ne = orbElectrons(e, oid);
-        const box = document.createElement('span');
-        box.style.cssText = 'display:inline-flex;gap:6px;justify-content:center;min-height:8px;';
+        const box = document.createElement('span'); box.className = 'orb-box';
         for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className='orb-e'; box.appendChild(dot); }
-        chip.appendChild(box);
-        chip.title = ne + ' electron' + (ne===1?'':'s');
+        // The orbital's REAL shape (sphere / dumbbell / hybrid lobe), element-coloured.
+        const shape = document.createElement('span'); shape.innerHTML = orbShapeSVG(+oid, rgbCss(info(e).c));
+        // Identifier text: "orbitaalin tunniste <name>".
+        const label = document.createElement('span');
+        label.innerHTML = '<span class="orb-cap">orbitaalin tunniste</span> <span class="orb-name">' + orbLabel(oid, hyb, maxN) + '</span>';
+        chip.appendChild(box); chip.appendChild(shape); chip.appendChild(label);
+        chip.title = ne + ' elektronia';
         chip.onclick = () => { const t = +chip.dataset.t; gFocusId = (gFocusId===t) ? -1 : t;
           clearTimeout(flashTimer); flashTimer = null;   // isolating an orbital cancels the select-flash
           if(gFocusId >= 0){ selOut.material = focusMat; setSelOut(atom); }   // persistent dark-brown outline on the isolated orbital
