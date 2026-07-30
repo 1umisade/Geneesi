@@ -476,6 +476,13 @@ attribute float memAnc;
 #endif
 #endif
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+// Per-atom stepped warp VECTOR, seeded ONLY by the atom centre → identical here and in the orbital shader,
+// so a sphere and its lobes lean the SAME way each step. Range about [-0.5,0.5] per axis.
+vec3 boilDir(vec3 c){ float bt = floor(uT * 7.0);
+  float x = fract(sin(dot(c, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
+  float y = fract(sin(dot(c, vec3(93.989, 47.271, 23.157)) + bt * 2.3) * 19349.663) - 0.5;
+  float z = fract(sin(dot(c, vec3(39.346, 11.135, 83.155)) + bt * 1.7) * 24634.633) - 0.5;
+  return vec3(x, y, z); }
 #ifdef MEMFADE
 // Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
 // of one upright lipid shares it and the lipid stays rigid, while lipids a tile apart are out of
@@ -494,12 +501,7 @@ void main(void){
 #endif
   vWCen = base;
   vec3 wc = shake(base);
-  if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
-    float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
-    float hy = fract(sin(dot(base, vec3(93.989, 47.271, 23.157)) + bt*2.3) * 19349.663) - 0.5;
-    float hz = fract(sin(dot(base, vec3(39.346, 11.135, 83.155)) + bt*1.7) * 24634.633) - 0.5;
-    wc += boil * 0.2 * vec3(hx, hy, hz);   // small per-atom drift — the SHAPE warp itself is done in the fragment, this is just a little life
-  }
+  wc += boil * 0.2 * boilDir(base);   // small coherent drift toward this atom's warp direction (the SHAPE warp is in the fragment)
 #ifdef MEMFADE
   wc += memSway(base);
 #ifdef LIPTILE
@@ -577,16 +579,19 @@ varying vec3 vWB1;
 varying vec3 vWB2;
 uniform float boil;      // line-boil amount (0 = off) → warps the silhouette, object-locked
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));  // raking light from the side (right)
+// Same per-atom warp vector as the vertex / orbital shader → the sphere bulges the SAME way its lobes lean.
+vec3 boilDir(vec3 c){ float bt = floor(uT * 7.0);
+  float x = fract(sin(dot(c, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
+  float y = fract(sin(dot(c, vec3(93.989, 47.271, 23.157)) + bt * 2.3) * 19349.663) - 0.5;
+  float z = fract(sin(dot(c, vec3(39.346, 11.135, 83.155)) + bt * 1.7) * 24634.633) - 0.5;
+  return vec3(x, y, z); }
 void main(void){
   float r2 = dot(vUV, vUV);
-  if(boil > 0.001){                          // WARP the silhouette (not just shift): push the disc radius in/out
+  if(boil > 0.001){                          // WARP the silhouette toward this atom's warp direction (same dir as its lobes)
     float zc0 = sqrt(max(0.0, 1.0 - min(r2, 1.0)));
-    vec3 nW = vWB0 * vUV.x + vWB1 * vUV.y + vWB2 * (-zc0);   // world-space surface normal → lumps ride WITH the sphere
-    float bt = floor(uT * 7.0);              // stepped clock → the wobble redraws ~7x/sec (hand-drawn boil, not smooth)
-    float lump = sin(nW.x * 5.5 + vWCen.x * 0.6 + bt)
-               + sin(nW.y * 5.5 + vWCen.y * 0.6 + bt * 1.3)
-               + sin(nW.z * 5.5 + vWCen.z * 0.6 + bt * 0.7);   // ±3 world-locked lumpy field, per-atom phase from vWCen
-    r2 = max(0.0, r2 + boil * 0.05 * lump);  // ±0.15 radius warp at full boil → wavy, dented/bulged outline
+    vec3 nW = vWB0 * vUV.x + vWB1 * vUV.y + vWB2 * (-zc0);   // world-space surface normal (object-locked)
+    vec3 D = boilDir(vWCen);                 // per-atom stepped warp vector — identical to this atom's lobe warp
+    r2 = max(0.0, r2 - boil * 0.26 * dot(nW, D));   // bulge the +D hemisphere, pinch the −D side → egg leaning toward D
   }
   float aa = min(fwidth(r2), 0.16);         // screen-space edge width (capped) → anti-alias far, tiny spheres without dissolving them
   if(r2 > 1.0 + aa) discard;
@@ -903,6 +908,7 @@ uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 selCenter;    // focused atom centre (or far away = none selected)
 uniform float uT;          // thermal-shake time
+uniform float boil;        // line-boil amount (0 = off) → lobes lean toward their atom's warp direction
 #ifdef MACROMOVE
 uniform mat4 macroXform; uniform vec3 macroCenter;  // whole-macromolecule drag offset (only movable materials define this)
 #endif
@@ -924,6 +930,12 @@ varying vec3 vMemW; uniform vec3 memCut;
 varying float vMemAnc; attribute float memAnc;   // per-lipid anchor Z → whole-lipid cross-cut
 #endif
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+// Per-atom stepped warp vector — MUST match the imp (vdW) shader exactly so a lobe leans the same way its sphere bulges.
+vec3 boilDir(vec3 c){ float bt = floor(uT * 7.0);
+  float x = fract(sin(dot(c, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
+  float y = fract(sin(dot(c, vec3(93.989, 47.271, 23.157)) + bt * 2.3) * 19349.663) - 0.5;
+  float z = fract(sin(dot(c, vec3(39.346, 11.135, 83.155)) + bt * 1.7) * 24634.633) - 0.5;
+  return vec3(x, y, z); }
 #ifdef MEMFADE
 // Membrane fluid sway — must match the imp/bond shaders exactly so a lipid's orbitals ride with it.
 vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
@@ -932,6 +944,9 @@ vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  // Lean the whole lobe toward its atom's warp direction — tip more than the base, so the lobe bends,
+  // not just slides. boilDir(ocen) is the SAME vector the atom's vdW sphere bulges along → they warp together.
+  wp.xyz += boil * 0.45 * boilDir(ocen) * (0.35 + 0.65 * clamp(length(position) * 0.5, 0.0, 1.0));
 #ifdef MEMFADE
   wp.xyz += memSway(W[3].xyz);
 #endif
@@ -2319,7 +2334,7 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','boil','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1); realAlpha(orbMatG);   // always fully revealed; blended fades
@@ -2330,7 +2345,7 @@ async function run(){
     eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
@@ -2568,9 +2583,9 @@ async function run(){
        overlap side-on to form the delocalised π. Drawn with the orbital shader. */
     const pMat = new BABYLON.ShaderMaterial('aromPMat', scene, 'orb', {
       attributes:['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'] });
+      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','boil','nElec','selCenter','focusId','coneCos','drawElec'] });
     pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.setFloat('coneCos', -1.0); pMat.setFloat('drawElec', 1); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron (drawn inline)
-    pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
+    pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
     const pMesh = BABYLON.MeshBuilder.CreateSphere('aromP', {segments:3, diameter:1}, scene);
@@ -3630,7 +3645,7 @@ async function run(){
   lSld.type='range'; lSld.min='0'; lSld.max='100'; lSld.value='41'; lSld.style.cssText='width:100%;cursor:pointer;';   // 41 → 1.00×
   const lValEl = lRow.querySelector('#dev-l-val');
   lSld.oninput = () => { gBright = 0.30 + (+lSld.value/100)*1.70; lValEl.textContent = gBright.toFixed(2)+'×'; };
-  // Line-boil slider → gBoil (0 = off): stepped per-atom jitter (vdW spheres) + painterly screen warp.
+  // Line-boil slider → gBoil (0 = off): stepped, object-locked warp — vdW spheres bulge and their orbital lobes lean the same way per atom.
   const bRow = document.createElement('div');
   bRow.innerHTML = 'boil: <b id="dev-b-val">off</b>';
   const bSld = document.createElement('input');
