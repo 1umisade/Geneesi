@@ -492,11 +492,10 @@ void main(void){
   vWCen = base;
   vec3 wc = shake(base);
   if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
-    vec2 sd = base.xy + base.z;
-    float hx = fract(sin(dot(sd, vec2(12.9898, 78.233)) + bt) * 43758.5453) - 0.5;
-    float hy = fract(sin(dot(sd, vec2(93.989, 47.271)) + bt*2.3) * 19349.663) - 0.5;
-    float hz = fract(sin(dot(sd, vec2(39.346, 11.135)) + bt*1.7) * 24634.633) - 0.5;
-    wc += boil * 0.7 * vec3(hx, hy, hz);   // per-atom stepped offset so the sphere boils in place
+    float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
+    float hy = fract(sin(dot(base, vec3(93.989, 47.271, 23.157)) + bt*2.3) * 19349.663) - 0.5;
+    float hz = fract(sin(dot(base, vec3(39.346, 11.135, 83.155)) + bt*1.7) * 24634.633) - 0.5;
+    wc += boil * 0.7 * vec3(hx, hy, hz);   // per-atom stepped offset (seeded by full 3-D world pos → object-locked, uncorrelated)
   }
 #ifdef MEMFADE
   wc += memSway(base);
@@ -1452,21 +1451,16 @@ uniform float edgeAmt;   // ink line strength
 uniform float bands;     // posterise levels per channel
 uniform float paperAmt;  // paper-grain amount
 uniform float bright;    // overall brightness lift
-uniform float boil;      // line-boil amount (0 = off)
-uniform float boilT;     // STEPPED clock → the warp jumps every step, not smoothly (hand-drawn boil)
 float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main(void){
-  // Line boil: a small STEPPED screen-space warp so outlines are redrawn slightly displaced each step
-  // and appear to wiggle in place (Squigglevision). Zero warp when boil is 0.
-  vec2 uv = vUV + boil * 0.006 * vec2(sin(vUV.y*38.0 + boilT), cos(vUV.x*34.0 + boilT*1.3));
-  vec3 c = texture2D(textureSampler, uv).rgb;
+  vec3 c = texture2D(textureSampler, vUV).rgb;
 
   // Watercolour soft fill: weighted cross blur → colour bleeds a little.
   vec3 blur = c * 2.0;
-  blur += texture2D(textureSampler, uv + texel*vec2( 1.4, 0.0)).rgb;
-  blur += texture2D(textureSampler, uv + texel*vec2(-1.4, 0.0)).rgb;
-  blur += texture2D(textureSampler, uv + texel*vec2( 0.0, 1.4)).rgb;
-  blur += texture2D(textureSampler, uv + texel*vec2( 0.0,-1.4)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2( 1.4, 0.0)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2(-1.4, 0.0)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2( 0.0, 1.4)).rgb;
+  blur += texture2D(textureSampler, vUV + texel*vec2( 0.0,-1.4)).rgb;
   blur /= 6.0;
 
   // Brighten before banding (gamma lift) so more of the tonal range is painted.
@@ -1482,14 +1476,14 @@ void main(void){
   p = clamp((p - 0.5) * 1.03 + 0.5, 0.0, 1.0);
 
   // Ink outline: Sobel on luminance of the sharp (un-blurred) image.
-  float tl=luma(texture2D(textureSampler,uv+texel*vec2(-1.,-1.)).rgb);
-  float tc=luma(texture2D(textureSampler,uv+texel*vec2( 0.,-1.)).rgb);
-  float tr=luma(texture2D(textureSampler,uv+texel*vec2( 1.,-1.)).rgb);
-  float ml=luma(texture2D(textureSampler,uv+texel*vec2(-1., 0.)).rgb);
-  float mr=luma(texture2D(textureSampler,uv+texel*vec2( 1., 0.)).rgb);
-  float bl=luma(texture2D(textureSampler,uv+texel*vec2(-1., 1.)).rgb);
-  float bc=luma(texture2D(textureSampler,uv+texel*vec2( 0., 1.)).rgb);
-  float br=luma(texture2D(textureSampler,uv+texel*vec2( 1., 1.)).rgb);
+  float tl=luma(texture2D(textureSampler,vUV+texel*vec2(-1.,-1.)).rgb);
+  float tc=luma(texture2D(textureSampler,vUV+texel*vec2( 0.,-1.)).rgb);
+  float tr=luma(texture2D(textureSampler,vUV+texel*vec2( 1.,-1.)).rgb);
+  float ml=luma(texture2D(textureSampler,vUV+texel*vec2(-1., 0.)).rgb);
+  float mr=luma(texture2D(textureSampler,vUV+texel*vec2( 1., 0.)).rgb);
+  float bl=luma(texture2D(textureSampler,vUV+texel*vec2(-1., 1.)).rgb);
+  float bc=luma(texture2D(textureSampler,vUV+texel*vec2( 0., 1.)).rgb);
+  float br=luma(texture2D(textureSampler,vUV+texel*vec2( 1., 1.)).rgb);
   float gx = -tl - 2.0*ml - bl + tr + 2.0*mr + br;
   float gy = -tl - 2.0*tc - tr + bl + 2.0*bc + br;
   float g  = sqrt(gx*gx + gy*gy) * edgeAmt;
@@ -4323,15 +4317,13 @@ async function run(){
   // Painterly / comic-book grade — runs last, over the anti-aliased frame. Toggle with "P".
   let painterlyOn = true;
   const painterly = new BABYLON.PostProcess('painterly', 'painterly',
-    ['texel', 'edgeAmt', 'bands', 'paperAmt', 'bright', 'boil', 'boilT'], null, 1.0, cam);
+    ['texel', 'edgeAmt', 'bands', 'paperAmt', 'bright'], null, 1.0, cam);
   painterly.onApply = eff => {
     eff.setFloat2('texel', 1 / engine.getRenderWidth(), 1 / engine.getRenderHeight());
     eff.setFloat('edgeAmt', 1.5);    // ink line strength
     eff.setFloat('bands', 6.0);      // flat colour bands per channel
     eff.setFloat('paperAmt', 0.05);  // paper grain
     eff.setFloat('bright', 1.35);    // brightness lift (was coming out dark)
-    eff.setFloat('boil', gBoil);
-    eff.setFloat('boilT', Math.floor(gWaveT * 7.0));   // ~7 steps/sec → choppy, hand-drawn boil (not a smooth wobble)
   };
   window.addEventListener('keydown', e => {
     if(e.key === 'p' || e.key === 'P'){
