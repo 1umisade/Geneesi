@@ -635,7 +635,9 @@ void main(void){
   float hide = 0.0;                                           // 1 = a cofactor sits behind this atom → cut its body away, keep only the outline
 #ifdef COFHIDE
   if(cofHideOn > 0.5){
-    float cd = texture2D(cofDepth, gl_FragCoord.xy * cofTexel).r;   // nearest cofactor view-depth here (1e9 = none)
+    vec4 cClip = projection * vec4(vCenterV, 1.0);                  // this atom CENTRE in clip space
+    vec2 cUV = (cClip.xy / cClip.w) * 0.5 + 0.5;                    // sample the cofactor depth at the atom CENTRE (per-atom, not per-pixel) so whole atoms cut as a unit — organic edge, like the selected tunnel
+    float cd = texture2D(cofDepth, cUV).r;                          // nearest cofactor view-depth under this atom centre (1e9 = none)
     if(cd < 1.0e8 && vCenterV.z < cd - 0.6) hide = 1.0;            // atom centre is IN FRONT of that cofactor → cut away
   }
 #endif
@@ -2630,7 +2632,7 @@ async function run(){
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
       const NG = etcGroups.length, dm = new Float32Array(NG*16), dR = new Float32Array(NG);
       for(let i=0;i<NG;i++){ const g=etcGroups[i], o=i*16;
-        dm[o]=1; dm[o+5]=1; dm[o+10]=1; dm[o+15]=1; dm[o+12]=g.cx; dm[o+13]=g.cy; dm[o+14]=g.cz; dR[i]=g.r+3.0; }
+        dm[o]=1; dm[o+5]=1; dm[o+10]=1; dm[o+15]=1; dm[o+12]=g.cx; dm[o+13]=g.cy; dm[o+14]=g.cz; dR[i]=g.r+5.0; }   // same tunnel radius as the selected-cofactor cut
       disc.thinInstanceSetBuffer('matrix', dm, 16, true);
       disc.thinInstanceSetBuffer('dr', dR, 1, true);
       cofDepthRT.renderList = [disc];
