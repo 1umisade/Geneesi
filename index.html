@@ -1696,10 +1696,10 @@ uniform sampler2D textureSampler;
 uniform sampler2D cofMask;
 uniform vec2 texel;
 uniform float lineW;
-// foreground vs the flat DARK-green background. Anything bright, or reddish (r>=g), is molecular
-// content; only a dark green (low value AND green-dominant) is the background — so pale/sage-green
-// complexes stay solid foreground and don't flicker.
-float isFg(vec3 c){ float v = max(c.r, max(c.g, c.b)); return (v > 0.52 || c.r >= c.g) ? 1.0 : 0.0; }
+uniform vec3 bgRef;   // the flat background colour (this pass runs on the RAW scene, so it matches exactly)
+// foreground = anything that isn't the background colour. Comparing to the EXACT flat background is
+// robust — green-tinted proteins are never mistaken for it, so no interior darkening.
+float isFg(vec3 c){ return (distance(c, bgRef) < 0.06) ? 0.0 : 1.0; }
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
   float c = texture2D(cofMask, vUV).r, mn = c, mx = c;   // cofactor coverage
@@ -4883,6 +4883,16 @@ async function run(){
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   document.getElementById('overlay').classList.add('gone');
 
+  // Silhouette pass — runs FIRST, on the RAW scene (background is the exact flat colour). Inks a black
+  // outline where the frame meets the background (the whole assembly) AND around each cofactor molecule
+  // (from the coverage mask). fxaa + the painterly grade then blend it into the comic look.
+  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','bgRef'], ['cofMask'], 1.0, cam);
+  cofsil.onApply = eff => {
+    eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
+    eff.setFloat('lineW', gCofLineW);
+    eff.setColor3('bgRef', BG_GREEN);
+    if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
+  };
   // AO is disabled in the translucent "inside" view — it packs depth into the alpha
   // channel, which the transparent shell now uses for blending (the two can't coexist).
   // FXAA + supersampling still smooth the edges.
@@ -4901,14 +4911,6 @@ async function run(){
     eff.setFloat('bands', 6.0);      // flat colour bands per channel
     eff.setFloat('paperAmt', 0.05);  // paper grain
     eff.setFloat('bright', 1.35);    // brightness lift (was coming out dark)
-  };
-  // Cofactor silhouette — a single black outline around each cofactor MOLECULE, inked on top of the
-  // finished frame from the coverage mask. Runs last, so it floats over everything.
-  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW'], ['cofMask'], 1.0, cam);
-  cofsil.onApply = eff => {
-    eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('lineW', gCofLineW);
-    if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
   window.addEventListener('keydown', e => {
     if(e.key === 'p' || e.key === 'P'){
