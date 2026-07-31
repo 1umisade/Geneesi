@@ -1696,16 +1696,25 @@ uniform sampler2D textureSampler;
 uniform sampler2D cofMask;
 uniform vec2 texel;
 uniform float lineW;
+// foreground vs the flat DARK-green background. Anything bright, or reddish (r>=g), is molecular
+// content; only a dark green (low value AND green-dominant) is the background — so pale/sage-green
+// complexes stay solid foreground and don't flicker.
+float isFg(vec3 c){ float v = max(c.r, max(c.g, c.b)); return (v > 0.52 || c.r >= c.g) ? 1.0 : 0.0; }
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
-  float c = texture2D(cofMask, vUV).r, mn = c, mx = c;
+  float c = texture2D(cofMask, vUV).r, mn = c, mx = c;   // cofactor coverage
+  float f = isFg(scene), fmn = f, fmx = f;               // whole-scene foreground (proteins + membrane)
   for(int i=0;i<8;i++){
     float a = float(i) * 0.7853982;
     vec2 d = vec2(cos(a), sin(a)) * texel * lineW;
     float s = texture2D(cofMask, vUV + d).r;
     mn = min(mn, s); mx = max(mx, s);
+    float ff = isFg(texture2D(textureSampler, vUV + d).rgb);
+    fmn = min(fmn, ff); fmx = max(fmx, ff);
   }
-  float line = smoothstep(0.2, 0.7, mx - mn);   // where the coverage transitions = the molecule silhouette
+  float cofLine  = smoothstep(0.2, 0.7, mx - mn);        // cofactor molecule silhouette
+  float protLine = smoothstep(0.2, 0.7, fmx - fmn);      // outer silhouette of the whole assembly against the background
+  float line = max(cofLine, protLine);
   gl_FragColor = vec4(mix(scene, vec3(0.03), line), 1.0);   // silhouette = black
 }`;
 
