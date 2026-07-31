@@ -4469,6 +4469,7 @@ async function run(){
       gRevealCount = cnt;
     } else gRevealCount = 0;
     if(!orbitLocked || orbitCenter.x > 1e5) return;
+    if(dragging && !panning) return;   // user is left-dragging to rotate → the drag owns the camera; don't re-centre and cancel the spin
     if(gSelModel >= 0 && mInfo[gSelModel]){ const mi = mInfo[gSelModel];   // dragged complex → keep the pivot on its live centre
       orbitCenter.set(mi.cx+gModelOff[gSelModel*3], mi.cy+gModelOff[gSelModel*3+1], mi.cz+gModelOff[gSelModel*3+2]); }
     cam.setTarget(BABYLON.Vector3.Lerp(cam.getTarget(), orbitCenter, 0.16));
