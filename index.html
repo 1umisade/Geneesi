@@ -644,7 +644,7 @@ void main(void){
 #ifdef SELTUNNEL
   if(selTunnelOn > 0.5){                                            // selected cofactor's sight tube cuts EVERYTHING in front (incl. other cofactors)
     float tt = dot(vCenterV, selTunnelV) / max(dot(selTunnelV, selTunnelV), 1e-4);
-    if(tt < 0.94 && length(vCenterV - tt * selTunnelV) < selTunnelR) hide = 1.0;
+    if(tt < 0.94 && length(vCenterV - tt * selTunnelV) - vRad < selTunnelR) hide = 1.0;   // -vRad: cut if the atom's BODY reaches the tube, not just its centre → a big sphere can't bulge across the sight line
   }
 #endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
@@ -681,7 +681,7 @@ void main(void){
 #else
     float w = min(aa * 2.0, 0.4);                             // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same thin pixel thickness on every atom, big or small
     if(r2 < 1.0 - w) discard;                                 // everything inside the ring is simply GONE (the cofactor/scene shows through the empty middle)
-    col = vec3(0.5); alpha = 0.25;                            // flat UNLIT grey circle at 25% opacity (75% transparent) — no light, constant thin width
+    col = vec3(0.5); alpha = 0.2;                            // flat UNLIT grey circle at 25% opacity (75% transparent) — no light, constant thin width
 #endif
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
