@@ -642,12 +642,8 @@ void main(void){
   if(cofHideOn > 0.5){
     vec4 cClip = projection * vec4(vCenterV, 1.0);
     vec2 cUV = (cClip.xy / cClip.w) * 0.5 + 0.5;
-    vec2 cofS = texture2D(cofDepth, cUV).rg;                        // R = cofactor view-depth (1e9 = none) · G = disc-UV radius at this pixel
-    float cd = cofS.r, du = cofS.g;
-    // CONE, not a tube: the reveal tapers to a point AT the cofactor and widens toward the camera, so
-    // only atoms actually on the line of sight are hidden. At depth z a pixel du off the axis clears
-    // when du < cd/z - 1 (→ 0 at the cofactor, → full disc halfway to the camera and nearer).
-    if(cd < 1.0e8 && vCenterV.z < cd - 0.6 && du < (cd / max(vCenterV.z, 0.001)) - 1.0) alpha *= 0.25;
+    float rd = texture2D(cofDepth, cUV).r;                          // deepest per-atom CONE reveal-depth at this pixel (0 = no cofactor cone here)
+    if(rd > 0.5 && vCenterV.z < rd - 0.6) alpha *= 0.25;            // atom is in front of the cone's reveal depth → clear it
   }
 #endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
@@ -699,11 +695,12 @@ void main(void){
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
 
-/* Cofactor line-of-sight depth pass — every cofactor ATOM as a camera-facing disc of a FIXED WORLD
-   radius (Ångström); output = its view-space depth. Nearest cofactor atom wins (normal depth test).
-   The protein shader samples this: an atom in front of a cofactor here goes 75% transparent. A constant
-   WORLD radius → the tube is a fixed molecular diameter (a few atoms wide) that scales with zoom like
-   the rest of the scene, so the see-through channel stays the same physical width at every distance. */
+/* Cofactor line-of-sight depth pass — EVERY cofactor atom as a camera-facing disc. Each atom defines
+   its OWN cone (a frustum): radius tipRatio of the disc AT the atom, radius baseRatio toward the camera.
+   Per pixel we keep the DEEPEST "reveal depth" over all atoms' cones (via gl_FragDepthEXT), so the union
+   of cones reflects the whole cofactor's SHAPE. The protein shader clears an atom in front of that depth.
+   revealDepth(du) = baseRatio*vz / (du + baseRatio - tipRatio):  = vz at a cone's axis (clears to the atom),
+   shrinks toward the disc edge → a cone tapering to each atom. */
 BABYLON.Effect.ShadersStore['cofdVertexShader'] = `
 precision highp float;
 attribute vec3 position;                       // ±1 quad corner
@@ -718,14 +715,20 @@ void main(void){
   vq = position.xy;
   cv.xy += vq * dr;                                   // camera-facing disc of a FIXED WORLD radius (constant tube diameter in Ångström)
   gl_Position = projection * cv;
-  gl_Position.z = -gl_Position.z;                     // flip depth so the FARTHEST cofactor atom wins the test (default LESS) → the tube reaches the BACK of the cofactor, revealing the whole thing (protein behind the farthest atom stays opaque)
 }`;
 BABYLON.Effect.ShadersStore['cofdFragmentShader'] = `
 precision highp float;
+uniform float tipRatio;   // cone width AT the atom (0 = point tip)
+uniform float baseRatio;  // cone width toward the CAMERA
 varying vec2 vq; varying float vz;
 void main(void){
   if(dot(vq, vq) > 1.0) discard;                // circular tunnel cross-section
-  gl_FragColor = vec4(vz, length(vq), 0.0, 1.0);   // R = cofactor view-depth · G = disc-UV radius (0 centre → 1 edge), used to shape the reveal into a CONE
+  float du = length(vq);                        // 0 at this atom's axis → 1 at its disc edge
+  float denom = du + baseRatio - tipRatio;
+  float rd = (denom > 0.001) ? (baseRatio * vz / denom) : 1.0e8;   // this atom's cone reveal-depth at this pixel
+  rd = min(rd, 1.0e8);
+  gl_FragColor = vec4(rd, 0.0, 0.0, 1.0);       // R = reveal depth (protein in front of it clears here)
+  gl_FragDepthEXT = 1.0 - clamp(rd, 0.0, 6000.0) / 6001.0;   // DEEPEST reveal wins → union of every atom's cone
 }`;
 
 /* Cofactor coverage mask — each cofactor atom as a camera-facing disc of its vdW radius (a cheap
@@ -2248,6 +2251,8 @@ async function run(){
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
+  let gConeTip = 0.0;         // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
+  let gConeBase = 1.0;        // cofactor see-through cone width toward the CAMERA. Dev slider.
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
   let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
   const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
@@ -2678,10 +2683,10 @@ async function run(){
     // FLOAT buffer holding the nearest cofactor's view-space depth per pixel; the protein shader samples it.
     {
       const eng = scene.getEngine();
-      const rw = Math.max(2, Math.ceil(eng.getRenderWidth()*0.5)), rh = Math.max(2, Math.ceil(eng.getRenderHeight()*0.5));
+      const rw = Math.max(2, Math.ceil(eng.getRenderWidth()*0.34)), rh = Math.max(2, Math.ceil(eng.getRenderHeight()*0.34));   // ~third-res: the per-fragment cone depth pass has no early-z, so keep the overdraw down (soft see-through, coarse is fine)
       cofDepthRT = new BABYLON.RenderTargetTexture('cofDepth', {width:rw, height:rh}, scene, false, true,
         BABYLON.Constants.TEXTURETYPE_FLOAT, false, BABYLON.Texture.NEAREST_SAMPLINGMODE, true, false);
-      cofDepthRT.clearColor = new BABYLON.Color4(1e9, 0, 0, 1);            // sentinel: no cofactor here (very far)
+      cofDepthRT.clearColor = new BABYLON.Color4(0, 0, 0, 1);              // 0 reveal-depth = no cofactor cone here
       const cofCam = new BABYLON.FreeCamera('cofCam', new BABYLON.Vector3(0,0,0), scene);
       scene.removeCamera(cofCam);                                         // must not join the main render
       cofCam.layerMask = 0x20000000;                                      // sees ONLY the disc mesh (own mask, excluded from the main camera)
@@ -2689,8 +2694,10 @@ async function run(){
       cofCam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofDepthRT.activeCamera = cofCam;
       const cofdMat = new BABYLON.ShaderMaterial('cofdMat', scene, 'cofd', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection'] });
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','tipRatio','baseRatio'] });
       cofdMat.backFaceCulling = false;
+      cofdMat.onBindObservable.add(()=>{ const eff=cofdMat.getEffect(); if(!eff)return;
+        eff.setFloat('tipRatio', gConeTip); eff.setFloat('baseRatio', gConeBase); });   // dev sliders: cone width at the atom / at the camera
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
       const WORLD_TUBE_R = 14.0, NA = etcT.length;                      // per-ATOM tube radius in Ångström → a FIXED molecular channel width at every zoom, wide enough that the whole line of sight in front of a cofactor clears
@@ -3945,10 +3952,19 @@ async function run(){
   bSld.type='range'; bSld.min='0'; bSld.max='100'; bSld.value='20'; bSld.style.cssText='width:100%;cursor:pointer;';   // default 0.2
   const bValEl = bRow.querySelector('#dev-b-val');
   bSld.oninput = () => { const v = +bSld.value; gBoil = v/100; bValEl.textContent = v===0 ? 'off' : gBoil.toFixed(2); };
+  // Cofactor see-through cone — width AT the atom (tip) and toward the CAMERA (base).
+  const ctRow = document.createElement('div'); ctRow.innerHTML = 'cone tip (atom): <b id="dev-ct-val">0.00</b>';
+  const ctSld = document.createElement('input'); ctSld.type='range'; ctSld.min='0'; ctSld.max='100'; ctSld.value='0'; ctSld.style.cssText='width:100%;cursor:pointer;';   // 0 = point tip
+  const ctValEl = ctRow.querySelector('#dev-ct-val');
+  ctSld.oninput = () => { gConeTip = +ctSld.value/100; ctValEl.textContent = gConeTip.toFixed(2); };   // 0 = point → 1 = full disc (tube)
+  const cbRow = document.createElement('div'); cbRow.innerHTML = 'cone base (cam): <b id="dev-cb-val">1.00</b>';
+  const cbSld = document.createElement('input'); cbSld.type='range'; cbSld.min='0'; cbSld.max='100'; cbSld.value='32'; cbSld.style.cssText='width:100%;cursor:pointer;';   // 32 → 1.00
+  const cbValEl = cbRow.querySelector('#dev-cb-val');
+  cbSld.oninput = () => { gConeBase = 0.30 + (+cbSld.value/100)*2.20; cbValEl.textContent = gConeBase.toFixed(2); };   // 0.30 … 2.50, wider = deeper reveal toward the camera
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
