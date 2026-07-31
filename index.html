@@ -642,8 +642,12 @@ void main(void){
   if(cofHideOn > 0.5){
     vec4 cClip = projection * vec4(vCenterV, 1.0);
     vec2 cUV = (cClip.xy / cClip.w) * 0.5 + 0.5;
-    float cd = texture2D(cofDepth, cUV).r;                          // nearest cofactor view-depth under this atom's centre (1e9 = none)
-    if(cd < 1.0e8 && vCenterV.z < cd - 0.6) alpha *= 0.25;
+    vec2 cofS = texture2D(cofDepth, cUV).rg;                        // R = cofactor view-depth (1e9 = none) · G = disc-UV radius at this pixel
+    float cd = cofS.r, du = cofS.g;
+    // CONE, not a tube: the reveal tapers to a point AT the cofactor and widens toward the camera, so
+    // only atoms actually on the line of sight are hidden. At depth z a pixel du off the axis clears
+    // when du < cd/z - 1 (→ 0 at the cofactor, → full disc halfway to the camera and nearer).
+    if(cd < 1.0e8 && vCenterV.z < cd - 0.6 && du < (cd / max(vCenterV.z, 0.001)) - 1.0) alpha *= 0.25;
   }
 #endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
@@ -721,7 +725,7 @@ precision highp float;
 varying vec2 vq; varying float vz;
 void main(void){
   if(dot(vq, vq) > 1.0) discard;                // circular tunnel cross-section
-  gl_FragColor = vec4(vz, 0.0, 0.0, 1.0);
+  gl_FragColor = vec4(vz, length(vq), 0.0, 1.0);   // R = cofactor view-depth · G = disc-UV radius (0 centre → 1 edge), used to shape the reveal into a CONE
 }`;
 
 /* Cofactor coverage mask — each cofactor atom as a camera-facing disc of its vdW radius (a cheap
