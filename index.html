@@ -632,21 +632,14 @@ void main(void){
   float rimGlass = mix(shellMin, 0.72, smoothstep(0.34, 1.0, r2));   // revealed shell = a glass bubble, near-clear centre and a visible rim, so the orbitals inside stand out
   alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
-  float hide = 0.0;                                           // 1 = a cofactor sits behind this atom → cut its body away, keep only the outline
 #ifdef COFHIDE
+  // Line of sight to the ETC cofactors: an atom IN FRONT of a cofactor goes 75% transparent (keeps its
+  // normal colour and outline — just see-through), so the cofactor behind shows through.
   if(cofHideOn > 0.5){
-    vec4 cClip = projection * vec4(vCenterV, 1.0);                  // this atom CENTRE in clip space
-    vec2 cUV = (cClip.xy / cClip.w) * 0.5 + 0.5;                    // sample the cofactor depth at the atom CENTRE (per-atom, not per-pixel) so whole atoms cut as a unit — organic edge, like the selected tunnel
-    float cd = texture2D(cofDepth, cUV).r;                          // nearest cofactor view-depth under this atom centre (1e9 = none)
-    if(cd < 1.0e8 && vCenterV.z < cd - 0.6) hide = 1.0;            // atom centre is IN FRONT of that cofactor → cut away
-  }
-#endif
-#ifdef SELTUNNEL
-  if(selTunnelOn > 0.5){                                            // selected cofactor's sight tube cuts EVERYTHING in front (incl. other cofactors)
-    float tt = dot(vCenterV, selTunnelV) / max(dot(selTunnelV, selTunnelV), 1e-4);
-    float atomD = max(length(vCenterV), 0.5), cofD = max(length(selTunnelV), 0.5);
-    float effR = selTunnelR * min(cofD / atomD, 4.0);              // widen the tube toward the CAMERA (up to 4x): a sphere close to the eye looms large on screen, so it needs a wider cut to clear the line of sight
-    if(tt < 0.94 && length(vCenterV - tt * selTunnelV) - vRad < effR) hide = 1.0;   // -vRad: cut if the atom's BODY reaches the tube, not just its centre
+    vec4 cClip = projection * vec4(vCenterV, 1.0);
+    vec2 cUV = (cClip.xy / cClip.w) * 0.5 + 0.5;
+    float cd = texture2D(cofDepth, cUV).r;                          // nearest cofactor view-depth under this atom's centre (1e9 = none)
+    if(cd < 1.0e8 && vCenterV.z < cd - 0.6) alpha *= 0.25;
   }
 #endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
@@ -677,15 +670,6 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
-  if(hide > 0.5){                                             // cut-away: a hidden atom is just a thin grey circle
-#ifdef ETCTOP
-    discard;                                                  // a HIDDEN cofactor-overlay atom: drop the enlarged overlay entirely — its ordinary cell copy draws the outline, so it follows the same rule as every other atom (no doubled/fat rings)
-#else
-    float w = min(aa * 2.0, 0.4);                             // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same thin pixel thickness on every atom, big or small
-    if(r2 < 1.0 - w) discard;                                 // everything inside the ring is simply GONE (the cofactor/scene shows through the empty middle)
-    col = vec3(0.5); alpha = 0.2;                            // flat UNLIT grey circle at 25% opacity (75% transparent) — no light, constant thin width
-#endif
-  }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
