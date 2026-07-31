@@ -683,25 +683,25 @@ void main(void){
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
 
-/* Cofactor line-of-sight depth pass — every cofactor ATOM as a camera-facing disc of a FIXED PIXEL
-   radius; output = its view-space depth. Nearest cofactor atom wins (normal depth test). The protein
-   shader samples this: an atom in front of a cofactor here goes 75% transparent. A constant pixel
-   radius → the tube is the SAME size for every cofactor, near or far, big or small. */
+/* Cofactor line-of-sight depth pass — every cofactor ATOM as a camera-facing disc of a FIXED WORLD
+   radius (Ångström); output = its view-space depth. Nearest cofactor atom wins (normal depth test).
+   The protein shader samples this: an atom in front of a cofactor here goes 75% transparent. A constant
+   WORLD radius → the tube is a fixed molecular diameter (a few atoms wide) that scales with zoom like
+   the rest of the scene, so the see-through channel stays the same physical width at every distance. */
 BABYLON.Effect.ShadersStore['cofdVertexShader'] = `
 precision highp float;
 attribute vec3 position;                       // ±1 quad corner
 attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
-attribute float dr;                            // this atom's tube radius in PIXELS (0 = its type is toggled off)
+attribute float dr;                            // this atom's tube radius in WORLD units, Ångström (0 = its type is toggled off)
 uniform mat4 view; uniform mat4 projection;
-uniform vec2 pxToNdc;                          // pixels → NDC (2 / render size) so dr is a constant screen size
 varying vec2 vq; varying float vz;
 void main(void){
   vec3 center = vec3(world3.x, world3.y, world3.z);   // instance translation = atom centre
   vec4 cv = view * vec4(center, 1.0);
   vz = cv.z;                                          // view-space depth (larger = farther)
   vq = position.xy;
-  vec4 cClip = projection * vec4(cv.xyz, 1.0);
-  gl_Position = cClip + vec4(vq * dr * pxToNdc * cClip.w, 0.0, 0.0);   // fixed PIXEL-size disc at the atom's screen position
+  cv.xy += vq * dr;                                   // camera-facing disc of a FIXED WORLD radius (constant tube diameter in Ångström)
+  gl_Position = projection * cv;
 }`;
 BABYLON.Effect.ShadersStore['cofdFragmentShader'] = `
 precision highp float;
@@ -2596,17 +2596,16 @@ async function run(){
       cofCam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofDepthRT.activeCamera = cofCam;
       const cofdMat = new BABYLON.ShaderMaterial('cofdMat', scene, 'cofd', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','pxToNdc'] });
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection'] });
       cofdMat.backFaceCulling = false;
-      cofdMat.setVector2('pxToNdc', new BABYLON.Vector2(2/rw, 2/rh));   // dr is measured in depth-buffer pixels
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
-      const PX_TUBE = 20, NA = etcT.length;                             // per-ATOM tube radius (depth-buffer px) → same size for every cofactor, near or far
+      const WORLD_TUBE_R = 8.0, NA = etcT.length;                       // per-ATOM tube radius in Ångström (~5 heavy atoms wide) → a FIXED molecular channel width at every zoom
       disc.thinInstanceSetBuffer('matrix', new Float32Array(etcM), 16, true);   // one disc per cofactor ATOM (reuse the overlay's atom matrices)
       gCofDR = new Float32Array(NA);
       for(let i=0;i<NA;i++) if(etcTypeOn[etcT[i]] === undefined) etcTypeOn[etcT[i]] = true;   // every cofactor type defaults to line-of-sight ON
-      refreshCofDiscs = () => {   // per-atom tube radius; 0 = that atom's type is toggled off
-        for(let i=0;i<NA;i++) gCofDR[i] = etcTypeOn[etcT[i]] ? PX_TUBE : 0.0;
+      refreshCofDiscs = () => {   // per-atom tube radius (Å); 0 = that atom's type is toggled off
+        for(let i=0;i<NA;i++) gCofDR[i] = etcTypeOn[etcT[i]] ? WORLD_TUBE_R : 0.0;
         disc.thinInstanceSetBuffer('dr', gCofDR, 1, true);
       };
       refreshCofDiscs();
@@ -3267,7 +3266,7 @@ async function run(){
     const r = cam.getDirection(BABYLON.Axis.X);   // view right
     dir.direction = f.add(u.scale(-0.45)).add(r.scale(0.25)).normalize();  // from slightly above/right of the viewer
     const ar = Math.abs(cam.radius);                            // abs → fog still works inside / on the far side
-    cam.maxZ = ar + modelR*2.0 + 20;                            // tight far clip → depth precision (no z-fighting stripes)
+    cam.maxZ = ar*2.0 + modelR*2.0 + 20;                        // far clip: stays tight up close (ar small → ~2·modelR, keeps depth precision) but grows with zoom-out (2·ar) so the wide membrane sheet + far complexes are not clipped away
     // Near clip must shrink as you approach an atom, or the near plane slices the nucleus flat.
     // Only drops small at close range; stays 0.15 when zoomed out so depth precision holds.
     cam.minZ = Math.min(0.15, Math.max(0.02, ar*0.03));
