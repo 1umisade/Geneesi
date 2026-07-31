@@ -582,7 +582,9 @@ uniform float coneCos;     // reveal only atoms within this cosine of the view a
 uniform sampler2D cofDepth;   // nearest cofactor's view-space depth per screen pixel (1e9 = none)
 uniform vec2 cofTexel;        // 1 / render size → gl_FragCoord to [0,1]
 uniform float cofHideOn;      // 1 = cofactor see-through active
-uniform float cofAlpha;       // opacity of a revealed atom (dev slider: 0 = invisible → 1 = solid)
+uniform float cofAlpha;       // opacity of a revealed atom's vdW FILL (dev slider: 0 = invisible → 1 = solid)
+uniform float cofOutAlpha;    // opacity of a revealed atom's OUTLINE (dev slider)
+uniform float cofOutCol;      // grey level of a revealed atom's outline (0 = black → 1 = white)
 #endif
 #ifdef MEMFADE
 uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane fade away
@@ -638,13 +640,14 @@ void main(void){
   alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
 #ifdef COFHIDE
-  // Line of sight to the ETC cofactors: an atom IN FRONT of a cofactor goes 75% transparent (keeps its
-  // normal colour and outline — just see-through), so the cofactor behind shows through.
+  // Line of sight to the ETC cofactors: an atom IN FRONT of a cofactor goes see-through so the cofactor
+  // behind shows through. cofClear flags it here; the fill/outline opacity + outline colour apply below.
+  float cofClear = 0.0;
   if(cofHideOn > 0.5){
     vec4 cClip = projection * vec4(vCenterV, 1.0);
     vec2 cUV = (cClip.xy / cClip.w) * 0.5 + 0.5;
     float rd = texture2D(cofDepth, cUV).r;                          // deepest per-atom CONE reveal-depth at this pixel (0 = no cofactor cone here)
-    if(rd > 0.5 && vCenterV.z < rd - 0.6) alpha *= cofAlpha;        // atom is in front of the cone's reveal depth → fade it (opacity from the dev slider)
+    if(rd > 0.5 && vCenterV.z < rd - 0.6) cofClear = 1.0;           // atom is in front of the cone → mark it see-through (fill/outline opacity + colour applied at output)
   }
 #endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
@@ -679,7 +682,11 @@ void main(void){
 #ifdef ETCDARK
     col = mix(col, vec3(0.03), rim);                       // cofactors → a BLACK outline that traces the molecule shape (each atom outlined, interior rims occluded by the atoms in front → the eye reads the outer contour)
 #else
+ #ifdef COFHIDE
+    col = mix(col, (cofClear > 0.5) ? vec3(cofOutCol) : vColor * 0.40, rim);   // a see-through atom's outline uses the dev colour, otherwise the atom's own 40% shade
+ #else
     col = mix(col, vColor * 0.40, rim);                    // rim → a FIXED 40% shade of the atom's own UNLIT colour → same darkness whichever way the sphere faces the light (was col *= mix(1.0,0.40,rim), whose 40%-of-LIT-colour went near-black on shadowed edges → the inconsistent thick-black outlines)
+ #endif
 #endif
   }
   // Selected complex → repaint each of its atoms' rims sage. Every atom is outlined, so the shape
@@ -691,6 +698,9 @@ void main(void){
   if(rim < 0.30) discard;                 // keep ONLY the outline ring — the fill is dropped
   gl_FragColor = vec4(vec3(0.06), rim);   // BLACK ink ring (like every other atom's outline), on top of everything
   return;
+#endif
+#ifdef COFHIDE
+  if(cofClear > 0.5) alpha *= mix(cofAlpha, cofOutAlpha, rim);   // see-through atom: fill opacity in the body, outline opacity on the rim
 #endif
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
@@ -721,13 +731,14 @@ BABYLON.Effect.ShadersStore['cofdFragmentShader'] = `
 precision highp float;
 uniform float tipRatio;   // cone width AT the atom (0 = point tip)
 uniform float baseRatio;  // cone width toward the CAMERA
+uniform float coneReach;  // extra depth BEHIND the atom the cone still clears (Å)
 varying vec2 vq; varying float vz;
 void main(void){
   if(dot(vq, vq) > 1.0) discard;                // circular tunnel cross-section
   float du = length(vq);                        // 0 at this atom's axis → 1 at its disc edge
   float denom = du + baseRatio - tipRatio;
   float rd = (denom > 0.001) ? (baseRatio * vz / denom) : 1.0e8;   // this atom's cone reveal-depth at this pixel
-  rd = min(rd, 1.0e8);
+  rd = min(rd + coneReach, 1.0e8);              // push the reveal a bit deeper (behind the atom)
   gl_FragColor = vec4(rd, 0.0, 0.0, 1.0);       // R = reveal depth (protein in front of it clears here)
   gl_FragDepthEXT = 1.0 - clamp(rd, 0.0, 6000.0) / 6001.0;   // DEEPEST reveal wins → union of every atom's cone
 }`;
@@ -1685,7 +1696,6 @@ uniform sampler2D textureSampler;
 uniform sampler2D cofMask;
 uniform vec2 texel;
 uniform float lineW;
-uniform float outCol;   // outline grey level (dev slider: 0 = black → 1 = white)
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
   float c = texture2D(cofMask, vUV).r, mn = c, mx = c;
@@ -1696,7 +1706,7 @@ void main(void){
     mn = min(mn, s); mx = max(mx, s);
   }
   float line = smoothstep(0.2, 0.7, mx - mn);   // where the coverage transitions = the molecule silhouette
-  gl_FragColor = vec4(mix(scene, vec3(outCol), line), 1.0);
+  gl_FragColor = vec4(mix(scene, vec3(0.03), line), 1.0);   // silhouette = black
 }`;
 
 /* ── Static dark-green background ──────────────────────────────────────────
@@ -2255,8 +2265,10 @@ async function run(){
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
   let gConeTip = 0.08;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
   let gConeBase = 0.30;       // cofactor see-through cone width toward the CAMERA. Dev slider.
-  let gCofAlpha = 0.25;       // opacity of a revealed (see-through) atom: 0 = invisible → 1 = solid. Dev slider.
-  let gCofOutline = 0.03;     // cofactor silhouette outline grey level: 0 = black → 1 = white. Dev slider.
+  let gCofAlpha = 0.25;       // opacity of a see-through atom's vdW FILL: 0 = invisible → 1 = solid. Dev slider.
+  let gCofOutAlpha = 0.25;    // opacity of a see-through atom's OUTLINE. Dev slider.
+  let gCofOutCol = 0.05;      // grey level of a see-through atom's outline: 0 = black → 1 = white. Dev slider.
+  let gConeReach = 0.0;       // how far BEHIND the cofactor atom the cone still clears (Å). Dev slider.
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
   let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
   const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
@@ -2270,7 +2282,7 @@ async function run(){
   let cofDepthRT = null, gCofDisc = null;                     // the depth target + the disc mesh that fills it
   let cofMaskRT = null, gCofMaskMesh = null;                  // cofactor coverage mask (solid) → the cofsil post-process inks its outer edge = the molecule silhouette
   const gCofTexel = new BABYLON.Vector2(1/1280, 1/720);       // 1 / render size → maps gl_FragCoord to [0,1] (refreshed per frame)
-  const bindCof = eff => { eff.setFloat('cofHideOn', gRevealOn); eff.setFloat('cofAlpha', gCofAlpha); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT); eff.setVector2('cofTexel', gCofTexel); };
+  const bindCof = eff => { eff.setFloat('cofHideOn', gRevealOn); eff.setFloat('cofAlpha', gCofAlpha); eff.setFloat('cofOutAlpha', gCofOutAlpha); eff.setFloat('cofOutCol', gCofOutCol); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT); eff.setVector2('cofTexel', gCofTexel); };
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gGfxMode = 0;           // graphics mode: 0 = vdW spheres · 1 = vdW + orbitals revealed for near atoms
   const GFX_MODES = [
@@ -2609,7 +2621,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
@@ -2622,7 +2634,7 @@ async function run(){
     bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
@@ -2698,10 +2710,10 @@ async function run(){
       cofCam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofDepthRT.activeCamera = cofCam;
       const cofdMat = new BABYLON.ShaderMaterial('cofdMat', scene, 'cofd', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','tipRatio','baseRatio'] });
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','tipRatio','baseRatio','coneReach'] });
       cofdMat.backFaceCulling = false;
       cofdMat.onBindObservable.add(()=>{ const eff=cofdMat.getEffect(); if(!eff)return;
-        eff.setFloat('tipRatio', gConeTip); eff.setFloat('baseRatio', gConeBase); });   // dev sliders: cone width at the atom / at the camera
+        eff.setFloat('tipRatio', gConeTip); eff.setFloat('baseRatio', gConeBase); eff.setFloat('coneReach', gConeReach); });   // dev sliders: cone width at the atom / at the camera / reach behind
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
       const WORLD_TUBE_R = 14.0, NA = etcT.length;                      // per-ATOM tube radius in Ångström → a FIXED molecular channel width at every zoom, wide enough that the whole line of sight in front of a cofactor clears
@@ -3965,20 +3977,30 @@ async function run(){
   const cbSld = document.createElement('input'); cbSld.type='range'; cbSld.min='0'; cbSld.max='100'; cbSld.value='0'; cbSld.style.cssText='width:100%;cursor:pointer;';   // 0 → 0.30
   const cbValEl = cbRow.querySelector('#dev-cb-val');
   cbSld.oninput = () => { gConeBase = 0.30 + (+cbSld.value/100)*2.20; cbValEl.textContent = gConeBase.toFixed(2); };   // 0.30 … 2.50, wider = deeper reveal toward the camera
-  // Revealed-atom opacity (see-through strength): 0 = invisible, 1 = solid.
-  const caRow = document.createElement('div'); caRow.innerHTML = 'atom opacity: <b id="dev-ca-val">0.25</b>';
+  // See-through atom vdW-FILL opacity: 0 = invisible, 1 = solid.
+  const caRow = document.createElement('div'); caRow.innerHTML = 'atom vdW α: <b id="dev-ca-val">0.25</b>';
   const caSld = document.createElement('input'); caSld.type='range'; caSld.min='0'; caSld.max='100'; caSld.value='25'; caSld.style.cssText='width:100%;cursor:pointer;';   // 25 → 0.25
   const caValEl = caRow.querySelector('#dev-ca-val');
   caSld.oninput = () => { gCofAlpha = +caSld.value/100; caValEl.textContent = gCofAlpha.toFixed(2); };
-  // Cofactor outline colour: 0 = black → 1 = white.
-  const coRow = document.createElement('div'); coRow.innerHTML = 'outline: <b id="dev-co-val">black</b>';
-  const coSld = document.createElement('input'); coSld.type='range'; coSld.min='0'; coSld.max='100'; coSld.value='3'; coSld.style.cssText='width:100%;cursor:pointer;';   // 3 → near-black
+  // See-through atom OUTLINE opacity (keep the outline even when the fill is faded away).
+  const oaRow = document.createElement('div'); oaRow.innerHTML = 'atom line α: <b id="dev-oa-val">0.25</b>';
+  const oaSld = document.createElement('input'); oaSld.type='range'; oaSld.min='0'; oaSld.max='100'; oaSld.value='25'; oaSld.style.cssText='width:100%;cursor:pointer;';
+  const oaValEl = oaRow.querySelector('#dev-oa-val');
+  oaSld.oninput = () => { gCofOutAlpha = +oaSld.value/100; oaValEl.textContent = gCofOutAlpha.toFixed(2); };
+  // See-through atom OUTLINE colour: 0 = black → 1 = white.
+  const coRow = document.createElement('div'); coRow.innerHTML = 'atom line col: <b id="dev-co-val">black</b>';
+  const coSld = document.createElement('input'); coSld.type='range'; coSld.min='0'; coSld.max='100'; coSld.value='5'; coSld.style.cssText='width:100%;cursor:pointer;';
   const coValEl = coRow.querySelector('#dev-co-val');
-  coSld.oninput = () => { const v = +coSld.value; gCofOutline = v/100; coValEl.textContent = v<=5 ? 'black' : (v>=95 ? 'white' : gCofOutline.toFixed(2)); };
+  coSld.oninput = () => { const v = +coSld.value; gCofOutCol = v/100; coValEl.textContent = v<=6 ? 'black' : (v>=95 ? 'white' : gCofOutCol.toFixed(2)); };
+  // Cone REACH: how far behind the cofactor atom the see-through still clears (Å).
+  const crRow = document.createElement('div'); crRow.innerHTML = 'cone reach: <b id="dev-cr-val">0</b>';
+  const crSld = document.createElement('input'); crSld.type='range'; crSld.min='0'; crSld.max='100'; crSld.value='0'; crSld.style.cssText='width:100%;cursor:pointer;';   // 0 … 40 Å behind
+  const crValEl = crRow.querySelector('#dev-cr-val');
+  crSld.oninput = () => { gConeReach = (+crSld.value/100)*40.0; crValEl.textContent = gConeReach.toFixed(0)+' Å'; };
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -4867,11 +4889,10 @@ async function run(){
   };
   // Cofactor silhouette — a single black outline around each cofactor MOLECULE, inked on top of the
   // finished frame from the coverage mask. Runs last, so it floats over everything.
-  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','outCol'], ['cofMask'], 1.0, cam);
+  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW'], ['cofMask'], 1.0, cam);
   cofsil.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     eff.setFloat('lineW', 2.2);
-    eff.setFloat('outCol', gCofOutline);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
   window.addEventListener('keydown', e => {
