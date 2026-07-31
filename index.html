@@ -622,10 +622,11 @@ void main(void){
   float rimGlass = mix(shellMin, 0.72, smoothstep(0.34, 1.0, r2));   // revealed shell = a glass bubble, near-clear centre and a visible rim, so the orbitals inside stand out
   alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
-  if(revealOn > 0.5){                                          // cutaway: fade atoms in the sight tube to ANY nearby cofactor
+  float ghost = 0.0;                                          // 1 = this atom sits in a sight tube to a cofactor → draw it as a white cut-away ghost (colour stripped, ink outline kept)
+  if(revealOn > 0.5){
     for(int i = 0; i < 12; i++){ if(i >= revealCount) break;
       vec3 L = revealCentersV[i]; float tt = dot(vCenterV, L) / max(dot(L, L), 1e-4);
-      if(tt < 0.94 && length(vCenterV - tt * L) < revealRadius){ alpha *= revealKeep; break; }
+      if(tt < 0.94 && length(vCenterV - tt * L) < revealRadius){ ghost = 1.0; break; }
     }
   }
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
@@ -656,6 +657,10 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
+  if(ghost > 0.5){                                            // cut-away: blank the body to white, keep a strong ink outline that draws OVER the cofactor behind
+    col = mix(vec3(1.0), vec3(0.10), rim);                    // white interior → dark rim band
+    alpha *= mix(0.30, 0.94, rim);                            // interior see-through (cofactor shows), outline near-opaque
+  }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
