@@ -2263,12 +2263,13 @@ async function run(){
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
-  let gConeTip = 0.08;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
+  let gConeTip = 0.12;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
   let gConeBase = 0.30;       // cofactor see-through cone width toward the CAMERA. Dev slider.
-  let gCofAlpha = 0.25;       // opacity of a see-through atom's vdW FILL: 0 = invisible → 1 = solid. Dev slider.
-  let gCofOutAlpha = 0.25;    // opacity of a see-through atom's OUTLINE. Dev slider.
+  let gCofAlpha = 0.26;       // opacity of a see-through atom's vdW FILL: 0 = invisible → 1 = solid. Dev slider.
+  let gCofOutAlpha = 0.22;    // opacity of a see-through atom's OUTLINE. Dev slider.
   let gCofOutCol = 0.05;      // grey level of a see-through atom's outline: 0 = black → 1 = white. Dev slider.
   let gConeReach = 0.0;       // how far BEHIND the cofactor atom the cone still clears (Å). Dev slider.
+  let gCofLineW = 2.2;        // cofactor silhouette outline thickness (px). Dev slider.
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
   let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
   const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
@@ -3969,8 +3970,8 @@ async function run(){
   const bValEl = bRow.querySelector('#dev-b-val');
   bSld.oninput = () => { const v = +bSld.value; gBoil = v/100; bValEl.textContent = v===0 ? 'off' : gBoil.toFixed(2); };
   // Cofactor see-through cone — width AT the atom (tip) and toward the CAMERA (base).
-  const ctRow = document.createElement('div'); ctRow.innerHTML = 'cone tip (atom): <b id="dev-ct-val">0.08</b>';
-  const ctSld = document.createElement('input'); ctSld.type='range'; ctSld.min='0'; ctSld.max='100'; ctSld.value='8'; ctSld.style.cssText='width:100%;cursor:pointer;';   // 0 = point tip
+  const ctRow = document.createElement('div'); ctRow.innerHTML = 'cone tip (atom): <b id="dev-ct-val">0.12</b>';
+  const ctSld = document.createElement('input'); ctSld.type='range'; ctSld.min='0'; ctSld.max='100'; ctSld.value='12'; ctSld.style.cssText='width:100%;cursor:pointer;';   // 0 = point tip
   const ctValEl = ctRow.querySelector('#dev-ct-val');
   ctSld.oninput = () => { gConeTip = +ctSld.value/100; ctValEl.textContent = gConeTip.toFixed(2); };   // 0 = point → 1 = full disc (tube)
   const cbRow = document.createElement('div'); cbRow.innerHTML = 'cone base (cam): <b id="dev-cb-val">0.30</b>';
@@ -3978,13 +3979,13 @@ async function run(){
   const cbValEl = cbRow.querySelector('#dev-cb-val');
   cbSld.oninput = () => { gConeBase = 0.30 + (+cbSld.value/100)*2.20; cbValEl.textContent = gConeBase.toFixed(2); };   // 0.30 … 2.50, wider = deeper reveal toward the camera
   // See-through atom vdW-FILL opacity: 0 = invisible, 1 = solid.
-  const caRow = document.createElement('div'); caRow.innerHTML = 'atom vdW α: <b id="dev-ca-val">0.25</b>';
-  const caSld = document.createElement('input'); caSld.type='range'; caSld.min='0'; caSld.max='100'; caSld.value='25'; caSld.style.cssText='width:100%;cursor:pointer;';   // 25 → 0.25
+  const caRow = document.createElement('div'); caRow.innerHTML = 'atom vdW α: <b id="dev-ca-val">0.26</b>';
+  const caSld = document.createElement('input'); caSld.type='range'; caSld.min='0'; caSld.max='100'; caSld.value='26'; caSld.style.cssText='width:100%;cursor:pointer;';   // 26 → 0.26
   const caValEl = caRow.querySelector('#dev-ca-val');
   caSld.oninput = () => { gCofAlpha = +caSld.value/100; caValEl.textContent = gCofAlpha.toFixed(2); };
   // See-through atom OUTLINE opacity (keep the outline even when the fill is faded away).
-  const oaRow = document.createElement('div'); oaRow.innerHTML = 'atom line α: <b id="dev-oa-val">0.25</b>';
-  const oaSld = document.createElement('input'); oaSld.type='range'; oaSld.min='0'; oaSld.max='100'; oaSld.value='25'; oaSld.style.cssText='width:100%;cursor:pointer;';
+  const oaRow = document.createElement('div'); oaRow.innerHTML = 'atom line α: <b id="dev-oa-val">0.22</b>';
+  const oaSld = document.createElement('input'); oaSld.type='range'; oaSld.min='0'; oaSld.max='100'; oaSld.value='22'; oaSld.style.cssText='width:100%;cursor:pointer;';
   const oaValEl = oaRow.querySelector('#dev-oa-val');
   oaSld.oninput = () => { gCofOutAlpha = +oaSld.value/100; oaValEl.textContent = gCofOutAlpha.toFixed(2); };
   // See-through atom OUTLINE colour: 0 = black → 1 = white.
@@ -3997,10 +3998,15 @@ async function run(){
   const crSld = document.createElement('input'); crSld.type='range'; crSld.min='0'; crSld.max='100'; crSld.value='0'; crSld.style.cssText='width:100%;cursor:pointer;';   // 0 … 40 Å behind
   const crValEl = crRow.querySelector('#dev-cr-val');
   crSld.oninput = () => { gConeReach = (+crSld.value/100)*40.0; crValEl.textContent = gConeReach.toFixed(0)+' Å'; };
+  // Cofactor SILHOUETTE outline thickness (px).
+  const clRow = document.createElement('div'); clRow.innerHTML = 'silhouette px: <b id="dev-cl-val">2.2</b>';
+  const clSld = document.createElement('input'); clSld.type='range'; clSld.min='0'; clSld.max='100'; clSld.value='37'; clSld.style.cssText='width:100%;cursor:pointer;';   // 37 → 2.2 px (range 0…6)
+  const clValEl = clRow.querySelector('#dev-cl-val');
+  clSld.oninput = () => { gCofLineW = (+clSld.value/100)*6.0; clValEl.textContent = gCofLineW.toFixed(1); };
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -4892,7 +4898,7 @@ async function run(){
   const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW'], ['cofMask'], 1.0, cam);
   cofsil.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('lineW', 2.2);
+    eff.setFloat('lineW', gCofLineW);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
   window.addEventListener('keydown', e => {
