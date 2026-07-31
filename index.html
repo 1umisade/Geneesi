@@ -291,16 +291,18 @@ const ETC_RES = { OEX:1, MN:1, CA:1,   PHO:2,   PL9:3, PQN:3, PQ9:3, UQ:3,   HEM
   CLA:7, CHL:7, BCL:7, CL0:7,                                   // chlorophylls (antenna + reaction centre)
   BCR:8, LUT:8, NEX:8, XAT:8, VIO:8, ZEA:8, LU2:8, A86:8, ECH:8 };   // carotenoids (ECH = echinenone, b6f)
 const ETC_TYRZ = 9;                                             // assigned geometrically, not by residue name
-const ETC_COL = [ [0,0,0],              // 0 unused
-  [1.00,0.52,0.00],   // 1 OEC (Mn₄CaO₅)        — bright orange
-  [1.00,0.20,0.72],   // 2 pheophytin           — magenta
-  [0.05,0.90,0.92],   // 3 plasto/phyllo-quinone — cyan
-  [1.00,0.13,0.13],   // 4 heme                  — vivid red
-  [1.00,0.84,0.08],   // 5 Fe-S cluster          — yellow
-  [0.28,0.52,1.00],   // 6 Cu (plastocyanin)     — blue
-  [0.13,0.95,0.38],   // 7 chlorophyll           — vivid green
-  [0.99,0.70,0.22],   // 8 carotenoid            — amber
-  [0.74,0.36,1.00] ]; // 9 Tyr Z (D1-Tyr161)     — violet
+// Every cofactor type is one of five bright hues: RED, GREEN, CORAL, BLUE, PINK.
+const _RED=[1.00,0.16,0.16], _GRN=[0.16,0.90,0.36], _COR=[1.00,0.50,0.34], _BLU=[0.28,0.56,1.00], _PNK=[1.00,0.42,0.80];
+const ETC_COL = [ [0,0,0],   // 0 unused
+  _COR,   // 1 OEC (Mn₄CaO₅)        — coral
+  _PNK,   // 2 pheophytin           — pink
+  _BLU,   // 3 plasto/phyllo-quinone — blue
+  _RED,   // 4 heme                  — red
+  _GRN,   // 5 Fe-S cluster          — green
+  _BLU,   // 6 Cu (plastocyanin)     — blue
+  _GRN,   // 7 chlorophyll           — green
+  _COR,   // 8 carotenoid            — coral
+  _PNK ]; // 9 Tyr Z (D1-Tyr161)     — pink
 
 /* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
 function parseMol2(text){
@@ -679,6 +681,11 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
+#ifdef OUTLINEONLY
+  if(rim < 0.30) discard;                 // keep ONLY the outline ring — the fill is dropped
+  gl_FragColor = vec4(vColor, rim);       // bright cofactor colour, drawn on top of everything (its render group clears depth first)
+  return;
+#endif
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
@@ -702,6 +709,7 @@ void main(void){
   vq = position.xy;
   cv.xy += vq * dr;                                   // camera-facing disc of a FIXED WORLD radius (constant tube diameter in Ångström)
   gl_Position = projection * cv;
+  gl_Position.z = -gl_Position.z;                     // flip depth so the FARTHEST cofactor atom wins the test (default LESS) → the tube reaches the BACK of the cofactor, revealing the whole thing (protein behind the farthest atom stays opaque)
 }`;
 BABYLON.Effect.ShadersStore['cofdFragmentShader'] = `
 precision highp float;
@@ -2186,7 +2194,7 @@ async function run(){
   let gBubbleR = 1e9;         // reveal only within this camera distance (1e9 = everywhere)
   let gShell   = 0;           // vdW spheres: 1 = translucent where the atom reveals orbitals, 0 = always solid
   let gShellMin = 0.0;        // alpha the vdW shell fades TO where revealed (0 = fully hidden, 0.5 = half-transparent)
-  let gEtc = false, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later)
+  let gEtc = false, etcOverlay = null, etcOutline = null;   // ETC cofactor overlay toggle + its mesh + the always-on-top outline-only mesh (built later)
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
@@ -2236,6 +2244,7 @@ async function run(){
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
+      if(etcOutline) etcOutline.setEnabled(gEtc);
       if(cofListPanel) cofListPanel.style.display = gEtc ? 'flex' : 'none';   // show the cofactor-type list only in ETC mode
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
@@ -2576,6 +2585,36 @@ async function run(){
         const g = etcGroups[gi]; g.atoms.push(i); g.cx+=gx[i]; g.cy+=gy[i]; g.cz+=gz[i]; g.n++;
       }
       etcOverlay.thinInstanceSetBuffer('groupId', gid, 1, true);   // per-atom cofactor-group index → the shader brightens the hovered / flashing group
+
+      // Outline-only twin of the overlay, drawn in group 3 (which clears the depth buffer first) so the
+      // cofactor OUTLINES always float on top of the whole scene — you can see where every cofactor is
+      // even when it is buried inside a complex, and ONLY the ring draws (the fill is dropped), so it
+      // never punches a solid hole through the protein. disableDepthWrite → it doesn't occlude the
+      // selection outlines that also live in group 3.
+      const etcOutlineMat = new BABYLON.ShaderMaterial('etcOutlineMat', scene, 'imp', {
+        attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright'],
+        defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define OUTLINEONLY'] });
+      etcOutlineMat.setFloat('radius',1.0); etcOutlineMat.setFloat('selModel',-1); etcOutlineMat.setFloat('isShell',0); etcOutlineMat.setFloat('shellMin',0); etcOutlineMat.setFloat('bubbleR',1e9);
+      etcOutlineMat.setFloat('protonOutline',0); etcOutlineMat.setFloat('depthBias',0); etcOutlineMat.setFloat('coneCos',-1.0);
+      etcOutlineMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcOutlineMat.backFaceCulling=false;
+      etcOutlineMat.alpha=0.999; etcOutlineMat.alphaMode=BABYLON.Constants.ALPHA_COMBINE; etcOutlineMat.disableDepthWrite=true;   // blend the ring on top, write no depth
+      etcOutlineMat.onBindObservable.add(()=>{ const eff=etcOutlineMat.getEffect(); if(!eff)return;
+        eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);
+        eff.setFloat('isShell', 0); eff.setFloat('shellMin', 0); eff.setFloat('bubbleR', 1e9); eff.setFloat('coneCos', -1.0);   // always a crisp ring, ignore graphics-mode glass/reveal
+        eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);
+        eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);
+        eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+      etcOutline = BABYLON.MeshBuilder.CreatePlane('etcOutlineMesh',{size:2},scene);
+      etcOutline.material=etcOutlineMat; etcOutline.isPickable=false; etcOutline.alwaysSelectAsActiveMesh=true;
+      etcOutline.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
+      etcOutline.thinInstanceSetBuffer('instanceColor', new Float32Array(etcC),4,true);
+      etcOutline.thinInstanceSetBuffer('instR', new Float32Array(etcR),1,true);
+      etcOutline.thinInstanceSetBuffer('modelId', mdlBuf(etcM),1,true);
+      etcOutline.thinInstanceSetBuffer('groupId', gid, 1, true);
+      etcOutline.renderingGroupId = 3;   // group 3 clears depth first → the ring floats on top of everything
+      etcOutline.setEnabled(gEtc);
+
       for(const g of etcGroups){ g.cx/=g.n; g.cy/=g.n; g.cz/=g.n; let r2=0;
         for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
         g.r = Math.sqrt(r2) + 2.0; }
