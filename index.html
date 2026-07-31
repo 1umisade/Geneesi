@@ -675,14 +675,13 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
-  if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a black outline is left
+  if(hide > 0.5){                                             // cut-away: a hidden atom is just a thin grey circle
 #ifdef ETCTOP
-    discard;                                                  // a HIDDEN cofactor-overlay atom: drop the enlarged overlay entirely — its ordinary cell copy draws the cut outline, so hidden cofactor atoms follow the exact same thin rule as every other atom (no doubled/fat rings)
+    discard;                                                  // a HIDDEN cofactor-overlay atom: drop the enlarged overlay entirely — its ordinary cell copy draws the outline, so it follows the same rule as every other atom (no doubled/fat rings)
 #else
-    float ew = min(aa * 3.0, 0.5);                            // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same pixel thickness on every atom, big or small (no more 5x-thick rings on large atoms)
-    float cutRim = smoothstep(1.0 - ew, 1.0, r2);
-    if(cutRim < 0.02) discard;                                // body → gone (writes no depth, so the cofactor/scene behind shows through)
-    col = vec3(0.0); alpha = cutRim * 0.15;                   // pure black, faint (very see-through)
+    float w = min(aa * 2.0, 0.4);                             // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same thin pixel thickness on every atom, big or small
+    if(r2 < 1.0 - w) discard;                                 // everything inside the ring is simply GONE — no fill, no transparency (the cofactor/scene shows through the empty middle)
+    col = vec3(0.5); alpha = 1.0;                             // solid, OPAQUE, UNLIT grey — a flat grey circle that neither catches nor bends light
 #endif
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
