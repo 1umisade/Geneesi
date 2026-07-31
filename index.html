@@ -674,8 +674,13 @@ void main(void){
   if(protonOutline > 0.5 && vFlag > 0.5){
     float pf = pow(1.0 - zc, 1.6);                           // broad, soft Fresnel (zc = sqrt(1-r2)) → hazy edge
     col = mix(col, vec3(1.0, 0.18, 0.18), pf) + vec3(0.40, 0.0, 0.0) * pf;   // hazy red glow on protons
-  } else
-    col = mix(col, vColor * 0.40, rim);                     // rim → a FIXED 40% shade of the atom's own UNLIT colour → same darkness whichever way the sphere faces the light (was col *= mix(1.0,0.40,rim), whose 40%-of-LIT-colour went near-black on shadowed edges → the inconsistent thick-black outlines)
+  } else {
+#ifdef ETCDARK
+    col = mix(col, vec3(0.03), rim);                       // cofactors → a BLACK outline that traces the molecule shape (each atom outlined, interior rims occluded by the atoms in front → the eye reads the outer contour)
+#else
+    col = mix(col, vColor * 0.40, rim);                    // rim → a FIXED 40% shade of the atom's own UNLIT colour → same darkness whichever way the sphere faces the light (was col *= mix(1.0,0.40,rim), whose 40%-of-LIT-colour went near-black on shadowed edges → the inconsistent thick-black outlines)
+#endif
+  }
   // Selected complex → repaint each of its atoms' rims sage. Every atom is outlined, so the shape
   // the eye picks up is the OUTER contour of the whole protein (interior rims are hidden behind the
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
@@ -2194,7 +2199,7 @@ async function run(){
   let gBubbleR = 1e9;         // reveal only within this camera distance (1e9 = everywhere)
   let gShell   = 0;           // vdW spheres: 1 = translucent where the atom reveals orbitals, 0 = always solid
   let gShellMin = 0.0;        // alpha the vdW shell fades TO where revealed (0 = fully hidden, 0.5 = half-transparent)
-  let gEtc = false, etcOverlay = null, etcOutline = null;   // ETC cofactor overlay toggle + its mesh + the always-on-top per-molecule outline mesh (built later)
+  let gEtc = false, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later); the cofactor outline is the overlay's own black rim (ETCDARK), which traces the molecule shape
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
@@ -2245,7 +2250,6 @@ async function run(){
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
-      if(etcOutline) etcOutline.setEnabled(gEtc);
       if(cofListPanel) cofListPanel.style.display = gEtc ? 'flex' : 'none';   // show the cofactor-type list only in ETC mode
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
@@ -2550,7 +2554,7 @@ async function run(){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
       uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright'],
-      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL'] });
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define ETCDARK'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
@@ -2591,40 +2595,6 @@ async function run(){
         for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
         g.r = Math.sqrt(r2) + 2.0; }
       etcGroupPos = { gx, gy, gz };
-
-      // ONE black outline per cofactor MOLECULE (not a ring around every atom): a single big sphere-
-      // impostor per group, sized to the group's radius, drawn OUTLINEONLY (ring only) in group 3 —
-      // which clears depth first, so the ring floats on top of the whole scene. Cheap (one instance per
-      // molecule) and reads as the molecule's outline. ETCHL → the hovered / selected group's ring flashes.
-      const NG = etcGroups.length;
-      const rM=new Float32Array(NG*16), rR=new Float32Array(NG), rGid=new Float32Array(NG), rC=new Float32Array(NG*4), rMdl=new Float32Array(NG);
-      for(let gi=0; gi<NG; gi++){ const g=etcGroups[gi], o=gi*16;
-        rM[o]=1; rM[o+5]=1; rM[o+10]=1; rM[o+15]=1; rM[o+12]=g.cx; rM[o+13]=g.cy; rM[o+14]=g.cz;
-        rR[gi]=g.r; rGid[gi]=gi; rMdl[gi]=modelOf(g.cx,g.cy,g.cz);
-        rC[gi*4]=0; rC[gi*4+1]=0; rC[gi*4+2]=0; rC[gi*4+3]=0; }
-      const etcOutlineMat = new BABYLON.ShaderMaterial('etcOutlineMat', scene, 'imp', {
-        attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright'],
-        defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define OUTLINEONLY'] });
-      etcOutlineMat.setFloat('radius',1.0); etcOutlineMat.setFloat('selModel',-1); etcOutlineMat.setFloat('isShell',0); etcOutlineMat.setFloat('shellMin',0); etcOutlineMat.setFloat('bubbleR',1e9);
-      etcOutlineMat.setFloat('protonOutline',0); etcOutlineMat.setFloat('depthBias',0); etcOutlineMat.setFloat('coneCos',-1.0);
-      etcOutlineMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcOutlineMat.backFaceCulling=false;
-      etcOutlineMat.alpha=0.999; etcOutlineMat.alphaMode=BABYLON.Constants.ALPHA_COMBINE; etcOutlineMat.disableDepthWrite=true;   // ring blends on top, writes no depth → doesn't disturb the selection outlines in group 3
-      etcOutlineMat.onBindObservable.add(()=>{ const eff=etcOutlineMat.getEffect(); if(!eff)return;
-        eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);
-        eff.setFloat('isShell', 0); eff.setFloat('shellMin', 0); eff.setFloat('bubbleR', 1e9); eff.setFloat('coneCos', -1.0);   // always a crisp ring, ignore graphics-mode glass/reveal
-        eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);
-        eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);
-        eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
-      etcOutline = BABYLON.MeshBuilder.CreatePlane('etcOutlineMesh',{size:2},scene);
-      etcOutline.material=etcOutlineMat; etcOutline.isPickable=false; etcOutline.alwaysSelectAsActiveMesh=true;
-      etcOutline.thinInstanceSetBuffer('matrix', rM,16,true);
-      etcOutline.thinInstanceSetBuffer('instanceColor', rC,4,true);
-      etcOutline.thinInstanceSetBuffer('instR', rR,1,true);
-      etcOutline.thinInstanceSetBuffer('modelId', rMdl,1,true);
-      etcOutline.thinInstanceSetBuffer('groupId', rGid,1,true);
-      etcOutline.renderingGroupId = 3;   // group 3 clears depth first → the ring floats on top of everything
-      etcOutline.setEnabled(gEtc);
     }
     // ── Cofactor cut-away depth pass ── render every cofactor molecule as a disc into an off-screen
     // FLOAT buffer holding the nearest cofactor's view-space depth per pixel; the protein shader samples it.
@@ -2645,7 +2615,7 @@ async function run(){
       cofdMat.backFaceCulling = false;
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
-      const WORLD_TUBE_R = 8.0, NA = etcT.length;                       // per-ATOM tube radius in Ångström (~5 heavy atoms wide) → a FIXED molecular channel width at every zoom
+      const WORLD_TUBE_R = 14.0, NA = etcT.length;                      // per-ATOM tube radius in Ångström → a FIXED molecular channel width at every zoom, wide enough that the whole line of sight in front of a cofactor clears
       disc.thinInstanceSetBuffer('matrix', new Float32Array(etcM), 16, true);   // one disc per cofactor ATOM (reuse the overlay's atom matrices)
       gCofDR = new Float32Array(NA);
       for(let i=0;i<NA;i++) if(etcTypeOn[etcT[i]] === undefined) etcTypeOn[etcT[i]] = true;   // every cofactor type defaults to line-of-sight ON
