@@ -644,7 +644,9 @@ void main(void){
 #ifdef SELTUNNEL
   if(selTunnelOn > 0.5){                                            // selected cofactor's sight tube cuts EVERYTHING in front (incl. other cofactors)
     float tt = dot(vCenterV, selTunnelV) / max(dot(selTunnelV, selTunnelV), 1e-4);
-    if(tt < 0.94 && length(vCenterV - tt * selTunnelV) - vRad < selTunnelR) hide = 1.0;   // -vRad: cut if the atom's BODY reaches the tube, not just its centre → a big sphere can't bulge across the sight line
+    float atomD = max(length(vCenterV), 0.5), cofD = max(length(selTunnelV), 0.5);
+    float effR = selTunnelR * min(cofD / atomD, 4.0);              // widen the tube toward the CAMERA (up to 4x): a sphere close to the eye looms large on screen, so it needs a wider cut to clear the line of sight
+    if(tt < 0.94 && length(vCenterV - tt * selTunnelV) - vRad < effR) hide = 1.0;   // -vRad: cut if the atom's BODY reaches the tube, not just its centre
   }
 #endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
