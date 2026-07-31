@@ -4452,9 +4452,8 @@ async function run(){
     clearAtomSel(); clearEtcSel(); deselectModel(); viewPerp();
   };
   canvas.addEventListener('dblclick', onDouble);                                    // desktop
-  // Camera FOLLOW: while something is selected (orbitLocked), smoothly keep it centred — this both
-  // swivels the camera onto it when you pick it AND tracks it if it moves (e.g. a dragged complex).
-  // Swivel-in-place keeps the camera position, so on-screen size is preserved. Panning clears the lock.
+  // Per-frame: recompute the cofactor cutaway sight-lines. (No camera follow — the camera
+  // is fully user-controlled; selecting a cofactor never moves or re-centres it.)
   scene.onBeforeRenderObservable.add(() => {
     // Cofactor cutaway: fade the atoms in the sight-lines to the nearest cofactors (ETC mode OR a selection).
     gRevealOn = (gEtc || etcSel >= 0) && etcGroups.length ? 1 : 0;
@@ -4473,11 +4472,6 @@ async function run(){
         gRevealCentersV[i*3]=_revTmp.x; gRevealCentersV[i*3+1]=_revTmp.y; gRevealCentersV[i*3+2]=_revTmp.z; cnt++; }
       gRevealCount = cnt;
     } else gRevealCount = 0;
-    if(!orbitLocked || orbitCenter.x > 1e5) return;
-    if(dragging && !panning) return;   // user is left-dragging to rotate → the drag owns the camera; don't re-centre and cancel the spin
-    if(gSelModel >= 0 && mInfo[gSelModel]){ const mi = mInfo[gSelModel];   // dragged complex → keep the pivot on its live centre
-      orbitCenter.set(mi.cx+gModelOff[gSelModel*3], mi.cy+gModelOff[gSelModel*3+1], mi.cz+gModelOff[gSelModel*3+2]); }
-    cam.setTarget(BABYLON.Vector3.Lerp(cam.getTarget(), orbitCenter, 0.16));
   });
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
