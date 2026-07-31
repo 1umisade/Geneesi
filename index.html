@@ -1867,7 +1867,7 @@ async function run(){
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
   let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
-  let dnX = 0, dnY = 0, snappedDrag = false;   // drag-start pointer pos + whether this drag already re-pivoted
+  let dnX = 0, dnY = 0;   // drag-start pointer pos (for the tap-vs-drag test)
   let panning = false, panDepth = 1, modelDrag = -1;   // right-drag grab-pan state + which complex a left-drag is moving
   /* Grab-pan: translate the pivot so the world point under the cursor stays glued to it. Moving the
      ArcRotateCamera target shifts the whole camera (position follows), and one screen pixel maps to a
@@ -1919,7 +1919,7 @@ async function run(){
       }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;
         if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it instead of rotating
-        dragging = true; snappedDrag = false; }   // moving a complex is done with the 3-D gizmo now, not a body-drag
+        dragging = true; }   // moving a complex is done with the 3-D gizmo now, not a body-drag
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
       canvas.style.cursor = '';   // revert to the default (CSS) cursor after pan/zoom
@@ -1936,12 +1936,9 @@ async function run(){
       if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // right-drag grab-pan
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
       if(e.buttons & 4){ canvas.style.cursor = "url('./scroll_cursor_48.png') 24 24, ns-resize"; dragZoom(e.movementY || 0); showTips(); return; }   // middle held = zoom (scroll cursor)
-      // Left-drag rotation ALWAYS orbits the current selection (atom or whole complex): on the first
-      // real move of a drag, re-pivot onto it — even if it's off-screen or you've dollied past it.
-      if((e.buttons & 1) && orbitLocked && !snappedDrag && orbitCenter.x < 1e5){
-        const dx = scene.pointerX - dnX, dy = scene.pointerY - dnY;
-        if(dx*dx + dy*dy > 9){ cam.setTarget(orbitCenter.clone()); snappedDrag = true; }
-      }
+      // (No mid-drag re-pivot: calling cam.setTarget() during a drag fights ArcRotateCamera's rotation
+      //  input and kills dragging. Selecting already centres the pivot on the object via focusCameraOn,
+      //  so left-drag orbits it with no per-move setTarget. See the CLAUDE.md note.)
     }
   });
 
@@ -3154,16 +3151,13 @@ async function run(){
   cam.setPosition(new BABYLON.Vector3(50, -6, -961));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
   cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
-  // One-shot smooth swivel to centre a freshly-selected object. Runs ONCE (NOT a perpetual follow —
-  // that fought rotation) and is cancelled by any pointer-down, so it never fights a drag. Swivels in
-  // place (animates only the target), so the selection keeps its on-screen size (no dolly).
+  // Centre a freshly-selected object: an INSTANT one-shot setTarget. Deliberately NOT animated —
+  // ANY time-based camera-target motion (an animation OR a per-frame observer) fights ArcRotateCamera's
+  // rotation input and kills dragging (see the CLAUDE.md note). setTarget swivels in place (keeps the
+  // camera position → same on-screen size) and leaves nothing running, so rotation stays free.
   const focusCameraOn = center => {
     scene.stopAnimation(cam);
-    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = cam.inertialPanningX = cam.inertialPanningY = 0;
-    const anim = new BABYLON.Animation('camFocus', 'target', 60, BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    anim.setKeys([{ frame:0, value: cam.getTarget().clone() }, { frame:14, value: center.clone() }]);
-    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT); anim.setEasingFunction(ease);
-    scene.beginDirectAnimation(cam, [anim], 0, 14, false, 1);
+    cam.setTarget(center.clone());
   };
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
