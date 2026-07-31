@@ -2199,6 +2199,7 @@ async function run(){
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
   let etcSel = -1;                       // index into etcGroups of the selected cofactor (−1 = none)
+  let updateCofInfo = null;              // set later → populates the selected-cofactor info panel (3D image, single-unit mass, PubChem link)
   const gCut = new Float32Array([0, 1, 0]);   // membrane cross-cut: [cutZ, cutSign, strength] (bound as memCut[])
   const MEM_FADE_S = 1.0;      // seconds the membrane takes to fade fully out / back in
   let memCutOn = false;        // latched threshold state (hysteresis) driving that fade
@@ -2491,7 +2492,7 @@ async function run(){
   const cells = new Map();
   const getCell = k => { let c=cells.get(k); if(!c){ c={ sphM:[],sphC:[],sphR:[], nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
-  const etcM=[], etcC=[], etcR=[], etcT=[], etcS=[];   // ETC cofactor overlay: matrices, colours, radii, type codes, residue ids
+  const etcM=[], etcC=[], etcR=[], etcT=[], etcS=[], etcEl=[];   // ETC cofactor overlay: matrices, colours, radii, type codes, residue ids, element index (for the info panel's mass + 3D image)
 
   let buildDetail = null;                 // deferred: bins + builds the nucleon/orbital/bond/lone-pair meshes AFTER the first frame
   const macroCellByKey = new Map();       // cell key → its cellList entry, so buildDetail can attach the streamed-in detail meshes
@@ -2504,7 +2505,7 @@ async function run(){
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
-      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); }   // cofactor → overlay, coloured by type, slightly enlarged to pop
+      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); etcEl.push(e); }   // cofactor → overlay, coloured by type, slightly enlarged to pop (etcEl = element for the info panel)
     }
     await yield_();
   }
@@ -3941,6 +3942,7 @@ async function run(){
   const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
   const showEtcSel = gi => {
     etcSel = gi;
+    if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
     if(gi < 0 || !etcGroupPos){ modelLabel.style.display='none'; return; }
     const g = etcGroups[gi];
     gFlashGroup = gi; gFlashT0 = performance.now();            // flash the picked cofactor bright a few times, then back to normal
@@ -4456,6 +4458,79 @@ async function run(){
         return capturePreview(nucCanvas);
       });
     });
+  };
+
+  // ── Selected-cofactor info panel: a 3D image of the molecule + its single-unit mass + a PubChem link ──
+  const PUBCHEM_Q = { 1:'oxygen evolving complex', 2:'pheophytin a', 3:'plastoquinone', 4:'heme b',
+    5:'iron-sulfur cluster', 6:'plastocyanin', 7:'chlorophyll a', 8:'beta-carotene', 9:'L-tyrosine' };
+  const ATOMIC_WT = { H:1.008,C:12.011,N:14.007,O:15.999,F:18.998,NA:22.990,MG:24.305,P:30.974,S:32.06,
+    CL:35.45,K:39.098,CA:40.078,MN:54.938,FE:55.845,CO:58.933,CU:63.546,ZN:65.38 };
+  const groupMassDa = g => { let m=0; for(const i of g.atoms) m += ATOMIC_WT[EL_LIST[etcEl[i]]] || info(etcEl[i]).n; return m; };
+  const SUP = {'-':'⁻','0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹'};
+  const fmtGrams = grams => { if(!(grams>0)) return '0 g';
+    const exp = Math.floor(Math.log10(grams)), mant = grams/Math.pow(10,exp);
+    return mant.toFixed(2)+' × 10'+String(exp).split('').map(c=>SUP[c]||c).join('')+' g'; };
+
+  const cofInfoPanel = document.createElement('div');
+  cofInfoPanel.style.cssText = 'position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:13;display:none;width:198px;'
+    + 'background:#fffef9;border:2px solid #4a3320;border-radius:10px;padding:10px 12px;'
+    + 'font-family:"Courier New",monospace;color:#4a3320;box-shadow:0 4px 14px rgba(0,0,0,0.25)';
+  const cofTitle = document.createElement('div'); cofTitle.style.cssText = 'font-weight:bold;font-size:15px;margin-bottom:6px';
+  const cofCanvas = document.createElement('canvas'); cofCanvas.width = cofCanvas.height = 256;
+  cofCanvas.style.cssText = 'width:172px;height:172px;display:block;background:#eef0e6;border-radius:8px;border:1px solid #cdbfa0';
+  const cofAtoms = document.createElement('div'); cofAtoms.style.cssText = 'font-size:12px;margin-top:7px';
+  const cofMass = document.createElement('div'); cofMass.style.cssText = 'font-size:12px;margin-top:3px';
+  const cofLink = document.createElement('a'); cofLink.target = '_blank'; cofLink.rel = 'noopener noreferrer'; cofLink.textContent = 'PubChem →';
+  cofLink.style.cssText = 'display:inline-block;margin-top:8px;font-size:13px;font-weight:bold;color:#2b6ca3;text-decoration:none;border-bottom:1px solid #2b6ca3';
+  cofInfoPanel.append(cofTitle, cofCanvas, cofAtoms, cofMass, cofLink);
+  document.body.appendChild(cofInfoPanel);
+
+  // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
+  const cofPrevMat = new BABYLON.ShaderMaterial('cofPrevMat', scene, 'imp', {
+    attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel'],
+    defines:['#define IMPRAD'] });
+  cofPrevMat.setFloat('radius',1.0); cofPrevMat.setFloat('isShell',0); cofPrevMat.setFloat('shellMin',0); cofPrevMat.setFloat('bubbleR',1e9);
+  cofPrevMat.setFloat('protonOutline',0); cofPrevMat.setFloat('coneCos',-1.0); cofPrevMat.setFloat('depthBias',0); cofPrevMat.setFloat('selModel',-1);
+  cofPrevMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); cofPrevMat.backFaceCulling=false; realAlpha(cofPrevMat);
+  cofPrevMat.onBindObservable.add(()=>{ const eff=cofPrevMat.getEffect(); if(!eff)return; eff.setFloat('uT',0.0);
+    eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9); });
+  const cofPrev = BABYLON.MeshBuilder.CreatePlane('cofPrev',{size:2},scene);
+  cofPrev.material=cofPrevMat; cofPrev.isPickable=false; cofPrev.alwaysSelectAsActiveMesh=true;
+  cofPrev.layerMask=PREV_MASK; cofPrev.renderingGroupId=1; cofPrev.thinInstanceCount=0;
+
+  const buildCofPrev = g => {
+    const n = g.atoms.length, M=new Float32Array(n*16), C=new Float32Array(n*4), R=new Float32Array(n), gp=etcGroupPos;
+    let maxR = 0;
+    for(let k=0;k<n;k++){ const i=g.atoms[k], o=k*16;
+      M[o]=1;M[o+5]=1;M[o+10]=1;M[o+15]=1;
+      const x=gp.gx[i]-g.cx, y=gp.gy[i]-g.cy, z=gp.gz[i]-g.cz;
+      M[o+12]=x; M[o+13]=y; M[o+14]=z;
+      const ec=info(etcEl[i]).c, r=info(etcEl[i]).vr*FILL_SCALE;
+      C[k*4]=ec[0];C[k*4+1]=ec[1];C[k*4+2]=ec[2];C[k*4+3]=0; R[k]=r;
+      const d=Math.hypot(x,y,z)+r; if(d>maxR) maxR=d;
+    }
+    cofPrev.thinInstanceSetBuffer('matrix',M,16,true);
+    cofPrev.thinInstanceSetBuffer('instanceColor',C,4,true);
+    cofPrev.thinInstanceSetBuffer('instR',R,1,true);
+    cofPrev.thinInstanceCount = n;
+    return maxR;
+  };
+
+  updateCofInfo = gi => {
+    if(gi < 0 || !etcGroups[gi]){ cofInfoPanel.style.display='none'; return; }
+    const g = etcGroups[gi];
+    cofTitle.textContent = ETC_NAMES[g.type] || 'Kofaktori';
+    cofAtoms.textContent = g.n + ' atomia';
+    cofMass.textContent = 'Massa/kpl: ' + fmtGrams(groupMassDa(g) * 1.66053907e-24);
+    cofLink.href = 'https://pubchem.ncbi.nlm.nih.gov/#query=' + encodeURIComponent(PUBCHEM_Q[g.type] || ETC_NAMES[g.type] || '');
+    cofInfoPanel.style.display='block';
+    const maxR = buildCofPrev(g);                       // 3D image → render the centred cofactor into the panel canvas
+    prevCam.setTarget(BABYLON.Vector3.Zero());
+    prevCam.radius = Math.max(1.0, maxR * 2.8);
+    const saved = prevRTT.renderList;
+    prevRTT.renderList = [cofPrev];
+    capturePreview(cofCanvas).then(()=>{ prevRTT.renderList = saved; });
   };
 
   // A tiny SVG of the orbital's REAL shape for its config-panel button: s = sphere, p (π) = dumbbell,
