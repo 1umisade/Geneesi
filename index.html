@@ -676,10 +676,14 @@ void main(void){
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
   if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a black outline is left
+#ifdef ETCTOP
+    discard;                                                  // a HIDDEN cofactor-overlay atom: drop the enlarged overlay entirely — its ordinary cell copy draws the cut outline, so hidden cofactor atoms follow the exact same thin rule as every other atom (no doubled/fat rings)
+#else
     float ew = min(aa * 3.0, 0.5);                            // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same pixel thickness on every atom, big or small (no more 5x-thick rings on large atoms)
     float cutRim = smoothstep(1.0 - ew, 1.0, r2);
     if(cutRim < 0.02) discard;                                // body → gone (writes no depth, so the cofactor/scene behind shows through)
     col = vec3(0.0); alpha = cutRim * 0.15;                   // pure black, faint (very see-through)
+#endif
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
@@ -2576,7 +2580,7 @@ async function run(){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
       uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selTunnelOn','selTunnelV','selTunnelR'],
-      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define SELTUNNEL'] });
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define SELTUNNEL','#define ETCTOP'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
