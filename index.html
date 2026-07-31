@@ -569,6 +569,10 @@ uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on proton
 uniform float depthBias;   // nuclei: push toward camera (view units) so they clear their OWN orbitals (0 elsewhere)
 uniform vec3 selCenter;    // the focused atom (its static nucleus is hidden → the spinning highlight shows instead)
 uniform float coneCos;     // reveal only atoms within this cosine of the view axis (negative disables the cone)
+uniform float revealOn;    // 1 = a cofactor is selected → see through the atoms in the sight-line to it
+uniform float revealKeep;  // screen-door: fraction of a sight-line atom's pixels to keep (rest reveal the cofactor)
+uniform vec3 revealCenterV;// the selected cofactor's centre in VIEW space (camera at origin)
+uniform float revealRadius;// radius of the sight cylinder from the camera to the cofactor
 #ifdef MEMFADE
 uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane fade away
 varying float vMemAnc;     // per-lipid anchor Z → the cut hides WHOLE lipids, never slices one in half
@@ -617,6 +621,13 @@ void main(void){
   float rimGlass = mix(shellMin, 0.72, smoothstep(0.34, 1.0, r2));   // revealed shell = a glass bubble, near-clear centre and a visible rim, so the orbitals inside stand out
   alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
+  if(revealOn > 0.5){                                          // cutaway: screen-door only the atoms in the sight cylinder to the cofactor
+    vec3 L = revealCenterV; float tt = dot(vCenterV, L) / max(dot(L, L), 1e-4);
+    if(tt < 0.94 && length(vCenterV - tt * L) < revealRadius){   // between camera and cofactor AND inside the sight tube
+      float dd = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+      if(dd > revealKeep) discard;                             // drop most of its pixels → the cofactor shows through
+    }
+  }
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
   if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
   posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
@@ -2098,6 +2109,9 @@ async function run(){
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
+  let gRevealOn = 0, gRevealRadius = 1e9, gEtcSelR = 0;        // cofactor cutaway: screen-door the atoms in the sight-line to the selected cofactor
+  const gRevealCenterV = new BABYLON.Vector3(1e6,1e6,1e6);     // its centre in view space (updated per frame)
+  const REVEAL_KEEP = 0.16;   // keep 16% of a sight-line atom's pixels → mostly see-through toward the cofactor
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gGfxMode = 0;           // graphics mode: 0 = vdW spheres · 1 = vdW + orbitals revealed for near atoms
   const GFX_MODES = [
@@ -2447,7 +2461,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','revealOn','revealKeep','revealCenterV','revealRadius','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
@@ -2455,17 +2469,19 @@ async function run(){
   vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil); });
+    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
+    eff.setFloat('revealOn', gRevealOn); eff.setFloat('revealKeep', REVEAL_KEEP); eff.setVector3('revealCenterV', gRevealCenterV); eff.setFloat('revealRadius', gRevealRadius); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','revealOn','revealKeep','revealCenterV','revealRadius','memCut','selModel'],
     defines:['#define IMPRAD','#define MEMFADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
-    eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+    eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
+    eff.setFloat('revealOn', gRevealOn); eff.setFloat('revealKeep', REVEAL_KEEP); eff.setVector3('revealCenterV', gRevealCenterV); eff.setFloat('revealRadius', gRevealRadius); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -3768,7 +3784,7 @@ async function run(){
     etcSel = gi;
     if(!fillEtcOutline(etcSelOut, etcSelMask, gi)){ modelLabel.style.display='none'; return; }
     etcHl.setEnabled(false); etcHlMask.setEnabled(false);        // the green selection replaces any white hover twin
-    const g = etcGroups[gi];
+    const g = etcGroups[gi]; gEtcSelR = g.r;                     // remember its radius → the sight tube uses it
     orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
     modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
     modelLabel._w = new BABYLON.Vector3(g.cx, g.cy, g.cz);
@@ -4415,6 +4431,9 @@ async function run(){
   // swivels the camera onto it when you pick it AND tracks it if it moves (e.g. a dragged complex).
   // Swivel-in-place keeps the camera position, so on-screen size is preserved. Panning clears the lock.
   scene.onBeforeRenderObservable.add(() => {
+    // Cofactor cutaway: screen-door the atoms inside the sight cylinder from the camera to the cofactor.
+    gRevealOn = (etcSel >= 0) ? 1 : 0;
+    if(gRevealOn){ BABYLON.Vector3.TransformCoordinatesToRef(orbitCenter, cam.getViewMatrix(), gRevealCenterV); gRevealRadius = gEtcSelR; }
     if(!orbitLocked || orbitCenter.x > 1e5) return;
     if(gSelModel >= 0 && mInfo[gSelModel]){ const mi = mInfo[gSelModel];   // dragged complex → keep the pivot on its live centre
       orbitCenter.set(mi.cx+gModelOff[gSelModel*3], mi.cy+gModelOff[gSelModel*3+1], mi.cz+gModelOff[gSelModel*3+2]); }
