@@ -675,9 +675,11 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
-  if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a thin black 50%-transparent outline is left
-    if(rim < 0.02) discard;                                   // body → gone (writes no depth, so the cofactor/scene behind shows through)
-    col = vec3(0.0); alpha = rim * 0.15;                       // same thin ink band as the surrounding atoms, pure black at 10% opacity (very see-through)
+  if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a black outline is left
+    float ew = min(aa * 3.0, 0.5);                            // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same pixel thickness on every atom, big or small (no more 5x-thick rings on large atoms)
+    float cutRim = smoothstep(1.0 - ew, 1.0, r2);
+    if(cutRim < 0.02) discard;                                // body → gone (writes no depth, so the cofactor/scene behind shows through)
+    col = vec3(0.0); alpha = cutRim * 0.15;                   // pure black, faint (very see-through)
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
