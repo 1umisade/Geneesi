@@ -652,9 +652,16 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
+#ifdef ETCHL
+  bool hl = abs(vGid - hlGroup) < 0.5;                        // hovered / flashing cofactor group
+  if(hl) col *= hlBright;                                     // → brighter FILL (the dark outline is applied AFTER, so it stays dark)
+#endif
   // Ink outline band. Normally starts at 0.86 (width 0.14). For atoms REVEALING orbitals (glass shells)
   // start it at 0.965 (width 0.035 ≈ 4× thinner) so the thin rim doesn't obscure the orbitals inside.
   float rimStart = mix(0.86, 0.965, (isShell > 0.5) ? reveal : 0.0);
+#ifdef ETCHL
+  if(hl) rimStart -= 0.16;                                    // → thicker vdW outline on the hovered / flashing cofactor
+#endif
   float rim = smoothstep(rimStart - min(aa, 0.008), 1.0, r2);   // thin ink band like the orbital lobes, tiny aa only so revealed shells do not get a fat outline
   // Subtle electric-blue shimmer: a faint cool sheen that rides the sphere's grazing edge and drifts in time.
   if(protonOutline < 0.5){
@@ -672,9 +679,6 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
-#ifdef ETCHL
-  if(abs(vGid - hlGroup) < 0.5) col *= hlBright;   // hovered / flashing cofactor group → brighter (no outline)
-#endif
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
@@ -2155,6 +2159,9 @@ async function run(){
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
   let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
   const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
+  const etcTypeOn = [];       // per cofactor TYPE: is its line-of-sight see-through on? (toggled by the right-side list)
+  let gCofDR = null;          // the per-cofactor disc-radius buffer (0 = that cofactor's line of sight is off)
+  let refreshCofDiscs = () => {};   // rebuild gCofDR from etcTypeOn (set once the discs exist)
   // ── Cofactor line-of-sight see-through (screen-space) ─────────────────────
   // A depth pass renders every cofactor molecule as a disc into an off-screen buffer holding the nearest
   // cofactor's view-space depth per pixel. A protein atom whose centre is IN FRONT of a cofactor there
@@ -2177,6 +2184,7 @@ async function run(){
   let gShell   = 0;           // vdW spheres: 1 = translucent where the atom reveals orbitals, 0 = always solid
   let gShellMin = 0.0;        // alpha the vdW shell fades TO where revealed (0 = fully hidden, 0.5 = half-transparent)
   let gEtc = false, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later)
+  let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
   let etcSel = -1;                       // index into etcGroups of the selected cofactor (−1 = none)
@@ -2225,6 +2233,7 @@ async function run(){
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
+      if(cofListPanel) cofListPanel.style.display = gEtc ? 'flex' : 'none';   // show the cofactor-type list only in ETC mode
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
@@ -2605,9 +2614,15 @@ async function run(){
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
       const NG = etcGroups.length, dm = new Float32Array(NG*16), dR = new Float32Array(NG);
       for(let i=0;i<NG;i++){ const g=etcGroups[i], o=i*16;
-        dm[o]=1; dm[o+5]=1; dm[o+10]=1; dm[o+15]=1; dm[o+12]=g.cx; dm[o+13]=g.cy; dm[o+14]=g.cz; dR[i]=g.r+5.0; }   // same tunnel radius as the selected-cofactor cut
+        dm[o]=1; dm[o+5]=1; dm[o+10]=1; dm[o+15]=1; dm[o+12]=g.cx; dm[o+13]=g.cy; dm[o+14]=g.cz; }
       disc.thinInstanceSetBuffer('matrix', dm, 16, true);
-      disc.thinInstanceSetBuffer('dr', dR, 1, true);
+      gCofDR = dR;
+      for(const g of etcGroups) if(etcTypeOn[g.type] === undefined) etcTypeOn[g.type] = true;   // every cofactor type defaults to line-of-sight ON
+      refreshCofDiscs = () => {   // a disc of radius 0 covers nothing → that cofactor's line of sight is OFF
+        for(let i=0;i<NG;i++){ const g=etcGroups[i]; gCofDR[i] = etcTypeOn[g.type] ? g.r+5.0 : 0.0; }
+        disc.thinInstanceSetBuffer('dr', gCofDR, 1, true);
+      };
+      refreshCofDiscs();
       cofDepthRT.renderList = [disc];
       scene.customRenderTargets.push(cofDepthRT);
       gCofDisc = disc;
@@ -3864,6 +3879,24 @@ async function run(){
     modelLabel._w = new BABYLON.Vector3(g.cx, g.cy, g.cz);
   };
   const clearEtcSel = () => showEtcSel(-1);
+  // ── Cofactor-type list (right side): click a type to toggle its line-of-sight see-through. ──
+  cofListPanel = document.createElement('div');
+  cofListPanel.style.cssText = 'position:fixed;right:16px;top:56px;z-index:12;display:none;flex-direction:column;gap:5px;'
+    + 'font:12px ui-monospace,monospace;color:var(--ink);user-select:none;max-height:82vh;overflow:auto;';
+  if(etcGroups.length){
+    const cnt = {}; for(const g of etcGroups) cnt[g.type] = (cnt[g.type]||0)+1;
+    for(const t of Object.keys(cnt).map(Number).sort((a,b)=>a-b)){
+      const row = document.createElement('div');
+      row.textContent = (ETC_NAMES[t]||'Kofaktori') + '  ×' + cnt[t];
+      row.style.cssText = 'cursor:pointer;padding:3px 11px;border-radius:9px;border:2px solid var(--brown);'
+        + 'background:var(--paper);box-shadow:0 2px 0 var(--brown);white-space:nowrap;text-align:right;';
+      const restyle = () => { row.style.opacity = etcTypeOn[t] ? '1' : '0.4'; row.style.fontWeight = etcTypeOn[t] ? 'bold' : 'normal'; };
+      row.addEventListener('click', () => { etcTypeOn[t] = !etcTypeOn[t]; refreshCofDiscs(); restyle(); });
+      restyle();
+      cofListPanel.appendChild(row);
+    }
+  }
+  document.body.appendChild(cofListPanel);
   // Ray vs the cofactor groups' bounding spheres → nearest group index, or −1.
   const pickEtcGroup = () => {
     if(!etcGroups.length) return -1;   // cofactors are pickable in any mode (not only ETC-ketju) → far selection works
