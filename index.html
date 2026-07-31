@@ -724,6 +724,31 @@ void main(void){
   gl_FragColor = vec4(vz, 0.0, 0.0, 1.0);
 }`;
 
+/* Cofactor coverage mask — each cofactor atom as a camera-facing disc of its vdW radius (a cheap
+   stand-in for the sphere's screen silhouette). Solid white → the union is the cofactors' filled
+   coverage, whose OUTER edge the cofsil post-process inks as the molecule outline. */
+BABYLON.Effect.ShadersStore['cofmaskVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
+attribute float dr;                            // this atom's vdW radius in world units
+uniform mat4 view; uniform mat4 projection;
+varying vec2 vq;
+void main(void){
+  vec3 center = vec3(world3.x, world3.y, world3.z);
+  vec4 cv = view * vec4(center, 1.0);
+  vq = position.xy;
+  cv.xy += vq * dr;
+  gl_Position = projection * cv;
+}`;
+BABYLON.Effect.ShadersStore['cofmaskFragmentShader'] = `
+precision highp float;
+varying vec2 vq;
+void main(void){
+  if(dot(vq, vq) > 1.0) discard;
+  gl_FragColor = vec4(1.0);
+}`;
+
 /* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
 BABYLON.Effect.ShadersStore['bondVertexShader'] = `
 precision highp float;
@@ -1618,6 +1643,31 @@ void main(void){
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
 
+/* Cofactor silhouette — inks a single black outline around each cofactor MOLECULE, on top of the
+   finished frame. cofMask is the cofactors' solid coverage (1 = cofactor, drawn ignoring the protein
+   so buried cofactors still outline). The EDGE of that filled coverage is the molecule's outer contour
+   — interior atoms are all 1, so they produce no line — which is why this traces the whole molecule,
+   not every atom. */
+BABYLON.Effect.ShadersStore['cofsilPixelShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform sampler2D cofMask;
+uniform vec2 texel;
+uniform float lineW;
+void main(void){
+  vec3 scene = texture2D(textureSampler, vUV).rgb;
+  float c = texture2D(cofMask, vUV).r, mn = c, mx = c;
+  for(int i=0;i<8;i++){
+    float a = float(i) * 0.7853982;
+    vec2 d = vec2(cos(a), sin(a)) * texel * lineW;
+    float s = texture2D(cofMask, vUV + d).r;
+    mn = min(mn, s); mx = max(mx, s);
+  }
+  float line = smoothstep(0.2, 0.7, mx - mn);   // where the coverage transitions = the molecule silhouette
+  gl_FragColor = vec4(mix(scene, vec3(0.03), line), 1.0);
+}`;
+
 /* ── Static dark-green background ──────────────────────────────────────────
    A full-screen quad drawn at the far plane (z ≈ 1, LESS depth test) so every
    atom draws over it regardless of order. Flat dark green — no gradient/wobble. */
@@ -2183,6 +2233,7 @@ async function run(){
   // cofactor's view-space depth per pixel. A protein atom whose centre is IN FRONT of a cofactor there
   // renders at 25% opacity (keeps its normal colour + outline), so the cofactor shows through.
   let cofDepthRT = null, gCofDisc = null;                     // the depth target + the disc mesh that fills it
+  let cofMaskRT = null, gCofMaskMesh = null;                  // cofactor coverage mask (solid) → the cofsil post-process inks its outer edge = the molecule silhouette
   const gCofTexel = new BABYLON.Vector2(1/1280, 1/720);       // 1 / render size → maps gl_FragCoord to [0,1] (refreshed per frame)
   const bindCof = eff => { eff.setFloat('cofHideOn', gRevealOn); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT); eff.setVector2('cofTexel', gCofTexel); };
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
@@ -2250,6 +2301,7 @@ async function run(){
   { const etcBtn = document.getElementById('etc-btn');   // highlight the electron-transport cofactors on top of everything
     if(etcBtn) etcBtn.addEventListener('click', () => { gEtc = !gEtc;
       if(etcOverlay) etcOverlay.setEnabled(gEtc);
+      if(gCofMaskMesh) gCofMaskMesh.setEnabled(gEtc);
       if(cofListPanel) cofListPanel.style.display = gEtc ? 'flex' : 'none';   // show the cofactor-type list only in ETC mode
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; }); }
@@ -2554,7 +2606,7 @@ async function run(){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
       uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright'],
-      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define ETCDARK'] });
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
@@ -2627,6 +2679,33 @@ async function run(){
       cofDepthRT.renderList = [disc];
       scene.customRenderTargets.push(cofDepthRT);
       gCofDisc = disc;
+    }
+    // ── Cofactor silhouette mask ── the cofactors rendered SOLID (white) into an off-screen buffer via a
+    // mirror camera that sees ONLY this mesh (so the protein doesn't occlude it). The cofsil post-process
+    // inks the OUTER edge of this filled coverage → one black outline per molecule, on top of everything.
+    {
+      const eng = scene.getEngine();
+      const rw = Math.max(2, Math.ceil(eng.getRenderWidth()*0.5)), rh = Math.max(2, Math.ceil(eng.getRenderHeight()*0.5));   // half-res is enough for an outline and keeps this cheap
+      cofMaskRT = new BABYLON.RenderTargetTexture('cofMask', {width:rw, height:rh}, scene, false, true,
+        BABYLON.Constants.TEXTURETYPE_UNSIGNED_BYTE, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, true, false);
+      cofMaskRT.clearColor = new BABYLON.Color4(0, 0, 0, 1);
+      const mcam = new BABYLON.FreeCamera('cofMaskCam', new BABYLON.Vector3(0,0,0), scene);
+      scene.removeCamera(mcam);
+      mcam.layerMask = 0x10000000;                                       // sees ONLY the mask mesh
+      mcam.getViewMatrix = () => cam.getViewMatrix();
+      mcam.getProjectionMatrix = () => cam.getProjectionMatrix();
+      cofMaskRT.activeCamera = mcam;
+      const maskMat = new BABYLON.ShaderMaterial('cofMaskMat', scene, 'cofmask', {
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection'] });
+      maskMat.backFaceCulling = false;
+      const maskMesh = BABYLON.MeshBuilder.CreatePlane('cofMaskMesh',{size:2},scene);
+      maskMesh.material=maskMat; maskMesh.isPickable=false; maskMesh.alwaysSelectAsActiveMesh=true; maskMesh.layerMask=0x10000000;
+      maskMesh.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);       // reuse the cofactor atom matrices
+      maskMesh.thinInstanceSetBuffer('dr', new Float32Array(etcR),1,true);            // per-atom vdW radius → the sphere's screen silhouette
+      maskMesh.setEnabled(gEtc);
+      cofMaskRT.renderList = [maskMesh];
+      scene.customRenderTargets.push(cofMaskRT);
+      gCofMaskMesh = maskMesh;
     }
   }
 
@@ -4724,6 +4803,14 @@ async function run(){
     eff.setFloat('bands', 6.0);      // flat colour bands per channel
     eff.setFloat('paperAmt', 0.05);  // paper grain
     eff.setFloat('bright', 1.35);    // brightness lift (was coming out dark)
+  };
+  // Cofactor silhouette — a single black outline around each cofactor MOLECULE, inked on top of the
+  // finished frame from the coverage mask. Runs last, so it floats over everything.
+  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW'], ['cofMask'], 1.0, cam);
+  cofsil.onApply = eff => {
+    eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
+    eff.setFloat('lineW', 2.2);
+    if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
   window.addEventListener('keydown', e => {
     if(e.key === 'p' || e.key === 'P'){
