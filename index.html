@@ -755,7 +755,7 @@ void main(void){
     vec3 nW = camRight * uv.x + camUp * uv.y;    // world direction of this edge point
     float bt = floor(uT * 7.0);
     float lump = sin(nW.x*5.5 + vWC.x*0.6 + bt) + sin(nW.y*5.5 + vWC.y*0.6 + bt*1.3) + sin(nW.z*5.5 + vWC.z*0.6 + bt*0.7);
-    r2 = max(0.0, r2 + boil*0.05*min(lump, 0.0));   // grow-only: the disc may bulge OUT (wavy outline) but never shrinks, so the union never opens interior gaps → no tangled inner lines
+    r2 = max(0.0, r2 + boil*0.05*lump);            // EXACT same warp as the imp sphere shader → the outline sits right on the boiling silhouette
   }
   if(r2 > 1.0) discard;
   gl_FragColor = vec4(1.0);
