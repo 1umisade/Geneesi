@@ -2264,29 +2264,34 @@ async function run(){
   const NUCLEON_R = 0.013, SPACING = 1.55*NUCLEON_R;   // 10× smaller, tightly packed (overlapping)
   const nucClusterR = e => { const A = info(e).n; const dm = A>1 ? Math.hypot(fcc[A-1][0],fcc[A-1][1],fcc[A-1][2]) : 0; return dm*SPACING + NUCLEON_R; };
   const nucBuf = [], nucColBuf = [];
-  for(let e=0;e<nEl;e++){
-    const A = info(e).n;
-    nucBuf[e]    = new Float32Array(atomCount[e]*A*16);
-    nucColBuf[e] = new Float32Array(atomCount[e]*A*4);
-  }
-  for(let e=0;e<nEl;e++){
-    if(atomCount[e]===0) continue;
-    const A = info(e).n, Z = info(e).z, sc = SPACING, nb = nucBuf[e], nc = nucColBuf[e], sb = sphBuf[e];
-    const PC = [1.0, 0.5, 0.5];    // protons  = light red
-    const NC = [0.62, 0.62, 0.62]; // neutrons = grey
-    for(let a=0;a<atomCount[e];a++){
-      const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
-      for(let i=0;i<A;i++){
-        const idx = a*A+i, o = idx*16;
-        nb[o]=1; nb[o+5]=1; nb[o+10]=1; nb[o+15]=1;              // identity rotation/scale
-        nb[o+12] = cx + fcc[i][0]*sc; nb[o+13] = cy + fcc[i][1]*sc; nb[o+14] = cz + fcc[i][2]*sc;
-        const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);   // spread Z protons evenly through the A nucleons
-        const col = proton ? PC : NC, co = idx*4;
-        nc[co]=col[0]; nc[co+1]=col[1]; nc[co+2]=col[2]; nc[co+3]=proton?1:0;   // alpha flags proton for the red rim
-      }
+  // Nucleons (one sphere per proton+neutron, per atom) are the single heaviest instance set and are
+  // only ever shown in orbital mode, up close — so their generation is deferred to buildDetail(),
+  // which runs in the background AFTER the scene is first shown. nucBuf is consumed only by binning.
+  const fillNucleons = async () => {
+    for(let e=0;e<nEl;e++){
+      const A = info(e).n;
+      nucBuf[e]    = new Float32Array(atomCount[e]*A*16);
+      nucColBuf[e] = new Float32Array(atomCount[e]*A*4);
     }
-    await yield_();
-  }
+    for(let e=0;e<nEl;e++){
+      if(atomCount[e]===0) continue;
+      const A = info(e).n, Z = info(e).z, sc = SPACING, nb = nucBuf[e], nc = nucColBuf[e], sb = sphBuf[e];
+      const PC = [1.0, 0.5, 0.5];    // protons  = light red
+      const NC = [0.62, 0.62, 0.62]; // neutrons = grey
+      for(let a=0;a<atomCount[e];a++){
+        const cx = sb[a*16+12], cy = sb[a*16+13], cz = sb[a*16+14];
+        for(let i=0;i<A;i++){
+          const idx = a*A+i, o = idx*16;
+          nb[o]=1; nb[o+5]=1; nb[o+10]=1; nb[o+15]=1;              // identity rotation/scale
+          nb[o+12] = cx + fcc[i][0]*sc; nb[o+13] = cy + fcc[i][1]*sc; nb[o+14] = cz + fcc[i][2]*sc;
+          const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);   // spread Z protons evenly through the A nucleons
+          const col = proton ? PC : NC, co = idx*4;
+          nc[co]=col[0]; nc[co+1]=col[1]; nc[co+2]=col[2]; nc[co+3]=proton?1:0;   // alpha flags proton for the red rim
+        }
+      }
+      await yield_();
+    }
+  };
 
   /* ── Electron orbitals: real-shaped lobes for every occupied subshell per atom.
      s = sphere; p = dumbbell (2 lobes/axis); d = 8-lobe cloverleaf; f = 14.
@@ -2479,39 +2484,19 @@ async function run(){
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
   const etcM=[], etcC=[], etcR=[], etcT=[], etcS=[];   // ETC cofactor overlay: matrices, colours, radii, type codes, residue ids
 
+  let buildDetail = null;                 // deferred: bins + builds the nucleon/orbital/bond/lone-pair meshes AFTER the first frame
+  const macroCellByKey = new Map();       // cell key → its cellList entry, so buildDetail can attach the streamed-in detail meshes
+  // PASS A — bin ONLY the vdW spheres (+ cofactor-overlay data). This is the only geometry visible in
+  // the default vdW mode, so once these cells exist the scene can be shown. Everything else (nucleons,
+  // orbitals, bond + lone-pair lobes) is binned + meshed in the background by buildDetail() below.
   for(let e=0;e<nEl;e++){
     if(atomCount[e]===0) continue;
-    const sb=sphBuf[e], A=info(e).n, ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e], rs=resBuf[e];
-    // Nucleons — A per atom, contiguous → bin by the atom centre. Also collect ONE vdW sphere per
-    // atom (the space-filling representation shown when the graphics toggle is in "vdW" mode).
-    const nb=nucBuf[e], nc=nucColBuf[e];
+    const sb=sphBuf[e], ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e], rs=resBuf[e];
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
-      for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
       pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
       if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); }   // cofactor → overlay, coloured by type, slightly enlarged to pop
     }
-    // Orbitals — bin by orbCenBuf (each lobe's atom centre).
-    const oc=orbCount(e);
-    if(oc>0){ const ob=orbBuf[e], ocol=orbColBuf[e], ocen=orbCenBuf[e], oidb=orbIdBuf[e], tot=atomCount[e]*oc;
-      for(let i=0;i<tot;i++){ const o=i*16;
-        if(ob[o]*ob[o]+ob[o+1]*ob[o+1]+ob[o+2]*ob[o+2] < 1e-9) continue;   // skipped (bond-doubled) lobe → don't upload it
-        const c=getCell(cellIx(ocen[i*3],ocen[i*3+1],ocen[i*3+2]));
-        pushN(c.orbM, ob, o, 16); pushN(c.orbCol, ocol, i*3, 3); pushN(c.orbCen, ocen, i*3, 3); c.orbOid.push(oidb[i]);
-      }
-    }
-    // Bonding lobes.
-    { const cen=cenBuf[e];
-      for(let i=0;i<cylIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
-        pushN(c.boM, cylBuf[e], i*16, 16); c.boT.push(wBuf[e][i]); pushN(c.boCen, cen, i*3, 3);
-        c.boCol.push(ec[0],ec[1],ec[2]); c.boOid.push(cylOidBuf[e][i]);
-      } }
-    // Lone-pair lobes.
-    { const cen=lpCenBuf[e];
-      for(let i=0;i<lpIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
-        pushN(c.lpM, lpBuf[e], i*16, 16); c.lpT.push(1.0); pushN(c.lpCen, cen, i*3, 3);
-        c.lpCol.push(ec[0],ec[1],ec[2]); c.lpOid.push(lpOidBuf[e][i]);
-      } }
     await yield_();
   }
   // Per-instance model tag (from each instance's world position) → the movable materials add
@@ -2616,7 +2601,7 @@ async function run(){
       cofdMat.setVector2('pxToNdc', new BABYLON.Vector2(2/rw, 2/rh));   // dr is measured in depth-buffer pixels
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
-      const PX_TUBE = 8, NA = etcT.length;                             // per-ATOM tube radius (depth-buffer px) → same size for every cofactor, near or far
+      const PX_TUBE = 20, NA = etcT.length;                             // per-ATOM tube radius (depth-buffer px) → same size for every cofactor, near or far
       disc.thinInstanceSetBuffer('matrix', new Float32Array(etcM), 16, true);   // one disc per cofactor ATOM (reuse the overlay's atom matrices)
       gCofDR = new Float32Array(NA);
       for(let i=0;i<NA;i++) if(etcTypeOn[etcT[i]] === undefined) etcTypeOn[etcT[i]] = true;   // every cofactor type defaults to line-of-sight ON
@@ -2631,33 +2616,14 @@ async function run(){
     }
   }
 
-  // Build per-cell meshes (sharing the 4 materials); collect them for the frame loop.
+  // Build per-cell SPHERE meshes now (the only geometry shown in the default vdW mode); the heavier
+  // detail meshes stream in later via buildDetail(). Each entry is tagged with its cell key so the
+  // deferred pass can attach the detail meshes to the right cell.
   const cellList = [];
+  const cellHalfDiag = 0.5*Math.hypot(CELL,CELL,CELL);
   for(const [k,c] of cells){
     const ix=Math.floor(k/(gny*gnz)), iy=Math.floor((k%(gny*gnz))/gnz), iz=k%gnz;
     const cx=bMiX+(ix+0.5)*CELL, cy=bMiY+(iy+0.5)*CELL, cz=bMiZ+(iz+0.5)*CELL;
-    const meshes=[]; let nuc=null;
-    if(c.nucM.length){ const m=BABYLON.MeshBuilder.CreatePlane('cn'+k,{size:2},scene); m.material=nucMatG; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.nucM),16,true);
-      m.thinInstanceSetBuffer('instanceColor', new Float32Array(c.nucC),4,true);
-      m.thinInstanceSetBuffer('modelId', mdlBuf(c.nucM),1,true);
-      m.renderingGroupId=1;   // nuclei drawn after the orbitals (biased depth) so they sit on top of their own atom
-      m.alwaysSelectAsActiveMesh=true; nuc=m; }   // nuclei are a close-up-only detail (kept separate from the always-on orbitals)
-    if(c.orbM.length){ const m=BABYLON.MeshBuilder.CreateSphere('co'+k,{segments:3,diameter:1},scene); m.material=orbMatG; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.orbM),16,true); m.thinInstanceSetBuffer('ocol', new Float32Array(c.orbCol),3,true);
-      m.thinInstanceSetBuffer('ocen', new Float32Array(c.orbCen),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.orbOid),1,true);
-      m.thinInstanceSetBuffer('modelId', mdlBuf(c.orbM),1,true);
-      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
-    if(c.boM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cb'+k,{segments:3,diameter:1},scene); m.material=bondBondingMat; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.boM),16,true); m.thinInstanceSetBuffer('taper', new Float32Array(c.boT),1,true);
-      m.thinInstanceSetBuffer('ocen', new Float32Array(c.boCen),3,true); m.thinInstanceSetBuffer('bcol', new Float32Array(c.boCol),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.boOid),1,true);
-      m.thinInstanceSetBuffer('modelId', mdlBuf(c.boM),1,true);
-      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
-    if(c.lpM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cl'+k,{segments:3,diameter:1},scene); m.material=bondLPMat; m.isPickable=false;
-      m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true); m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
-      m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true); m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.lpOid),1,true);
-      m.thinInstanceSetBuffer('modelId', mdlBuf(c.lpM),1,true);
-      m.alwaysSelectAsActiveMesh=true; meshes.push(m); }
     let sphere=null;
     if(c.sphM.length){ sphere=BABYLON.MeshBuilder.CreatePlane('cs'+k,{size:2},scene); sphere.material=vdwMat; sphere.isPickable=false;
       sphere.thinInstanceSetBuffer('matrix', new Float32Array(c.sphM),16,true);
@@ -2665,15 +2631,80 @@ async function run(){
       sphere.thinInstanceSetBuffer('instR', new Float32Array(c.sphR),1,true);
       sphere.thinInstanceSetBuffer('modelId', mdlBuf(c.sphM),1,true);
       sphere.renderingGroupId=1; sphere.alwaysSelectAsActiveMesh=true; sphere.setEnabled(false); }
-    if(nuc) nuc.setEnabled(false);
-    for(const m of meshes) m.setEnabled(false);
-    cellList.push({ cx,cy,cz, meshes, nuc, sphere, macro:true, r:0.5*Math.hypot(CELL,CELL,CELL), visOn:false, nucOn:false, sphOn:false });
+    const entry = { cx,cy,cz, meshes:[], nuc:null, sphere, macro:true, r:cellHalfDiag, visOn:false, nucOn:false, sphOn:false, k };
+    cellList.push(entry); macroCellByKey.set(k, entry);
     await yield_();
   }
-  cells.clear();
-  const cellHalfDiag = 0.5*Math.hypot(CELL,CELL,CELL);
-  // Free the per-element core buffers now baked into cells. Keep orbBuf (hover outline) and sphBuf/colBuf (shells + picking).
-  for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=null; }   // keep orbBuf/orbColBuf + cylBuf/cenBuf/wBuf + lpBuf/lpCenBuf → the outline can match every fill lobe exactly
+
+  // ── Deferred detail build: nucleons, orbitals, bond + lone-pair lobes ─────────────────────────
+  // Runs in the background after the first frame. Bins the detail into the SAME cells, then attaches
+  // each cell's detail meshes to its existing cellList entry (or a fresh entry for a rare detail-only
+  // border cell), and finally forces the cull loop to re-apply the correct enabled state.
+  buildDetail = async () => {
+    await fillNucleons();
+    for(let e=0;e<nEl;e++){
+      if(atomCount[e]===0) continue;
+      const sb=sphBuf[e], A=info(e).n, ec=info(e).c, nb=nucBuf[e], nc=nucColBuf[e];
+      for(let a=0;a<atomCount[e];a++){
+        const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
+        for(let j=0;j<A;j++){ pushN(c.nucM, nb, (a*A+j)*16, 16); pushN(c.nucC, nc, (a*A+j)*4, 4); }
+      }
+      const oc=orbCount(e);   // Orbitals — bin by orbCenBuf (each lobe's atom centre).
+      if(oc>0){ const ob=orbBuf[e], ocol=orbColBuf[e], ocen=orbCenBuf[e], oidb=orbIdBuf[e], tot=atomCount[e]*oc;
+        for(let i=0;i<tot;i++){ const o=i*16;
+          if(ob[o]*ob[o]+ob[o+1]*ob[o+1]+ob[o+2]*ob[o+2] < 1e-9) continue;   // skipped (bond-doubled) lobe → don't upload it
+          const c=getCell(cellIx(ocen[i*3],ocen[i*3+1],ocen[i*3+2]));
+          pushN(c.orbM, ob, o, 16); pushN(c.orbCol, ocol, i*3, 3); pushN(c.orbCen, ocen, i*3, 3); c.orbOid.push(oidb[i]);
+        }
+      }
+      { const cen=cenBuf[e];   // Bonding lobes.
+        for(let i=0;i<cylIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
+          pushN(c.boM, cylBuf[e], i*16, 16); c.boT.push(wBuf[e][i]); pushN(c.boCen, cen, i*3, 3);
+          c.boCol.push(ec[0],ec[1],ec[2]); c.boOid.push(cylOidBuf[e][i]);
+        } }
+      { const cen=lpCenBuf[e];   // Lone-pair lobes.
+        for(let i=0;i<lpIdx[e];i++){ const c=getCell(cellIx(cen[i*3],cen[i*3+1],cen[i*3+2]));
+          pushN(c.lpM, lpBuf[e], i*16, 16); c.lpT.push(1.0); pushN(c.lpCen, cen, i*3, 3);
+          c.lpCol.push(ec[0],ec[1],ec[2]); c.lpOid.push(lpOidBuf[e][i]);
+        } }
+      await yield_();
+    }
+    for(const [k,c] of cells){
+      let entry = macroCellByKey.get(k);
+      if(!entry){   // a lobe centre landed in a cell with no atom sphere (rare, at cell borders) → fresh entry
+        const ix=Math.floor(k/(gny*gnz)), iy=Math.floor((k%(gny*gnz))/gnz), iz=k%gnz;
+        const cx=bMiX+(ix+0.5)*CELL, cy=bMiY+(iy+0.5)*CELL, cz=bMiZ+(iz+0.5)*CELL;
+        entry = { cx,cy,cz, meshes:[], nuc:null, sphere:null, macro:true, r:cellHalfDiag, visOn:false, nucOn:false, sphOn:false, k };
+        macroCellByKey.set(k, entry); cellList.push(entry);
+      }
+      if(c.nucM.length){ const m=BABYLON.MeshBuilder.CreatePlane('cn'+k,{size:2},scene); m.material=nucMatG; m.isPickable=false;
+        m.thinInstanceSetBuffer('matrix', new Float32Array(c.nucM),16,true);
+        m.thinInstanceSetBuffer('instanceColor', new Float32Array(c.nucC),4,true);
+        m.thinInstanceSetBuffer('modelId', mdlBuf(c.nucM),1,true);
+        m.renderingGroupId=1;   // nuclei drawn after the orbitals (biased depth) so they sit on top of their own atom
+        m.alwaysSelectAsActiveMesh=true; m.setEnabled(false); entry.nuc=m; }
+      if(c.orbM.length){ const m=BABYLON.MeshBuilder.CreateSphere('co'+k,{segments:3,diameter:1},scene); m.material=orbMatG; m.isPickable=false;
+        m.thinInstanceSetBuffer('matrix', new Float32Array(c.orbM),16,true); m.thinInstanceSetBuffer('ocol', new Float32Array(c.orbCol),3,true);
+        m.thinInstanceSetBuffer('ocen', new Float32Array(c.orbCen),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.orbOid),1,true);
+        m.thinInstanceSetBuffer('modelId', mdlBuf(c.orbM),1,true);
+        m.alwaysSelectAsActiveMesh=true; m.setEnabled(false); entry.meshes.push(m); }
+      if(c.boM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cb'+k,{segments:3,diameter:1},scene); m.material=bondBondingMat; m.isPickable=false;
+        m.thinInstanceSetBuffer('matrix', new Float32Array(c.boM),16,true); m.thinInstanceSetBuffer('taper', new Float32Array(c.boT),1,true);
+        m.thinInstanceSetBuffer('ocen', new Float32Array(c.boCen),3,true); m.thinInstanceSetBuffer('bcol', new Float32Array(c.boCol),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.boOid),1,true);
+        m.thinInstanceSetBuffer('modelId', mdlBuf(c.boM),1,true);
+        m.alwaysSelectAsActiveMesh=true; m.setEnabled(false); entry.meshes.push(m); }
+      if(c.lpM.length){ const m=BABYLON.MeshBuilder.CreateSphere('cl'+k,{segments:3,diameter:1},scene); m.material=bondLPMat; m.isPickable=false;
+        m.thinInstanceSetBuffer('matrix', new Float32Array(c.lpM),16,true); m.thinInstanceSetBuffer('taper', new Float32Array(c.lpT),1,true);
+        m.thinInstanceSetBuffer('ocen', new Float32Array(c.lpCen),3,true); m.thinInstanceSetBuffer('bcol', new Float32Array(c.lpCol),3,true); m.thinInstanceSetBuffer('oid', new Float32Array(c.lpOid),1,true);
+        m.thinInstanceSetBuffer('modelId', mdlBuf(c.lpM),1,true);
+        m.alwaysSelectAsActiveMesh=true; m.setEnabled(false); entry.meshes.push(m); }
+      await yield_();
+    }
+    // The streamed-in meshes were created disabled; force the cull loop to re-apply the correct state.
+    for(const entry of cellList){ if(entry.macro){ entry.visOn=-1; entry.nucOn=-1; } }
+    cells.clear();
+    for(let e=0;e<nEl;e++){ nucBuf[e]=nucColBuf[e]=orbCenBuf[e]=null; }   // free the per-element core buffers now baked into cells (keep orbBuf/orbColBuf + cylBuf/cenBuf/wBuf + lpBuf/lpCenBuf → the hover outline matches every fill lobe)
+  };
 
   /* No vdW shells: every atom always shows its full orbitals (no space-filling stand-in, no
      screen-door reveal band). Orbitals render for cells near the camera; far cells simply aren't
@@ -4725,9 +4756,14 @@ async function run(){
   //    dynamic culling / deferred shader compilation.
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
-  // Scene is live now (complexes visible). Build the lipid membrane in the background — it fills in
-  // block-by-block as it goes, instead of blocking the whole load for ~7-8s up front.
-  if(buildMembrane) buildMembrane().catch(e => console.warn('membrane build failed:', e));
+  // Scene is live now (vdW spheres visible). Fill in the rest in the background so the load no longer
+  // blocks for ~11s up front: first the lipid membrane (also visible in vdW mode, fills in block-by-
+  // block), then the atomic detail (nucleons / orbitals / bond + lone-pair lobes) that only shows in
+  // orbital mode or up close. Both stream in over many frames while the scene stays interactive.
+  Promise.resolve()
+    .then(() => buildMembrane && buildMembrane())
+    .then(() => buildDetail && buildDetail())
+    .catch(e => console.warn('background build failed:', e));
 }
 
 /* ── Auto-load PSII on page load (no prompt) ───────────────────────────── */
