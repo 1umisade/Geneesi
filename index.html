@@ -1899,6 +1899,7 @@ async function run(){
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
       showTips();
+      scene.stopAnimation(cam);   // any interaction cancels the one-shot focus swivel → it never fights a drag
       if(e.button === 2){   // RIGHT = grab-pan only (never rotates). Anchor the depth to the EXACT point
         panning = true; dragging = true;                    // under the cursor so it stays glued there while panning.
         canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing";   // custom grab cursor while panning
@@ -3147,6 +3148,17 @@ async function run(){
   cam.setPosition(new BABYLON.Vector3(50, -6, -961));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
   cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
+  // One-shot smooth swivel to centre a freshly-selected object. Runs ONCE (NOT a perpetual follow —
+  // that fought rotation) and is cancelled by any pointer-down, so it never fights a drag. Swivels in
+  // place (animates only the target), so the selection keeps its on-screen size (no dolly).
+  const focusCameraOn = center => {
+    scene.stopAnimation(cam);
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = cam.inertialPanningX = cam.inertialPanningY = 0;
+    const anim = new BABYLON.Animation('camFocus', 'target', 60, BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    anim.setKeys([{ frame:0, value: cam.getTarget().clone() }, { frame:14, value: center.clone() }]);
+    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT); anim.setEasingFunction(ease);
+    scene.beginDirectAnimation(cam, [anim], 0, 14, false, 1);
+  };
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
   // Speed slider (bottom-left) → scales the wiggle AND all camera movement (rotate/pan/zoom).
@@ -3899,6 +3911,7 @@ async function run(){
     etcHl.setEnabled(false); etcHlMask.setEnabled(false);        // drop any white hover twin on the picked one
     const g = etcGroups[gi]; gEtcSelR = g.r;                     // remember its radius → the sight tube uses it
     orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
+    focusCameraOn(orbitCenter);                                 // one-shot swivel to centre the picked cofactor
     modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
     modelLabel._w = new BABYLON.Vector3(g.cx, g.cy, g.cz);
   };
@@ -4520,9 +4533,7 @@ async function run(){
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
-    // The continuous-follow observer (see below) swivels the camera to centre this atom and then keeps
-    // it centred — no one-shot animation needed. Swivelling in place preserves the camera position, so
-    // the atom keeps its on-screen size (no dolly).
+    focusCameraOn(a.center);   // one-shot swivel to centre the picked atom
   };
   // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
   // Double-click → select the nearest complex for moving (gizmo + live coord label).
