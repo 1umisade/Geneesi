@@ -717,10 +717,13 @@ precision highp float;
 attribute vec3 position;                       // ±1 quad corner
 attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
 attribute float dr;                            // this atom's tube radius in WORLD units, Ångström (0 = its type is toggled off)
+attribute float modelId;                       // which loaded model this cofactor atom belongs to
 uniform mat4 view; uniform mat4 projection;
+uniform mat4 modelXform[24];                   // per-model transform so the cone follows a moved molecule
 varying vec2 vq; varying float vz;
 void main(void){
   vec3 center = vec3(world3.x, world3.y, world3.z);   // instance translation = atom centre
+  center = (modelXform[int(modelId + 0.5)] * vec4(center, 1.0)).xyz;   // follow the model drag/rotate
   vec4 cv = view * vec4(center, 1.0);
   vz = cv.z;                                          // view-space depth (larger = farther)
   vq = position.xy;
@@ -751,12 +754,15 @@ precision highp float;
 attribute vec3 position;
 attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
 attribute float dr;                            // this atom's vdW radius in world units
+attribute float modelId;                       // which loaded model this cofactor atom belongs to
 uniform mat4 view; uniform mat4 projection;
+uniform mat4 modelXform[24];                   // per-model transform so the silhouette follows a moved molecule
 uniform float boilQuad;                        // quad expansion so the boil bulge is not clipped
 uniform float uT; uniform float boil;
 varying vec2 vq; varying vec3 vWC;
 void main(void){
   vec3 base = vec3(world3.x, world3.y, world3.z);
+  base = (modelXform[int(modelId + 0.5)] * vec4(base, 1.0)).xyz;   // follow the model drag/rotate
   vWC = base;                                   // raw centre → the boil warp's world-locked field (matches the imp shader)
   // SAME per-atom MOTION as the vdW sphere shader: always-on thermal shake + stepped boil drift, so the
   // mask disc rides WITH each wobbling atom (this is what the outline was missing).
@@ -1943,9 +1949,10 @@ async function run(){
   cam.attachControl(canvas, true);
   cam.fov = 0.8; cam.minZ = 0.15; cam.inertia = 0.85; cam.panningSensibility = 20;   // minZ up from 0.02 → far better depth precision (kills z-fighting stripes)
   cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
-  // ONLY the MIDDLE button drives Babylon's camera input (rotation). Left and right are handled by
-  // our own grab-pan below and are deliberately NOT in this list, so dragging them can never rotate.
-  cam.inputs.attached.pointers.buttons = [1];
+  // We drive ALL camera motion ourselves (see the pointer handler): MIDDLE-drag rotates, LEFT-drag moves
+  // the molecule under the cursor (or pans empty background), RIGHT-drag pans, wheel zooms. Babylon's own
+  // pointer rotation is disabled (empty button list) so it never fights our handlers.
+  cam.inputs.attached.pointers.buttons = [];
   canvas.addEventListener('mousedown', e => { if(e.button === 1) e.preventDefault(); });   // block middle-click autoscroll
   canvas.addEventListener('contextmenu', e => e.preventDefault());   // right-drag pans → suppress the context menu
   // Show the zoom tips while dragging; keep them 2 s after release (or after a tap).
@@ -1956,7 +1963,7 @@ async function run(){
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
   let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
   let dnX = 0, dnY = 0;   // drag-start pointer pos (for the tap-vs-drag test)
-  let panning = false, panDepth = 1, modelDrag = -1;   // right-drag grab-pan state + which complex a left-drag is moving
+  let panning = false, panDepth = 1, modelDrag = -1, modelDragDepth = 1, rotating = false;   // pan state · which molecule a left-drag is moving (+its depth) · middle-drag rotate
   /* Grab-pan: translate the pivot so the world point under the cursor stays glued to it. Moving the
      ArcRotateCamera target shifts the whole camera (position follows), and one screen pixel maps to a
      fixed world distance at a given depth — so scaling the pixel delta by the world-per-pixel at the
@@ -1994,9 +2001,23 @@ async function run(){
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
       showTips();
       scene.stopAnimation(cam);   // any interaction cancels the one-shot focus swivel → it never fights a drag
+      if(e.button === 1){   // MIDDLE = rotate the camera. Driven manually (inertial offsets) so it works in
+        rotating = true; dragging = true;                          // every browser, independent of Babylon's button filtering.
+        cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
+        canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing";
+        return;
+      }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;   // remember the down point for the tap-vs-drag test
-        if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } } }   // grab a spawned atom → drag it instead of panning
-      if(e.button === 2 || e.button === 0){   // LEFT or RIGHT = grab-pan (rotation is on the MIDDLE button). Anchor the
+        if(!spawnEl){
+          const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; }   // grab a spawned atom → drag it
+          const mid = pickModelAtCursor();   // LEFT on a molecule → move THAT molecule in the camera plane
+          if(mid >= 0){ modelDrag = mid; snapshotModel(mid); dragging = true;
+            const mi = mInfo[mid];
+            modelDragDepth = (isFinite(_modelPickT) && _modelPickT > 0.5) ? _modelPickT
+              : BABYLON.Vector3.Distance(cam.position, new BABYLON.Vector3(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]));
+            canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing"; return; }
+        } }
+      if(e.button === 2 || e.button === 0){   // RIGHT — or LEFT on empty background — grab-pans the view. Anchor the
         panning = true; dragging = true;                                // depth to the EXACT point under the cursor so it stays glued there while panning.
         canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing";   // custom grab cursor while panning
         scene.stopAnimation(cam);   // a focus animation (from selecting an atom) would otherwise keep resetting the target → pan looked dead
@@ -2010,8 +2031,10 @@ async function run(){
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
       canvas.style.cursor = '';   // revert to the default (CSS) cursor after pan/zoom
+      if(e.button === 1){ rotating = false; return; }   // middle-drag rotate ends (inertia carries on)
       if(e.button === 2){ panning = false; return; }
-      if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = [1]; return; }   // finished moving a spawned atom
+      if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = []; return; }   // finished moving a spawned atom
+      if(modelDrag >= 0){ modelDrag = -1; return; }   // finished moving a molecule
       if(e.button === 0){
         panning = false;   // left-drag grab-pan ends
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
@@ -2021,12 +2044,27 @@ async function run(){
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
-      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // left- or right-drag grab-pan
+      if(rotating){   // MIDDLE-drag → orbit. Mirror Babylon's own inertial rotation, but on our button.
+        cam.inertialAlphaOffset -= (e.movementX || 0) / cam.angularSensibilityX;
+        cam.inertialBetaOffset  -= (e.movementY || 0) / cam.angularSensibilityY;
+        showTips(); return;
+      }
+      if(modelDrag >= 0){   // LEFT-drag → slide the grabbed molecule in the camera plane (world X/Y as seen)
+        const wpp = worldPerPixelAt(modelDragDepth);
+        const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
+        const dx = (e.movementX || 0) * wpp, dy = -(e.movementY || 0) * wpp;
+        gModelOff[modelDrag*3]   += right.x*dx + up.x*dy;
+        gModelOff[modelDrag*3+1] += right.y*dx + up.y*dy;
+        gModelOff[modelDrag*3+2] += right.z*dx + up.z*dy;
+        rebuildModelXform(modelDrag);
+        if(gSelModel === modelDrag){ const mi=mInfo[modelDrag];   // keep a selected model's gizmo node + label in sync
+          modelNode.position.set(mi.cx+gModelOff[modelDrag*3], mi.cy+gModelOff[modelDrag*3+1], mi.cz+gModelOff[modelDrag*3+2]); refreshModelLabel(); }
+        showTips(); return;
+      }
+      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // left(empty)- or right-drag grab-pan
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
-      // Middle-drag = rotate (handled by Babylon's ArcRotateCamera pointer input, buttons=[1]). Zoom is on the wheel.
-      // (No mid-drag re-pivot: calling cam.setTarget() during a drag fights ArcRotateCamera's rotation
-      //  input and kills dragging. Selecting already centres the pivot on the object via focusCameraOn,
-      //  so orbiting stays with no per-move setTarget. See the CLAUDE.md note.)
+      // Zoom is on the wheel. (No mid-drag re-pivot: calling cam.setTarget() during a drag fights the
+      //  rotation and kills dragging — see the CLAUDE.md note. Our rotation uses inertial offsets, not setTarget.)
     }
   });
 
@@ -2719,14 +2757,15 @@ async function run(){
       cofCam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofDepthRT.activeCamera = cofCam;
       const cofdMat = new BABYLON.ShaderMaterial('cofdMat', scene, 'cofd', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','tipRatio','baseRatio','coneReach'] });
+        attributes:['position','dr','modelId','world0','world1','world2','world3'], uniforms:['view','projection','tipRatio','baseRatio','coneReach','modelXform'] });
       cofdMat.backFaceCulling = false;
       cofdMat.onBindObservable.add(()=>{ const eff=cofdMat.getEffect(); if(!eff)return;
-        eff.setFloat('tipRatio', gConeTip); eff.setFloat('baseRatio', gConeBase); eff.setFloat('coneReach', gConeReach); });   // dev sliders: cone width at the atom / at the camera / reach behind
+        eff.setFloat('tipRatio', gConeTip); eff.setFloat('baseRatio', gConeBase); eff.setFloat('coneReach', gConeReach); eff.setMatrices('modelXform', gModelXform); });   // dev sliders: cone width at the atom / at the camera / reach behind · modelXform → follow a moved molecule
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
       const WORLD_TUBE_R = 14.0, NA = etcT.length;                      // per-ATOM tube radius in Ångström → a FIXED molecular channel width at every zoom, wide enough that the whole line of sight in front of a cofactor clears
       disc.thinInstanceSetBuffer('matrix', new Float32Array(etcM), 16, true);   // one disc per cofactor ATOM (reuse the overlay's atom matrices)
+      disc.thinInstanceSetBuffer('modelId', mdlBuf(etcM), 1, true);             // per-atom model index → the cone follows a dragged molecule
       gCofDR = new Float32Array(NA);
       for(let i=0;i<NA;i++) if(etcTypeOn[etcT[i]] === undefined) etcTypeOn[etcT[i]] = true;   // every cofactor type defaults to line-of-sight ON
       refreshCofDiscs = () => {   // per-atom tube radius (Å); 0 = that atom's type is toggled off
@@ -2754,16 +2793,17 @@ async function run(){
       mcam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofMaskRT.activeCamera = mcam;
       const maskMat = new BABYLON.ShaderMaterial('cofMaskMat', scene, 'cofmask', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','boilQuad','boil','uT','camRight','camUp'] });
+        attributes:['position','dr','modelId','world0','world1','world2','world3'], uniforms:['view','projection','boilQuad','boil','uT','camRight','camUp','modelXform'] });
       maskMat.backFaceCulling = false;
       maskMat.setFloat('boilQuad', 1.28);
       maskMat.onBindObservable.add(()=>{ const eff=maskMat.getEffect(); if(!eff)return;
-        eff.setFloat('boil', gBoil); eff.setFloat('uT', gWaveT);
+        eff.setFloat('boil', gBoil); eff.setFloat('uT', gWaveT); eff.setMatrices('modelXform', gModelXform);   // modelXform → the silhouette follows a moved molecule
         eff.setVector3('camRight', cam.getDirection(BABYLON.Axis.X)); eff.setVector3('camUp', cam.getDirection(BABYLON.Axis.Y)); });
       const maskMesh = BABYLON.MeshBuilder.CreatePlane('cofMaskMesh',{size:2},scene);
       maskMesh.material=maskMat; maskMesh.isPickable=false; maskMesh.alwaysSelectAsActiveMesh=true; maskMesh.layerMask=0x10000000;
       maskMesh.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);       // reuse the cofactor atom matrices
       maskMesh.thinInstanceSetBuffer('dr', new Float32Array(etcR),1,true);            // per-atom vdW radius → the sphere's screen silhouette
+      maskMesh.thinInstanceSetBuffer('modelId', mdlBuf(etcM),1,true);                 // per-atom model index → the silhouette follows a dragged molecule
       maskMesh.setEnabled(gEtc);
       cofMaskRT.renderList = [maskMesh];
       scene.customRenderTargets.push(cofMaskRT);
@@ -4900,10 +4940,11 @@ async function run(){
       const now = performance.now();
       if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
       hoverT = now;
-      if(wholeInView()){ macroHover(); hl.setEnabled(false); return; }   // zoomed out → hover the whole protein (white box), not atoms
+      if(wholeInView()){ macroHover(); hl.setEnabled(false); canvas.style.cursor = gMacroHover ? 'grab' : ''; return; }   // zoomed out → hover the whole protein (white box), not atoms
       if(gMacroHover){ gMacroHover=false; if(!gMacroSel) setOutline(false); }
       const a = pickAtom();
-      if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){   // CLOSE → hover the ATOM (same tier as selecting)
+      const overAtom = !!a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0;
+      if(overAtom){   // CLOSE → hover the ATOM (same tier as selecting)
         // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
         if(BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a); else hl.setEnabled(false);
         gHoverGroup = -1;                                                  // not hovering a whole cofactor
@@ -4912,6 +4953,8 @@ async function run(){
         const gi = pickEtcGroup();
         gHoverGroup = gi >= 0 ? gi : -1;                                  // brighten the hovered cofactor group (no outline)
       }
+      // Cursor feedback: a grab hand over anything interactive (an atom, a cofactor, or a draggable molecule).
+      canvas.style.cursor = (overAtom || gHoverGroup >= 0 || pickModelAtCursor() >= 0) ? 'grab' : '';
     }
   });
 
