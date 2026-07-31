@@ -733,19 +733,31 @@ attribute vec3 position;
 attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
 attribute float dr;                            // this atom's vdW radius in world units
 uniform mat4 view; uniform mat4 projection;
-varying vec2 vq;
+uniform float boilQuad;                        // quad expansion so the boil bulge is not clipped
+varying vec2 vq; varying vec3 vWC;
 void main(void){
   vec3 center = vec3(world3.x, world3.y, world3.z);
+  vWC = center;
   vec4 cv = view * vec4(center, 1.0);
   vq = position.xy;
-  cv.xy += vq * dr;
+  cv.xy += vq * dr * boilQuad;                  // bigger quad → the wobbled edge stays inside it
   gl_Position = projection * cv;
 }`;
 BABYLON.Effect.ShadersStore['cofmaskFragmentShader'] = `
 precision highp float;
-varying vec2 vq;
+varying vec2 vq; varying vec3 vWC;
+uniform float boilQuad, boil, uT;
+uniform vec3 camRight, camUp;                  // main-camera world axes → matches the imp shader's boil warp
 void main(void){
-  if(dot(vq, vq) > 1.0) discard;
+  vec2 uv = vq * boilQuad;                      // sphere-space coord (|uv| = 1 at the true silhouette)
+  float r2 = dot(uv, uv);
+  if(boil > 0.001){                             // SAME wobble as the vdW spheres, so the outline tracks it
+    vec3 nW = camRight * uv.x + camUp * uv.y;    // world direction of this edge point
+    float bt = floor(uT * 7.0);
+    float lump = sin(nW.x*5.5 + vWC.x*0.6 + bt) + sin(nW.y*5.5 + vWC.y*0.6 + bt*1.3) + sin(nW.z*5.5 + vWC.z*0.6 + bt*0.7);
+    r2 = max(0.0, r2 + boil*0.05*min(lump, 0.0));   // grow-only: the disc may bulge OUT (wavy outline) but never shrinks, so the union never opens interior gaps → no tangled inner lines
+  }
+  if(r2 > 1.0) discard;
   gl_FragColor = vec4(1.0);
 }`;
 
@@ -2611,7 +2623,7 @@ async function run(){
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
     etcMat.onBindObservable.add(()=>{ const eff=etcMat.getEffect(); if(!eff)return;
-      eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode)
+      eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode); boil so the cofactor spheres wobble like the protein
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
@@ -2685,7 +2697,7 @@ async function run(){
     // inks the OUTER edge of this filled coverage → one black outline per molecule, on top of everything.
     {
       const eng = scene.getEngine();
-      const rw = Math.max(2, Math.ceil(eng.getRenderWidth()*0.5)), rh = Math.max(2, Math.ceil(eng.getRenderHeight()*0.5));   // half-res is enough for an outline and keeps this cheap
+      const rw = Math.max(2, eng.getRenderWidth()), rh = Math.max(2, eng.getRenderHeight());   // full-res → a crisp outline that hugs the (boiling) silhouette
       cofMaskRT = new BABYLON.RenderTargetTexture('cofMask', {width:rw, height:rh}, scene, false, true,
         BABYLON.Constants.TEXTURETYPE_UNSIGNED_BYTE, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, true, false);
       cofMaskRT.clearColor = new BABYLON.Color4(0, 0, 0, 1);
@@ -2696,8 +2708,12 @@ async function run(){
       mcam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofMaskRT.activeCamera = mcam;
       const maskMat = new BABYLON.ShaderMaterial('cofMaskMat', scene, 'cofmask', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection'] });
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','boilQuad','boil','uT','camRight','camUp'] });
       maskMat.backFaceCulling = false;
+      maskMat.setFloat('boilQuad', 1.28);
+      maskMat.onBindObservable.add(()=>{ const eff=maskMat.getEffect(); if(!eff)return;
+        eff.setFloat('boil', gBoil); eff.setFloat('uT', gWaveT);
+        eff.setVector3('camRight', cam.getDirection(BABYLON.Axis.X)); eff.setVector3('camUp', cam.getDirection(BABYLON.Axis.Y)); });
       const maskMesh = BABYLON.MeshBuilder.CreatePlane('cofMaskMesh',{size:2},scene);
       maskMesh.material=maskMat; maskMesh.isPickable=false; maskMesh.alwaysSelectAsActiveMesh=true; maskMesh.layerMask=0x10000000;
       maskMesh.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);       // reuse the cofactor atom matrices
