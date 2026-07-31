@@ -680,8 +680,8 @@ void main(void){
     discard;                                                  // a HIDDEN cofactor-overlay atom: drop the enlarged overlay entirely — its ordinary cell copy draws the outline, so it follows the same rule as every other atom (no doubled/fat rings)
 #else
     float w = min(aa * 2.0, 0.4);                             // CONSTANT screen-space ring width (aa = d(r2)/pixel) → same thin pixel thickness on every atom, big or small
-    if(r2 < 1.0 - w) discard;                                 // everything inside the ring is simply GONE — no fill, no transparency (the cofactor/scene shows through the empty middle)
-    col = vec3(0.5); alpha = 1.0;                             // solid, OPAQUE, UNLIT grey — a flat grey circle that neither catches nor bends light
+    if(r2 < 1.0 - w) discard;                                 // everything inside the ring is simply GONE (the cofactor/scene shows through the empty middle)
+    col = vec3(0.5); alpha = 0.25;                            // flat UNLIT grey circle at 25% opacity (75% transparent) — no light, constant thin width
 #endif
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
