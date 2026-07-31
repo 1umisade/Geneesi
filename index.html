@@ -660,7 +660,7 @@ void main(void){
   // start it at 0.965 (width 0.035 ≈ 4× thinner) so the thin rim doesn't obscure the orbitals inside.
   float rimStart = mix(0.86, 0.965, (isShell > 0.5) ? reveal : 0.0);
 #ifdef ETCHL
-  if(hl) rimStart -= 0.16;                                    // → thicker vdW outline on the hovered / flashing cofactor
+  if(hl) rimStart -= (hlBright - 1.0) * 0.5;                  // → thicker vdW outline, scaled by the highlight brightness → steady on hover, PULSES with the select flash
 #endif
   float rim = smoothstep(rimStart - min(aa, 0.008), 1.0, r2);   // thin ink band like the orbital lobes, tiny aa only so revealed shells do not get a fat outline
   // Subtle electric-blue shimmer: a faint cool sheen that rides the sphere's grazing edge and drifts in time.
@@ -683,22 +683,25 @@ void main(void){
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
 
-/* Cofactor cut-away depth pass — each cofactor MOLECULE as a camera-facing disc; output = its
-   view-space centre depth. Nearest cofactor wins (normal depth test). The protein shader samples
-   this to decide which atoms to cut down to an outline. */
+/* Cofactor line-of-sight depth pass — every cofactor ATOM as a camera-facing disc of a FIXED PIXEL
+   radius; output = its view-space depth. Nearest cofactor atom wins (normal depth test). The protein
+   shader samples this: an atom in front of a cofactor here goes 75% transparent. A constant pixel
+   radius → the tube is the SAME size for every cofactor, near or far, big or small. */
 BABYLON.Effect.ShadersStore['cofdVertexShader'] = `
 precision highp float;
 attribute vec3 position;                       // ±1 quad corner
 attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
-attribute float dr;                            // this cofactor's tunnel radius (world units)
+attribute float dr;                            // this atom's tube radius in PIXELS (0 = its type is toggled off)
 uniform mat4 view; uniform mat4 projection;
+uniform vec2 pxToNdc;                          // pixels → NDC (2 / render size) so dr is a constant screen size
 varying vec2 vq; varying float vz;
 void main(void){
-  vec3 center = vec3(world3.x, world3.y, world3.z);   // instance translation = molecule centre
+  vec3 center = vec3(world3.x, world3.y, world3.z);   // instance translation = atom centre
   vec4 cv = view * vec4(center, 1.0);
-  vz = cv.z;                                          // view-space depth of the centre (larger = farther)
+  vz = cv.z;                                          // view-space depth (larger = farther)
   vq = position.xy;
-  gl_Position = projection * vec4(cv.xyz + vec3(vq * dr, 0.0), 1.0);   // billboard the disc in view space
+  vec4 cClip = projection * vec4(cv.xyz, 1.0);
+  gl_Position = cClip + vec4(vq * dr * pxToNdc * cClip.w, 0.0, 0.0);   // fixed PIXEL-size disc at the atom's screen position
 }`;
 BABYLON.Effect.ShadersStore['cofdFragmentShader'] = `
 precision highp float;
@@ -2608,18 +2611,17 @@ async function run(){
       cofCam.getProjectionMatrix = () => cam.getProjectionMatrix();
       cofDepthRT.activeCamera = cofCam;
       const cofdMat = new BABYLON.ShaderMaterial('cofdMat', scene, 'cofd', {
-        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection'] });
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection','pxToNdc'] });
       cofdMat.backFaceCulling = false;
+      cofdMat.setVector2('pxToNdc', new BABYLON.Vector2(2/rw, 2/rh));   // dr is measured in depth-buffer pixels
       const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
       disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
-      const NG = etcGroups.length, dm = new Float32Array(NG*16), dR = new Float32Array(NG);
-      for(let i=0;i<NG;i++){ const g=etcGroups[i], o=i*16;
-        dm[o]=1; dm[o+5]=1; dm[o+10]=1; dm[o+15]=1; dm[o+12]=g.cx; dm[o+13]=g.cy; dm[o+14]=g.cz; }
-      disc.thinInstanceSetBuffer('matrix', dm, 16, true);
-      gCofDR = dR;
-      for(const g of etcGroups) if(etcTypeOn[g.type] === undefined) etcTypeOn[g.type] = true;   // every cofactor type defaults to line-of-sight ON
-      refreshCofDiscs = () => {   // a disc of radius 0 covers nothing → that cofactor's line of sight is OFF
-        for(let i=0;i<NG;i++){ const g=etcGroups[i]; gCofDR[i] = etcTypeOn[g.type] ? g.r+5.0 : 0.0; }
+      const PX_TUBE = 8, NA = etcT.length;                             // per-ATOM tube radius (depth-buffer px) → same size for every cofactor, near or far
+      disc.thinInstanceSetBuffer('matrix', new Float32Array(etcM), 16, true);   // one disc per cofactor ATOM (reuse the overlay's atom matrices)
+      gCofDR = new Float32Array(NA);
+      for(let i=0;i<NA;i++) if(etcTypeOn[etcT[i]] === undefined) etcTypeOn[etcT[i]] = true;   // every cofactor type defaults to line-of-sight ON
+      refreshCofDiscs = () => {   // per-atom tube radius; 0 = that atom's type is toggled off
+        for(let i=0;i<NA;i++) gCofDR[i] = etcTypeOn[etcT[i]] ? PX_TUBE : 0.0;
         disc.thinInstanceSetBuffer('dr', gCofDR, 1, true);
       };
       refreshCofDiscs();
