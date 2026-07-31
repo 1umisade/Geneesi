@@ -485,6 +485,10 @@ varying float vMemAnc;   // this atom's LIPID anchor Z (identical across the who
 attribute float memAnc;
 #endif
 #endif
+#ifdef ETCHL
+attribute float groupId;   // per-cofactor-atom group index → the fragment brightens the hovered / flashing group
+varying float vGid;
+#endif
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 #ifdef MEMFADE
 // Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
@@ -533,6 +537,9 @@ void main(void){
   vColor = instanceColor.rgb;
   vFlag = instanceColor.a;
   vMid = -1.0;
+#ifdef ETCHL
+  vGid = groupId;
+#endif
 #ifdef MODELMOVE
   if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];
   vMid = modelId;
@@ -577,6 +584,11 @@ uniform float cofHideOn;      // 1 = cofactor see-through active
 #ifdef MEMFADE
 uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane fade away
 varying float vMemAnc;     // per-lipid anchor Z → the cut hides WHOLE lipids, never slices one in half
+#endif
+#ifdef ETCHL
+varying float vGid;        // this cofactor atom's group index
+uniform float hlGroup;     // the group to highlight (hover / flash), -1 = none
+uniform float hlBright;    // its brightness multiplier (1.0 = normal, 1.25 = hover, pulses on select)
 #endif
 uniform float selModel;    // index of the SELECTED complex (−1 = none) → its atoms get a sage rim
 uniform vec3 selCol;       // that rim's colour (sage)
@@ -660,6 +672,9 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
+#ifdef ETCHL
+  if(abs(vGid - hlGroup) < 0.5) col *= hlBright;   // hovered / flashing cofactor group → brighter (no outline)
+#endif
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
 }`;
@@ -2137,6 +2152,9 @@ async function run(){
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
+  // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
+  let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
+  const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
   // ── Cofactor line-of-sight see-through (screen-space) ─────────────────────
   // A depth pass renders every cofactor molecule as a disc into an off-screen buffer holding the nearest
   // cofactor's view-space depth per pixel. A protein atom whose centre is IN FRONT of a cofactor there
@@ -2523,9 +2541,9 @@ async function run(){
   // ON TOP of the whole scene. Follows the per-model gizmo + PSII transform like the normal spheres.
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
-      attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel'],
-      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+      attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright'],
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
@@ -2533,6 +2551,7 @@ async function run(){
       eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode)
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
+      eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
       eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
     etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
@@ -2549,15 +2568,17 @@ async function run(){
          within vdW contact. These groups are what a mid-range click selects, so you pick "this
          chlorophyll" rather than "this carbon". */
       const NA = etcT.length;
-      const gx=new Float32Array(NA), gy=new Float32Array(NA), gz=new Float32Array(NA);
+      const gx=new Float32Array(NA), gy=new Float32Array(NA), gz=new Float32Array(NA), gid=new Float32Array(NA);
       for(let i=0;i<NA;i++){ gx[i]=etcM[i*16+12]; gy[i]=etcM[i*16+13]; gz[i]=etcM[i*16+14]; }
       const byRes = new Map();
       for(let i=0;i<NA;i++){
         let gi = byRes.get(etcS[i]);
         if(gi === undefined){ gi = etcGroups.length; byRes.set(etcS[i], gi);
           etcGroups.push({ cx:0, cy:0, cz:0, r:0, n:0, type:etcT[i], atoms:[] }); }
+        gid[i] = gi;
         const g = etcGroups[gi]; g.atoms.push(i); g.cx+=gx[i]; g.cy+=gy[i]; g.cz+=gz[i]; g.n++;
       }
+      etcOverlay.thinInstanceSetBuffer('groupId', gid, 1, true);   // per-atom cofactor-group index → the shader brightens the hovered / flashing group
       for(const g of etcGroups){ g.cx/=g.n; g.cy/=g.n; g.cz/=g.n; let r2=0;
         for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
         g.r = Math.sqrt(r2) + 2.0; }
@@ -3831,33 +3852,12 @@ async function run(){
     m.setColor3('oc', col); m.alpha = 0.999; m.backFaceCulling = true; m.disableDepthWrite = true;   // depth-TEST against the mask, never write
     m.onBindObservable.add(()=>{ const eff=m.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
     return m; };
-  const flatMatSel = mkFlat('flatSel', new BABYLON.Color3(0.11,0.48,0.16));   // cofactor SELECTION outline = clear green
-  const flatMatHl  = mkFlat('flatHl',  new BABYLON.Color3(1,1,1));            // cofactor HOVER outline = white
-  const mkEtcMask = nm => { const m = BABYLON.MeshBuilder.CreateSphere(nm,{diameter:1,segments:12},scene);
-    m.material = maskMol; m.isPickable=false; m.setEnabled(false); m.renderingGroupId=3; m.alphaIndex=0; m.alwaysSelectAsActiveMesh=true; return m; };
-  const mkEtcOut = (nm, mat) => { const m = BABYLON.MeshBuilder.CreateSphere(nm,{diameter:1,segments:12,sideOrientation:BABYLON.Mesh.BACKSIDE},scene);
-    m.material = mat; m.isPickable=false; m.setEnabled(false); m.renderingGroupId=3; m.alphaIndex=1; m.alwaysSelectAsActiveMesh=true; return m; };
-  const etcSelMask = mkEtcMask('etcSelMask'), etcHlMask = mkEtcMask('etcHlMask');
-  const etcSelOut  = mkEtcOut('etcSelOut', flatMatSel), etcHl = mkEtcOut('etcHl', flatMatHl);
   const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
-  // Fill the enlarged outline shell `mesh` (radius ×1.22) and its atom-size depth `mask` for cofactor `gi`.
-  const fillEtcOutline = (mesh, mask, gi) => {
-    if(gi < 0 || !etcGroupPos){ mesh.setEnabled(false); mask.setEnabled(false); return false; }
-    const g = etcGroups[gi], {gx,gy,gz} = etcGroupPos, n = Math.min(g.atoms.length, 400);
-    const mBuf = new Float32Array(n*16), oBuf = new Float32Array(n*16);
-    for(let i=0;i<n;i++){ const a=g.atoms[i], o=i*16, x=gx[a], y=gy[a], z=gz[a], r=(etcR[a]||1.6), R=r*1.22;
-      mBuf[o]=r; mBuf[o+5]=r; mBuf[o+10]=r; mBuf[o+15]=1; mBuf[o+12]=x; mBuf[o+13]=y; mBuf[o+14]=z;
-      oBuf[o]=R; oBuf[o+5]=R; oBuf[o+10]=R; oBuf[o+15]=1; oBuf[o+12]=x; oBuf[o+13]=y; oBuf[o+14]=z; }
-    mask.thinInstanceSetBuffer('matrix', mBuf, 16, true); mask.thinInstanceCount = n; mask.setEnabled(true);
-    mesh.thinInstanceSetBuffer('matrix', oBuf, 16, true); mesh.thinInstanceCount = n; mesh.setEnabled(true);
-    return true;
-  };
   const showEtcSel = gi => {
     etcSel = gi;
-    etcSelOut.setEnabled(false); etcSelMask.setEnabled(false);   // no green selection outline — the cut-away tunnel reveals the pick instead
     if(gi < 0 || !etcGroupPos){ modelLabel.style.display='none'; return; }
-    etcHl.setEnabled(false); etcHlMask.setEnabled(false);        // drop any white hover twin on the picked one
     const g = etcGroups[gi];
+    gFlashGroup = gi; gFlashT0 = performance.now();            // flash the picked cofactor bright a few times, then back to normal
     orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
     focusCameraOn(orbitCenter);                                 // one-shot swivel to centre the picked cofactor
     modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
@@ -4507,6 +4507,13 @@ async function run(){
     const _eng = scene.getEngine();
     gCofTexel.set(1/_eng.getRenderWidth(), 1/_eng.getRenderHeight());   // align depth-buffer sampling (also survives resize)
     if(gCofDisc) gCofDisc.setEnabled(gRevealOn > 0.5);                  // only run the depth pass while active
+    // Cofactor highlight: a select FLASH (bright pulses that settle back), else the HOVER (steady 25% brighter).
+    if(gFlashGroup >= 0){
+      const el = (performance.now() - gFlashT0) / 1000;
+      if(el < FLASH_DUR){ gHlGroup = gFlashGroup; gHlBright = 1.0 + 0.6 * Math.abs(Math.sin(el / FLASH_DUR * Math.PI * FLASH_PULSES)); }
+      else gFlashGroup = -1;
+    }
+    if(gFlashGroup < 0){ gHlGroup = gHoverGroup; gHlBright = gHoverGroup >= 0 ? 1.25 : 1.0; }
   });
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
@@ -4520,12 +4527,11 @@ async function run(){
       if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){   // CLOSE → hover the ATOM (same tier as selecting)
         // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
         if(BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a); else hl.setEnabled(false);
-        etcHl.setEnabled(false); etcHlMask.setEnabled(false);
-      } else {                                                            // FAR → hover the whole MOLECULE (cofactor), not an atom
+        gHoverGroup = -1;                                                  // not hovering a whole cofactor
+      } else {                                                            // FAR → hover the whole MOLECULE (cofactor) → it renders 25% brighter
         hl.setEnabled(false);
         const gi = pickEtcGroup();
-        if(gi >= 0 && gi !== etcSel) fillEtcOutline(etcHl, etcHlMask, gi);   // white outline of the cofactor (skip the already-green-selected one)
-        else { etcHl.setEnabled(false); etcHlMask.setEnabled(false); }
+        gHoverGroup = gi >= 0 ? gi : -1;                                  // brighten the hovered cofactor group (no outline)
       }
     }
   });
