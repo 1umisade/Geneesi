@@ -574,6 +574,16 @@ uniform float revealKeep;  // opacity of a sight-line atom (glassy)
 uniform int revealCount;   // number of active nearby cofactor centres
 uniform vec3 revealCentersV[12];  // nearby cofactor centres in VIEW space (camera at origin)
 uniform float revealRadius;// radius of each sight cylinder
+#ifdef COFHIDE
+uniform sampler2D cofDepth;   // nearest cofactor's view-space depth per screen pixel (1e9 = none here)
+uniform vec2 cofTexel;        // 1 / render size → gl_FragCoord to [0,1]
+uniform float cofHideOn;      // 1 = cut-away active
+#endif
+#ifdef SELTUNNEL
+uniform vec3 selTunnelV;      // SELECTED cofactor centre in view space — its tube cuts even other cofactors
+uniform float selTunnelOn;
+uniform float selTunnelR;
+#endif
 #ifdef MEMFADE
 uniform vec3 memCut;       // [cutZ, cutSign, strength] → membrane lipids in front of the plane fade away
 varying float vMemAnc;     // per-lipid anchor Z → the cut hides WHOLE lipids, never slices one in half
@@ -622,13 +632,19 @@ void main(void){
   float rimGlass = mix(shellMin, 0.72, smoothstep(0.34, 1.0, r2));   // revealed shell = a glass bubble, near-clear centre and a visible rim, so the orbitals inside stand out
   alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
-  float ghost = 0.0;                                          // 1 = this atom sits in a sight tube to a cofactor → draw it as a white cut-away ghost (colour stripped, ink outline kept)
-  if(revealOn > 0.5){
-    for(int i = 0; i < 12; i++){ if(i >= revealCount) break;
-      vec3 L = revealCentersV[i]; float tt = dot(vCenterV, L) / max(dot(L, L), 1e-4);
-      if(tt < 0.94 && length(vCenterV - tt * L) < revealRadius){ ghost = 1.0; break; }
-    }
+  float hide = 0.0;                                           // 1 = a cofactor sits behind this atom → cut its body away, keep only the outline
+#ifdef COFHIDE
+  if(cofHideOn > 0.5){
+    float cd = texture2D(cofDepth, gl_FragCoord.xy * cofTexel).r;   // nearest cofactor view-depth here (1e9 = none)
+    if(cd < 1.0e8 && vCenterV.z < cd - 0.6) hide = 1.0;            // atom centre is IN FRONT of that cofactor → cut away
   }
+#endif
+#ifdef SELTUNNEL
+  if(selTunnelOn > 0.5){                                            // selected cofactor's sight tube cuts EVERYTHING in front (incl. other cofactors)
+    float tt = dot(vCenterV, selTunnelV) / max(dot(selTunnelV, selTunnelV), 1e-4);
+    if(tt < 0.94 && length(vCenterV - tt * selTunnelV) < selTunnelR) hide = 1.0;
+  }
+#endif
   if(alpha < 0.004) discard;                                  // fully transparent → skip (also keeps depth clean)
   if(depthBias > 0.0 && distance(vWCen, selCenter) < 0.35) discard;   // selected atom → its spinning highlight nucleus draws instead
   posV.z -= depthBias;                                        // bias the nucleus toward the camera (−z, left-handed) so it beats its OWN orbitals (but not atoms clearly in front)
@@ -657,12 +673,38 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
-  if(ghost > 0.5){                                            // cut-away: blank the body to white, keep a strong ink outline that draws OVER the cofactor behind
-    col = mix(vec3(1.0), vec3(0.10), rim);                    // white interior → dark rim band
-    alpha *= mix(0.30, 0.94, rim);                            // interior see-through (cofactor shows), outline near-opaque
+  if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a black 50%-transparent outline ring is left
+    float band = smoothstep(0.55, 0.9, r2);                  // a wide outline ring so the cut protein still reads as a wireframe
+    if(band < 0.02) discard;                                  // ring interior → gone (writes no depth, so the cofactor/scene behind shows through)
+    col = vec3(0.0); alpha = band * 0.5;                     // pure-black outline at 50% opacity
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
+}`;
+
+/* Cofactor cut-away depth pass — each cofactor MOLECULE as a camera-facing disc; output = its
+   view-space centre depth. Nearest cofactor wins (normal depth test). The protein shader samples
+   this to decide which atoms to cut down to an outline. */
+BABYLON.Effect.ShadersStore['cofdVertexShader'] = `
+precision highp float;
+attribute vec3 position;                       // ±1 quad corner
+attribute vec4 world0; attribute vec4 world1; attribute vec4 world2; attribute vec4 world3;
+attribute float dr;                            // this cofactor's tunnel radius (world units)
+uniform mat4 view; uniform mat4 projection;
+varying vec2 vq; varying float vz;
+void main(void){
+  vec3 center = vec3(world3.x, world3.y, world3.z);   // instance translation = molecule centre
+  vec4 cv = view * vec4(center, 1.0);
+  vz = cv.z;                                          // view-space depth of the centre (larger = farther)
+  vq = position.xy;
+  gl_Position = projection * vec4(cv.xyz + vec3(vq * dr, 0.0), 1.0);   // billboard the disc in view space
+}`;
+BABYLON.Effect.ShadersStore['cofdFragmentShader'] = `
+precision highp float;
+varying vec2 vq; varying float vz;
+void main(void){
+  if(dot(vq, vq) > 1.0) discard;                // circular tunnel cross-section
+  gl_FragColor = vec4(vz, 0.0, 0.0, 1.0);
 }`;
 
 /* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
@@ -2137,6 +2179,18 @@ async function run(){
   const _revD = new Float32Array(REVEAL_MAX), _revI = new Int32Array(REVEAL_MAX), _revTmp = new BABYLON.Vector3();
   const REVEAL_KEEP = 0.65;   // opacity of a sight-line atom → 65% opaque (35% transparent)
   const bindReveal = eff => { eff.setFloat('revealOn', gRevealOn); eff.setFloat('revealKeep', REVEAL_KEEP); eff.setArray3('revealCentersV', gRevealCentersV); eff.setInt('revealCount', gRevealCount); eff.setFloat('revealRadius', gRevealRadius); };
+  // ── Cofactor cut-away (screen-space) ──────────────────────────────────────
+  // Every cofactor's tunnel at once: a depth pass renders all ~500 cofactor molecules as discs into an
+  // off-screen buffer holding the nearest cofactor's view-space depth per pixel. A protein atom whose
+  // centre is IN FRONT of a cofactor here has its body cut away (only its black 50% outline remains).
+  let cofDepthRT = null, gCofDisc = null;                     // the depth target + the disc mesh that fills it
+  const gCofTexel = new BABYLON.Vector2(1/1280, 1/720);       // 1 / render size → maps gl_FragCoord to [0,1] (refreshed per frame)
+  let gSelTunnelOn = 0, gSelTunnelR = 8.0;                    // a SELECTED cofactor also cuts OTHER cofactors in its sight tube so the pick shows
+  const gSelTunnelV = new BABYLON.Vector3(1e9,1e9,1e9);       // its centre in view space
+  const bindCof = (eff, hasCof) => {                          // cut-away binds: hasCof=true for protein atoms (sample the depth buffer), false for cofactors (selected-tunnel only)
+    if(hasCof){ eff.setFloat('cofHideOn', gRevealOn); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT); eff.setVector2('cofTexel', gCofTexel); }
+    eff.setFloat('selTunnelOn', gSelTunnelOn); eff.setVector3('selTunnelV', gSelTunnelV); eff.setFloat('selTunnelR', gSelTunnelR);
+  };
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gGfxMode = 0;           // graphics mode: 0 = vdW spheres · 1 = vdW + orbitals revealed for near atoms
   const GFX_MODES = [
@@ -2486,8 +2540,9 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','revealOn','revealKeep','revealCentersV','revealRadius','revealCount','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
-    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','revealOn','revealKeep','revealCentersV','revealRadius','revealCount','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','selTunnelOn','selTunnelV','selTunnelR'],
+    samplers:['cofDepth'],
+    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define SELTUNNEL'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
   vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false; realAlpha(vdwMat);
@@ -2495,18 +2550,19 @@ async function run(){
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
-    bindReveal(eff); });
+    bindReveal(eff); bindCof(eff, true); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','revealOn','revealKeep','revealCentersV','revealRadius','revealCount','memCut','selModel'],
-    defines:['#define IMPRAD','#define MEMFADE'] });   // MEMFADE = membrane cross-cut fade
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','revealOn','revealKeep','revealCentersV','revealRadius','revealCount','memCut','selModel','cofHideOn','cofTexel','selTunnelOn','selTunnelV','selTunnelR'],
+    samplers:['cofDepth'],
+    defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define SELTUNNEL'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    bindReveal(eff); });
+    bindReveal(eff); bindCof(eff, true); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -2515,8 +2571,8 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel'],
-      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selTunnelOn','selTunnelV','selTunnelR'],
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define SELTUNNEL'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
@@ -2524,7 +2580,7 @@ async function run(){
       eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode)
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
-      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); bindCof(eff, false); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
     etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
     etcOverlay.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
@@ -2554,6 +2610,34 @@ async function run(){
         for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
         g.r = Math.sqrt(r2) + 2.0; }
       etcGroupPos = { gx, gy, gz };
+    }
+    // ── Cofactor cut-away depth pass ── render every cofactor molecule as a disc into an off-screen
+    // FLOAT buffer holding the nearest cofactor's view-space depth per pixel; the protein shader samples it.
+    {
+      const eng = scene.getEngine();
+      const rw = Math.max(2, Math.ceil(eng.getRenderWidth()*0.5)), rh = Math.max(2, Math.ceil(eng.getRenderHeight()*0.5));
+      cofDepthRT = new BABYLON.RenderTargetTexture('cofDepth', {width:rw, height:rh}, scene, false, true,
+        BABYLON.Constants.TEXTURETYPE_FLOAT, false, BABYLON.Texture.NEAREST_SAMPLINGMODE, true, false);
+      cofDepthRT.clearColor = new BABYLON.Color4(1e9, 0, 0, 1);            // sentinel: no cofactor here (very far)
+      const cofCam = new BABYLON.FreeCamera('cofCam', new BABYLON.Vector3(0,0,0), scene);
+      scene.removeCamera(cofCam);                                         // must not join the main render
+      cofCam.layerMask = 0x20000000;                                      // sees ONLY the disc mesh (own mask, excluded from the main camera)
+      cofCam.getViewMatrix = () => cam.getViewMatrix();                   // mirror the main camera exactly
+      cofCam.getProjectionMatrix = () => cam.getProjectionMatrix();
+      cofDepthRT.activeCamera = cofCam;
+      const cofdMat = new BABYLON.ShaderMaterial('cofdMat', scene, 'cofd', {
+        attributes:['position','dr','world0','world1','world2','world3'], uniforms:['view','projection'] });
+      cofdMat.backFaceCulling = false;
+      const disc = BABYLON.MeshBuilder.CreatePlane('cofDisc', {size:2}, scene);
+      disc.material = cofdMat; disc.isPickable = false; disc.alwaysSelectAsActiveMesh = true; disc.layerMask = 0x20000000;
+      const NG = etcGroups.length, dm = new Float32Array(NG*16), dR = new Float32Array(NG);
+      for(let i=0;i<NG;i++){ const g=etcGroups[i], o=i*16;
+        dm[o]=1; dm[o+5]=1; dm[o+10]=1; dm[o+15]=1; dm[o+12]=g.cx; dm[o+13]=g.cy; dm[o+14]=g.cz; dR[i]=g.r+3.0; }
+      disc.thinInstanceSetBuffer('matrix', dm, 16, true);
+      disc.thinInstanceSetBuffer('dr', dR, 1, true);
+      cofDepthRT.renderList = [disc];
+      scene.customRenderTargets.push(cofDepthRT);
+      gCofDisc = disc;
     }
   }
 
@@ -4471,7 +4555,14 @@ async function run(){
         BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(g.cx, g.cy, g.cz, vm, _revTmp);
         gRevealCentersV[i*3]=_revTmp.x; gRevealCentersV[i*3+1]=_revTmp.y; gRevealCentersV[i*3+2]=_revTmp.z; cnt++; }
       gRevealCount = cnt;
-    } else gRevealCount = 0;
+      if(etcSel >= 0 && etcGroups[etcSel]){ const g = etcGroups[etcSel];   // selected cofactor → its sight tube cuts other cofactors too
+        BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(g.cx, g.cy, g.cz, vm, _revTmp);
+        gSelTunnelV.copyFrom(_revTmp); gSelTunnelR = g.r + 5.0; gSelTunnelOn = 1;
+      } else gSelTunnelOn = 0;
+    } else { gRevealCount = 0; gSelTunnelOn = 0; }
+    const _eng = scene.getEngine();
+    gCofTexel.set(1/_eng.getRenderWidth(), 1/_eng.getRenderHeight());   // align depth-buffer sampling (also survives resize)
+    if(gCofDisc) gCofDisc.setEnabled(gRevealOn > 0.5);                  // only run the depth pass while the cut-away is on
   });
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
