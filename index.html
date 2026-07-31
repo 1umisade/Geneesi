@@ -673,10 +673,9 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
-  if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a black 50%-transparent outline ring is left
-    float band = smoothstep(0.55, 0.9, r2);                  // a wide outline ring so the cut protein still reads as a wireframe
-    if(band < 0.02) discard;                                  // ring interior → gone (writes no depth, so the cofactor/scene behind shows through)
-    col = vec3(0.0); alpha = band * 0.5;                     // pure-black outline at 50% opacity
+  if(hide > 0.5){                                             // cut-away: body vanishes entirely, only a thin black 50%-transparent outline is left
+    if(rim < 0.02) discard;                                   // body → gone (writes no depth, so the cofactor/scene behind shows through)
+    col = vec3(0.0); alpha = rim * 0.5;                       // same thin ink band as the surrounding atoms, but pure black at 50% opacity
   }
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, col, fog), alpha);
@@ -2587,8 +2586,7 @@ async function run(){
     etcOverlay.thinInstanceSetBuffer('instanceColor', new Float32Array(etcC),4,true);
     etcOverlay.thinInstanceSetBuffer('instR', new Float32Array(etcR),1,true);
     etcOverlay.thinInstanceSetBuffer('modelId', mdlBuf(etcM),1,true);
-    etcOverlay.renderingGroupId = 3;                               // last group…
-    scene.setRenderingAutoClearDepthStencil(3, true, true, true);   // …with its depth cleared first → always on top
+    etcOverlay.renderingGroupId = 1;                               // depth-tested WITH the protein, so cut-away outlines (atoms that really are in front) draw OVER the cofactor while it still shows through the cut holes (group 3, cleared depth, stays reserved for selection outlines)
     etcOverlay.setEnabled(gEtc);
     {
       /* Group the cofactor atoms into whole MOLECULES (one chlorophyll, one heme, one Tyr Z …).
