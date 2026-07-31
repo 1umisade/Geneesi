@@ -750,6 +750,8 @@ uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) o
 uniform float focusId; // negative shows all, bonds/lone pairs are the hybrid/valence group (id 99)
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 uniform float drawElec; // 1 = draw electrons inline (chlorophyll), 0 = electrons come from the additive bondE pass
+uniform float revealOn;     // cofactor cutaway: see through bonding lobes in the sight-line to the cofactor
+uniform float revealKeep; uniform vec3 revealCenterV; uniform float revealRadius;
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
@@ -831,6 +833,13 @@ void main(void){
 #endif
   alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the bubble
   if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
+  if(revealOn > 0.5){                                          // cofactor cutaway: screen-door bonding lobes in the sight tube
+    vec3 Lr = revealCenterV; float tt = dot(vViewPos, Lr) / max(dot(Lr, Lr), 1e-4);
+    if(tt < 0.94 && length(vViewPos - tt * Lr) < revealRadius){
+      float dd = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+      if(dd > revealKeep) discard;
+    }
+  }
   if(alpha < 0.004) discard;
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
@@ -992,6 +1001,10 @@ uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) o
 uniform float focusId; // negative shows all, otherwise the selected atom's other subshells go 50% transparent
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 uniform float drawElec; // 1 = draw electrons inline (chlorophyll / aromatic π), 0 = electrons come from the additive orbE pass
+uniform float revealOn;     // 1 = a cofactor is selected → see through the orbitals in the sight-line to it
+uniform float revealKeep;   // screen-door keep fraction inside the sight tube
+uniform vec3 revealCenterV; // cofactor centre in VIEW space
+uniform float revealRadius; // sight-tube radius
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
@@ -1073,6 +1086,13 @@ void main(void){
 #endif
   alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the camera sphere
   if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
+  if(revealOn > 0.5){                                          // cofactor cutaway: screen-door orbitals in the sight tube
+    vec3 Lr = revealCenterV; float tt = dot(vViewPos, Lr) / max(dot(Lr, Lr), 1e-4);
+    if(tt < 0.94 && length(vViewPos - tt * Lr) < revealRadius){
+      float dd = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+      if(dd > revealKeep) discard;
+    }
+  }
   if(alpha < 0.004) discard;
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
@@ -2112,6 +2132,7 @@ async function run(){
   let gRevealOn = 0, gRevealRadius = 1e9, gEtcSelR = 0;        // cofactor cutaway: screen-door the atoms in the sight-line to the selected cofactor
   const gRevealCenterV = new BABYLON.Vector3(1e6,1e6,1e6);     // its centre in view space (updated per frame)
   const REVEAL_KEEP = 0.16;   // keep 16% of a sight-line atom's pixels → mostly see-through toward the cofactor
+  const bindReveal = eff => { eff.setFloat('revealOn', gRevealOn); eff.setFloat('revealKeep', REVEAL_KEEP); eff.setVector3('revealCenterV', gRevealCenterV); eff.setFloat('revealRadius', gRevealRadius); };
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
   let gGfxMode = 0;           // graphics mode: 0 = vdW spheres · 1 = vdW + orbitals revealed for near atoms
   const GFX_MODES = [
@@ -2358,7 +2379,7 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','revealOn','revealKeep','revealCenterV','revealRadius','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1); realAlpha(orbMatG);   // always fully revealed; blended fades
@@ -2369,12 +2390,12 @@ async function run(){
     eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); bindReveal(eff);
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','revealOn','revealKeep','revealCenterV','revealRadius','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
       defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
@@ -2384,7 +2405,7 @@ async function run(){
       eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
-      eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+      eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); bindReveal(eff);
     });
     return realAlpha(mat);
   };
@@ -2639,10 +2660,10 @@ async function run(){
     for(let i=0;i<N*3;i++){ phase[i]=rnd(i+1)*6.283; freq[i]=1.0 + rnd((i+1)*2.7)*1.6; }
     const AMP = 0.16;   // Å of jiggle
     const mkMat = (nm, shader, attrs, extra) => {
-      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'].concat(extra||[]) });
+      const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs, uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','revealOn','revealKeep','revealCenterV','revealRadius'].concat(extra||[]) });
       mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // chlorophyll always shows full orbitals; inline electrons
       mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return;
-        eff.setFloat('uT', gWaveT);
+        eff.setFloat('uT', gWaveT); bindReveal(eff);
         eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return mat;
@@ -2889,13 +2910,13 @@ async function run(){
     const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
     const mkLipMat = (nm, shader, attrs, extra) => {
       const mat = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs,
-        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','memCut','selModel'].concat(extra||[]),
+        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','revealOn','revealKeep','revealCenterV','revealRadius','memCut','selModel'].concat(extra||[]),
         defines:['#define ELECGATE','#define MEMFADE'] });   // ELECGATE isolates elecR, MEMFADE = the cross-cut fade
       mat.setFloat('bubbleR',1e9); mat.setFloat('nElec',2); mat.setFloat('coneCos',-1.0);
       mat.setFloat('drawElec',1); mat.setFloat('elecR', NEAR_R); mat.backFaceCulling=true; mat.setFloat('selModel', -1);   // orbitals always, electrons only up close
       mat.onBindObservable.add(()=>{ const eff=mat.getEffect(); if(!eff) return;
         eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → membrane orbitals only inside the close forward cone
-        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
+        eff.setFloat('uT', gWaveT); eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); bindReveal(eff);
         eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd); });
       return realAlpha(mat);
     };
