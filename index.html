@@ -831,9 +831,7 @@ vec3 toFront(vec3 w, vec3 V, vec3 fb){
 void main(void){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);
-  float t = uT * 0.10;                              // slow drift — movement reduced a lot
-  vec3 e = toFront(wanderDir(t), V, vec3(1.0, 0.0, 0.0));
-  float d = clamp(dot(N, e), -1.0, 1.0);
+  float d = clamp(dot(N, V), -1.0, 1.0);            // glint sits at the point facing the camera DIRECTLY (no drift)
   float dp = max(d, 0.0);
   float glow = pow(dp, 5.0);                        // 3x wider than the normal pow(d, 44) electron spot
   float core = pow(dp, 24.0);
@@ -3832,8 +3830,7 @@ async function run(){
       const chlI = mols.indexOf(chlM);
       const mgRest = new BABYLON.Vector3(chlM.x[mgK]+chlM.ox, chlM.y[mgK]+chlM.oy, chlM.z[mgK]+chlM.oz);
       const eng = scene.getEngine();
-      let sMax = 1; for(const sh of econf(chlM.el[mgK])) if(sh[1] === 0) sMax = Math.max(sMax, sh[0]);   // n of Mg's biggest s shell (3s)
-      const orbR = sMax * SHELL_STEP;   // that orbital's radius — same scale as the rendered orbitals → the reflection sits ON it
+      const vdwR = info(chlM.el[mgK]).vr * FILL_SCALE;   // Mg's vdW-sphere radius → the reflection sits ON the vdW sphere
       const pqnI = pqnM ? mols.indexOf(pqnM) : -1;   // the quinone acceptor + its rest centroid (world = gModelXform * centroid)
       const pqnRest = (pqnI >= 0) ? new BABYLON.Vector3(mInfo[pqnI].cx, mInfo[pqnI].cy, mInfo[pqnI].cz) : null;
       const onTop = m => { m.onBeforeRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.ALWAYS));
@@ -3842,7 +3839,7 @@ async function run(){
       const eMat = new BABYLON.ShaderMaterial('mgElecMat', scene, 'bigelec', { attributes:['position','normal'], uniforms:['world','view','projection','uT'] });
       eMat.needAlphaBlending = () => true; eMat.disableDepthWrite = true; eMat.backFaceCulling = true;
       eMat.onBindObservable.add(() => { const eff=eMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
-      const elec = BABYLON.MeshBuilder.CreateSphere('mgElec', {segments:20, diameter: orbR*2.0}, scene);
+      const elec = BABYLON.MeshBuilder.CreateSphere('mgElec', {segments:20, diameter: vdwR*2.0}, scene);
       elec.material = eMat; elec.isPickable = false; elec.alwaysSelectAsActiveMesh = true; elec.renderingGroupId = 3;
       onTop(elec);
       // (2) a strong additive glow (radial-gradient billboard) so the electron reads from far away — its
@@ -3876,7 +3873,7 @@ async function run(){
         BABYLON.Vector3.LerpToRef(_pos, target, 0.22, _pos);   // ease toward home → the switch reads as a jump
         elec.position.copyFrom(_pos); glow.position.copyFrom(_pos);
         const camD = BABYLON.Vector3.Distance(cam.position, _pos);
-        const s = Math.max(orbR*2.4, camD*0.06) * (onQuinone ? 1.5 : 1.0);   // ~constant screen size + a brighter flare on the quinone
+        const s = Math.max(vdwR*2.4, camD*0.06) * (onQuinone ? 1.5 : 1.0);   // ~constant screen size + a brighter flare on the quinone
         glow.scaling.set(s, s, s);
       });
     }
