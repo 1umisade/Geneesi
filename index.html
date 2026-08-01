@@ -835,8 +835,8 @@ void main(void){
   float core = pow(d, 220.0);
   float bolt = max(elecBolt(N, V, vec3(0.0, 1.0, 0.0)), 0.0);
   float blue = clamp(glow*1.2 + bolt*1.1, 0.0, 1.0);
-  vec3 col = vec3(0.40, 0.70, 1.0) * blue + vec3(0.92, 0.98, 1.0) * core;   // brighter blue + a whiter core
-  float a = clamp(blue*1.5 + core, 0.0, 1.0);        // additive blend (set on the material) makes it glow MUCH brighter
+  vec3 col = vec3(0.08, 0.48, 1.0) * blue + vec3(0.32, 0.62, 1.0) * core * 0.5;   // ELECTRIC BLUE (no white blow-out)
+  float a = clamp(blue*1.4 + core*0.7, 0.0, 1.0);    // additive blend (set on the material) makes it glow much brighter
   if(a < 0.02) discard;
   gl_FragColor = vec4(col, a);
 }`;
@@ -862,10 +862,11 @@ void main(void){
   if(r > 1.0) discard;
   float ang = atan(vUV.y, vUV.x);
   float core = exp(-r*7.0);                                   // tight bright core (sits on the sphere)
-  float spikes = pow(0.5 + 0.5*sin(ang*11.0 + uT*0.5), 4.0);  // 11 sharp rays, slowly turning
-  float rays = spikes * smoothstep(1.0, 0.12, r) * exp(-r*2.3);   // rays taper off toward the rim
-  float i = core*1.15 + rays*0.85;                            // reach OUTSIDE the sphere via the rays
-  vec3 col = mix(vec3(0.34, 0.64, 1.0), vec3(0.88, 0.96, 1.0), core);
+  float spikes = pow(0.5 + 0.5*sin(ang*18.0 + uT*0.4), 3.0);  // many rays (18), slowly turning
+  float waves = 0.5 + 0.5*sin(r*30.0 - uT*6.0);               // many concentric wave-fronts travelling OUTWARD
+  float rays = spikes * waves * smoothstep(1.0, 0.06, r);     // rays broken into outgoing waves, tapering to the rim
+  float i = core*1.05 + rays*0.95;                            // reach OUTSIDE the sphere via the ray waves
+  vec3 col = vec3(0.06, 0.45, 1.0) + vec3(0.24, 0.50, 1.0) * core * 0.45;   // ELECTRIC BLUE, faint cool centre (no white)
   float a = clamp(i, 0.0, 1.0);
   if(a < 0.01) discard;
   gl_FragColor = vec4(col, a);
@@ -2063,13 +2064,19 @@ async function run(){
     cam.target.addInPlace(right.scale(-dxPx * wpp)).addInPlace(up.scale(dyPx * wpp)); };
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
   // floor, the pivot dollies forward along the view instead of the radius going negative.
+  const _zSel = new BABYLON.Vector3();
   const zoomBy = delta => {                 // delta < 0 = closer
-    // With an atom selected, ease the zoom down as the camera nears it, and let it speed back
-    // up once you dolly past (distance grows again on the far side).
-    if(selAtom && selCenter.x < 1e5){
-      const d = BABYLON.Vector3.Distance(cam.position, selCenter);
-      const ref = Math.max(fitRadius * 0.06, 1.5);   // distance at which zoom returns to full speed
-      delta *= Math.max(0.06, Math.min(1.0, d / ref));
+    // Ease the zoom down as the camera nears the SELECTED object — an atom, a cofactor, or a whole
+    // complex — so you glide in instead of overshooting; it speeds back up once you dolly past. The
+    // reference distance (where it returns to full speed) scales with the object so it works at any size.
+    let sc = null, refD = Math.max(fitRadius * 0.06, 1.5);
+    if(selAtom && selCenter.x < 1e5){ sc = selCenter; }
+    else if(etcSel >= 0 && etcGroups[etcSel]){ const g = etcGroups[etcSel]; sc = _zSel.set(g.cx, g.cy, g.cz); refD = Math.max(g.r * 4.0, 3.0); }
+    else if(gSelModel >= 0){ const mi = mInfo[gSelModel]; sc = _zSel.set(mi.cx+gModelOff[gSelModel*3], mi.cy+gModelOff[gSelModel*3+1], mi.cz+gModelOff[gSelModel*3+2]);
+      refD = Math.max(0.5 * Math.hypot(mi.x1-mi.x0, mi.y1-mi.y0, mi.z1-mi.z0), 6.0); }
+    if(sc){
+      const d = BABYLON.Vector3.Distance(cam.position, sc);
+      delta *= Math.max(0.05, Math.min(1.0, d / refD));   // 5% speed right at the object → smooth arrival
     }
     const hi = cam.upperRadiusLimit ?? 1e9, minR = Math.max(0.3, fitRadius * 0.0006);
     const r = cam.radius + delta;
