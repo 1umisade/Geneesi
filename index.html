@@ -861,10 +861,10 @@ void main(void){
   float r = length(vUV);
   if(r > 1.0) discard;
   float ang = atan(vUV.y, vUV.x);
-  float core = exp(-r*7.0);                                   // tight bright core (sits on the sphere)
+  float core = exp(-r*20.0);                                  // tight bright core (stays ON the sphere even though the billboard is 3x bigger)
   float spikes = pow(0.5 + 0.5*sin(ang*18.0 + uT*0.4), 3.0);  // many rays (18), slowly turning
-  float waves = 0.5 + 0.5*sin(r*30.0 - uT*6.0);               // many concentric wave-fronts travelling OUTWARD
-  float rays = spikes * waves * smoothstep(1.0, 0.06, r);     // rays broken into outgoing waves, tapering to the rim
+  float waves = 0.5 + 0.5*sin(r*80.0 - uT*6.0);               // many concentric wave-fronts travelling OUTWARD
+  float rays = spikes * waves * smoothstep(1.0, 0.02, r);     // rays broken into outgoing waves, reaching far past the vdW rim
   float i = core*1.05 + rays*0.95;                            // reach OUTSIDE the sphere via the ray waves
   vec3 col = vec3(0.06, 0.45, 1.0) + vec3(0.24, 0.50, 1.0) * core * 0.45;   // ELECTRIC BLUE, faint cool centre (no white)
   float a = clamp(i, 0.0, 1.0);
@@ -2669,13 +2669,13 @@ async function run(){
   // Shared materials (one of each kind for all cells).
   const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0, true);   // isShell=0; movable (follows PSII drag). Spawn nuclei use a separate non-movable material.
   const spawnNucMat = impostorMat('spawnNuc', NUCLEON_R, 0.0, 0.0, false);   // spawned-atom nuclei — never move with PSII
-  spawnNucMat.setFloat('depthBias', 1.0); spawnNucMat.disableDepthWrite = true; spawnNucMat.setFloat('bubbleR', 1e9); spawnNucMat.setFloat('coneCos', -1.0);
+  spawnNucMat.setFloat('depthBias', 2.0); spawnNucMat.disableDepthWrite = true; spawnNucMat.setFloat('bubbleR', 1e9); spawnNucMat.setFloat('coneCos', -1.0);
   spawnNucMat.onBindObservable.add(() => { const eff=spawnNucMat.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
   // Every atom's nucleus is visible: bias it toward the camera so it shows on top of its OWN
   // orbitals, drawn after them (group 1) without writing depth so it can't punch through atoms
   // that are genuinely in front. selCenter bound live → the focused atom's static nucleus is
   // hidden here (its spinning highlight nucleus draws instead).
-  const NUC_BIAS = 1.0;
+  const NUC_BIAS = 2.0;   // clears the orbital cloud for EVERY element (heavy atoms reach ~1.6 A) — bonded neighbours (~1.5 A) still occlude, so it stays on top of its OWN orbitals only
   nucMatG.setFloat('depthBias', NUC_BIAS); nucMatG.disableDepthWrite = true;
   nucMatG.setFloat('bubbleR', 1e9); nucMatG.setFloat('coneCos', -1.0);   // nuclei always shown (no vdW gate)
   nucMatG.onBindObservable.add(() => { const eff=nucMatG.getEffect(); if(!eff) return;
@@ -3879,7 +3879,7 @@ async function run(){
       const cMat = new BABYLON.ShaderMaterial('mgCoronaMat', scene, 'ecorona', { attributes:['position'], uniforms:['worldViewProjection','uT'] });
       cMat.alphaMode = BABYLON.Constants.ALPHA_ADD; cMat.needAlphaBlending = () => true; cMat.disableDepthWrite = true; cMat.backFaceCulling = false;
       cMat.onBindObservable.add(() => { const eff=cMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
-      const corona = BABYLON.MeshBuilder.CreatePlane('mgCorona', {size: vdwR*3.6}, scene);   // half-size 1.8·vdwR → rays reach ~0.8·vdwR past the sphere edge
+      const corona = BABYLON.MeshBuilder.CreatePlane('mgCorona', {size: vdwR*11.0}, scene);   // half-size 5.5·vdwR → rays reach ~4.5·vdwR past the vdW border (3x the old reach)
       corona.material = cMat; corona.isPickable = false; corona.alwaysSelectAsActiveMesh = true; corona.renderingGroupId = 3;
       corona.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
       corona.onBeforeRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.ALWAYS));
