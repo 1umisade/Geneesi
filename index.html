@@ -95,6 +95,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #dev-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #dev-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #dev-icon{font-size:15px;line-height:1}
+#lantern-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#lantern-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#lantern-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#lantern-icon{font-size:15px;line-height:1}
 #vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
@@ -192,6 +200,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="color-btn" title="Väritys: alkuaineittain ↔ malleittain"><span id="color-icon">🎨</span><span id="color-label">Mallit</span></button>
 <button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (klorofyllit, karotenoidit, kinonit, hemit, feofytiini, Tyr Z, OEC, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
 <button id="dev-btn" title="Dev-tila: mallien siirto/kierto-työkalu + sijaintimerkinnät"><span id="dev-icon">🛠️</span><span id="dev-label">Dev</span></button>
+<button id="lantern-btn" title="Lyhty: pimennä kaikki paitsi kiihdytetty elektroni (valaisee lähiatomit)"><span id="lantern-icon">🏮</span><span id="lantern-label">Lyhty</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
@@ -2497,6 +2506,13 @@ async function run(){
     // ETC is ON by default → reflect it in the button now (the overlay/mask/list respect gEtc as they are built)
     if(etcBtn){ etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; } }
+  // "Lantern" mode: darken the whole scene except the excited electron, which lights up the atoms near it.
+  let gLantern = false;
+  const gLanternPos = new BABYLON.Vector3(1e6, 1e6, 1e6);   // the excited electron's live world position (drives the lantern spotlight)
+  { const lb = document.getElementById('lantern-btn');
+    if(lb) lb.addEventListener('click', () => { gLantern = !gLantern;
+      lb.classList.toggle('on', gLantern);
+      const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
   // Graphics mode 2 cone half-angle, as tan(angle) off the view axis. Sized from the LIVE viewport:
   // 0.78 × the wider half-FOV → a big reveal that still never fills the frame (the long axis' edges
@@ -3898,6 +3914,7 @@ async function run(){
         }
         BABYLON.Vector3.LerpToRef(_pos, target, 0.22, _pos);   // ease toward home → the switch reads as a jump
         elec.position.copyFrom(_pos); corona.position.copyFrom(_pos);
+        gLanternPos.copyFrom(_pos);   // publish for the lantern spotlight
       });
     }
   }
@@ -5112,6 +5129,41 @@ async function run(){
     eff.setFloat('paperAmt', 0.05);  // paper grain
     eff.setFloat('bright', 1.35);    // brightness lift (was coming out dark)
   };
+  // "Lantern" mode → runs LAST, dimming the finished frame everywhere except a soft round spotlight that
+  // follows the excited electron's screen position, so the electron alone lights up the atoms around it.
+  BABYLON.Effect.ShadersStore['lanternPixelShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform vec2 elecUV;
+uniform float lanternOn;
+uniform float aspect;
+void main(void){
+  vec3 c = texture2D(textureSampler, vUV).rgb;
+  if(lanternOn > 0.5){
+    vec2 d = vUV - elecUV;
+    d.x *= aspect;
+    float dist = length(d);
+    float R = 0.16;
+    float lit = (R*R) / (R*R + dist*dist);
+    lit = pow(lit, 1.4);
+    float dark = 0.05 + 0.95*lit;
+    c = c*dark + vec3(0.06, 0.26, 0.60) * lit * 0.30;
+  }
+  gl_FragColor = vec4(c, 1.0);
+}`;
+  const lanternPP = new BABYLON.PostProcess('lantern', 'lantern', ['elecUV','lanternOn','aspect'], null, 1.0, cam);
+  { const _lvp = new BABYLON.Viewport(0, 0, 1, 1);
+    lanternPP.onApply = eff => {
+      const w = engine.getRenderWidth(), h = engine.getRenderHeight();
+      _lvp.width = w; _lvp.height = h;
+      const p = BABYLON.Vector3.Project(gLanternPos, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _lvp);
+      const onScreen = (p.z >= 0.0 && p.z <= 1.0);   // electron behind the camera → push the spotlight off-screen (all dark)
+      eff.setFloat2('elecUV', onScreen ? p.x / w : -10.0, onScreen ? 1.0 - p.y / h : -10.0);
+      eff.setFloat('lanternOn', gLantern ? 1.0 : 0.0);
+      eff.setFloat('aspect', w / h);
+    };
+  }
   window.addEventListener('keydown', e => {
     if(e.key === 'p' || e.key === 'P'){
       painterlyOn = !painterlyOn;
