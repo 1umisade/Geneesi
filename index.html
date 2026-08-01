@@ -5106,7 +5106,10 @@ async function run(){
   const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','bgRef'], ['cofMask'], 1.0, cam);
   cofsil.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('lineW', gCofLineW);
+    // Scale the outline with the molecule's apparent size (∝ 1 / camera distance): thinner when zoomed
+    // out (the molecule is small), thicker when zoomed in. Anchored so it equals gCofLineW at the fit view.
+    const zk = Math.max(0.15, Math.min(4.0, fitRadius / Math.max(1, cam.radius)));
+    eff.setFloat('lineW', gCofLineW * zk);
     eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
