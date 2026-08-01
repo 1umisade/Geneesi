@@ -4154,10 +4154,19 @@ async function run(){
   const clSld = document.createElement('input'); clSld.type='range'; clSld.min='0'; clSld.max='100'; clSld.value='37'; clSld.style.cssText='width:100%;cursor:pointer;';   // 37 → 2.2 px (range 0…6)
   const clValEl = clRow.querySelector('#dev-cl-val');
   clSld.oninput = () => { gCofLineW = (+clSld.value/100)*6.0; clValEl.textContent = gCofLineW.toFixed(1); };
+  // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld];
+  const devDefaults = devSliders.map(s => s.value);
+  const resetRow = document.createElement('div');
+  const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
+  resetBtn.style.cssText = 'cursor:pointer;font:11px ui-monospace,monospace;color:var(--sageink);background:var(--sage);'
+    + 'border:2px solid var(--brown);border-radius:9px;box-shadow:0 2px 0 var(--brown);padding:3px 11px;align-self:flex-start;margin-top:2px;';
+  resetBtn.onclick = () => devSliders.forEach((s, i) => { s.value = devDefaults[i]; s.dispatchEvent(new Event('input')); });
+  resetRow.appendChild(resetBtn);
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
