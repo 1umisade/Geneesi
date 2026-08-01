@@ -814,33 +814,30 @@ precision highp float;
 uniform float uT;
 varying vec3 vNrmV;
 varying vec3 vViewPos;
-vec3 wanderDir(float s){
-  return normalize(vec3(
-    sin(s) + 0.7*sin(s*2.3),
-    sin(s*1.7) + 0.7*sin(s*0.6),
-    sin(s*0.4) + 0.7*sin(s*3.1)));
-}
-vec3 toFront(vec3 w, vec3 V, vec3 fb){
-  float d = clamp(dot(w, V), -1.0, 1.0);
-  vec3 tang = w - d*V;
-  float tl = length(tang);
-  tang = tl > 1e-4 ? tang/tl : fb;
-  float polar = acos(d) * 0.26;
-  return cos(polar)*V + sin(polar)*tang;
+// The orb shader's own electron look (breathing rings + crests that march around the point), ported here.
+float elecBolt(vec3 N, vec3 e, vec3 uref){
+  float fr = 1.2;                                    // Mg valence energy tier (matches a 3s orbital)
+  float d = clamp(dot(N, e), -1.0, 1.0);
+  vec3 tp = N - d*e;
+  vec3 u = normalize(uref - dot(uref, e)*e), w = cross(e, u);
+  float ang = atan(dot(tp, w), dot(tp, u));
+  float rad = acos(clamp(d, 0.0, 1.0));
+  float m = 3.0 + fr * 9.0;
+  float rings  = 0.5 + 0.5*sin(rad*20.0 - uT*2.5);
+  float travel = 0.6 + 0.4*sin(ang*m - uT*4.0 + rad*6.0);
+  return rings * travel * exp(-rad*3.4);
 }
 void main(void){
   vec3 N = normalize(vNrmV);
   vec3 V = normalize(-vViewPos);
-  float d = clamp(dot(N, V), -1.0, 1.0);            // glint sits at the point facing the camera DIRECTLY (no drift)
-  float dp = max(d, 0.0);
-  float glow = pow(dp, 5.0);                        // 3x wider than the normal pow(d, 44) electron spot
-  float core = pow(dp, 24.0);
-  float rad = acos(d);
-  float rings = (0.55 + 0.45*sin(rad*7.0 - uT*0.9)) * exp(-rad*1.1);   // slow, wide concentric breathing
-  float blue = clamp(glow*1.15 + rings*0.5, 0.0, 1.0);
-  vec3 col = vec3(0.34, 0.60, 1.0) * blue + vec3(0.75, 0.88, 1.0) * core * 0.85;
-  float a = clamp(blue + core, 0.0, 1.0);
-  if(a < 0.012) discard;
+  float d = max(dot(N, V), 0.0);                     // the electron sits at the point facing the camera DIRECTLY
+  float glow = pow(d, 44.0);                         // SAME tight spot as a normal electron (not enlarged)
+  float core = pow(d, 220.0);
+  float bolt = max(elecBolt(N, V, vec3(0.0, 1.0, 0.0)), 0.0);
+  float blue = clamp(glow*1.2 + bolt*1.1, 0.0, 1.0);
+  vec3 col = vec3(0.40, 0.70, 1.0) * blue + vec3(0.92, 0.98, 1.0) * core;   // brighter blue + a whiter core
+  float a = clamp(blue*1.5 + core, 0.0, 1.0);        // additive blend (set on the material) makes it glow MUCH brighter
+  if(a < 0.02) discard;
   gl_FragColor = vec4(col, a);
 }`;
 
@@ -3818,9 +3815,9 @@ async function run(){
   };
   const hideSelElec = () => selElec.setEnabled(false);
 
-  /* ── "Excited" electron: a blue reflection-on-the-orbital glint on Mg's biggest s orbital (bigelec),
-     PLUS a strong additive glow so it reads from a distance. When the plastoquinone is dragged close to
-     the chlorophyll the electron JUMPS across and rides it (photosynthetic charge separation). ── */
+  /* ── "Excited" electron on the chlorophyll Mg: a NORMAL-sized electron (the same blue glint as every
+     other electron) riding the Mg vdW sphere, but glowing MUCH brighter (additive) and drawn on top of
+     everything. When the plastoquinone is dragged close, the electron jumps across and rides it. ── */
   {
     const chlM = mols.find(m => m.cfg && m.cfg.match === 'chlorophyll');
     const pqnM = mols.find(m => m.cfg && m.cfg.match === 'plastoquinone');
@@ -3830,51 +3827,31 @@ async function run(){
       const chlI = mols.indexOf(chlM);
       const mgRest = new BABYLON.Vector3(chlM.x[mgK]+chlM.ox, chlM.y[mgK]+chlM.oy, chlM.z[mgK]+chlM.oz);
       const eng = scene.getEngine();
-      const vdwR = info(chlM.el[mgK]).vr * FILL_SCALE;   // Mg's vdW-sphere radius → the reflection sits ON the vdW sphere
+      const vdwR = info(chlM.el[mgK]).vr * FILL_SCALE;   // Mg's vdW-sphere radius → the electron rides the vdW sphere
       const pqnI = pqnM ? mols.indexOf(pqnM) : -1;   // the quinone acceptor + its rest centroid (world = gModelXform * centroid)
       const pqnRest = (pqnI >= 0) ? new BABYLON.Vector3(mInfo[pqnI].cx, mInfo[pqnI].cy, mInfo[pqnI].cz) : null;
-      const onTop = m => { m.onBeforeRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.ALWAYS));
-                           m.onAfterRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.LEQUAL)); };
-      // (1) the reflection glint on the orbital
       const eMat = new BABYLON.ShaderMaterial('mgElecMat', scene, 'bigelec', { attributes:['position','normal'], uniforms:['world','view','projection','uT'] });
-      eMat.needAlphaBlending = () => true; eMat.disableDepthWrite = true; eMat.backFaceCulling = true;
+      eMat.alphaMode = BABYLON.Constants.ALPHA_ADD; eMat.needAlphaBlending = () => true;   // additive → glows much brighter than the painted-on normal electrons
+      eMat.disableDepthWrite = true; eMat.backFaceCulling = true;
       eMat.onBindObservable.add(() => { const eff=eMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
-      const elec = BABYLON.MeshBuilder.CreateSphere('mgElec', {segments:20, diameter: vdwR*2.0}, scene);
+      const elec = BABYLON.MeshBuilder.CreateSphere('mgElec', {segments:24, diameter: vdwR*2.0}, scene);
       elec.material = eMat; elec.isPickable = false; elec.alwaysSelectAsActiveMesh = true; elec.renderingGroupId = 3;
-      onTop(elec);
-      // (2) a strong additive glow (radial-gradient billboard) so the electron reads from far away — its
-      //     world size is scaled with camera distance, which holds a ~constant on-screen size at any zoom.
-      const glowTex = new BABYLON.DynamicTexture('mgElecGlowTex', 128, scene, false);
-      { const g = glowTex.getContext();
-        const grd = g.createRadialGradient(64,64,0, 64,64,64);
-        grd.addColorStop(0.0, 'rgba(215,240,255,1)');
-        grd.addColorStop(0.22,'rgba(120,200,255,0.8)');
-        grd.addColorStop(1.0, 'rgba(70,160,255,0)');
-        g.fillStyle = grd; g.fillRect(0,0,128,128); glowTex.hasAlpha = true; glowTex.update(); }
-      const glowMat = new BABYLON.StandardMaterial('mgElecGlowMat', scene);
-      glowMat.emissiveTexture = glowTex; glowMat.diffuseColor = new BABYLON.Color3(0,0,0); glowMat.disableLighting = true;
-      glowMat.disableDepthWrite = true; glowMat.alphaMode = BABYLON.Constants.ALPHA_ADD; glowMat.needAlphaBlending = () => true;
-      const glow = BABYLON.MeshBuilder.CreatePlane('mgElecGlow', {size:1}, scene);
-      glow.material = glowMat; glow.isPickable = false; glow.alwaysSelectAsActiveMesh = true; glow.renderingGroupId = 3;
-      glow.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; onTop(glow);
-      // Per-frame: pick the home (Chl Mg, or the quinone once it is dragged within JUMP_DIST), ease toward it
-      // (a fast lerp reads as a leap when the target switches), then size the glow for its distance.
+      elec.onBeforeRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.ALWAYS));    // always on top
+      elec.onAfterRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.LEQUAL));
+      // Per-frame: home on the Chl Mg, or the quinone once it is dragged within JUMP_DIST, easing across.
       const _mxC = new BABYLON.Matrix(), _mxQ = new BABYLON.Matrix();
       const _chlPos = new BABYLON.Vector3(), _qPos = new BABYLON.Vector3(), _pos = mgRest.clone();
       const JUMP_DIST = 30;   // Å centre-to-centre within which the electron transfers to the quinone
       scene.onBeforeRenderObservable.add(() => {
         BABYLON.Matrix.FromArrayToRef(gModelXform, chlI*16, _mxC);
         BABYLON.Vector3.TransformCoordinatesToRef(mgRest, _mxC, _chlPos);   // live Chl Mg world position
-        let target = _chlPos, onQuinone = false;
+        let target = _chlPos;
         if(pqnRest){ BABYLON.Matrix.FromArrayToRef(gModelXform, pqnI*16, _mxQ);
           BABYLON.Vector3.TransformCoordinatesToRef(pqnRest, _mxQ, _qPos);   // live quinone world position
-          if(BABYLON.Vector3.Distance(_chlPos, _qPos) < JUMP_DIST){ target = _qPos; onQuinone = true; }
+          if(BABYLON.Vector3.Distance(_chlPos, _qPos) < JUMP_DIST) target = _qPos;
         }
         BABYLON.Vector3.LerpToRef(_pos, target, 0.22, _pos);   // ease toward home → the switch reads as a jump
-        elec.position.copyFrom(_pos); glow.position.copyFrom(_pos);
-        const camD = BABYLON.Vector3.Distance(cam.position, _pos);
-        const s = Math.max(vdwR*2.4, camD*0.06) * (onQuinone ? 1.5 : 1.0);   // ~constant screen size + a brighter flare on the quinone
-        glow.scaling.set(s, s, s);
+        elec.position.copyFrom(_pos);
       });
     }
   }
