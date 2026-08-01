@@ -790,6 +790,62 @@ void main(void){
   gl_FragColor = vec4(1.0);
 }`;
 
+/* "Excited" electron for the chlorophyll Mg — ONE big, slow, always-camera-facing electron drawn in the
+   SAME blue reflection-on-the-orbital style as the roaming orbital electrons, on a sphere the size of Mg's
+   outer s orbital. Rendered on top of everything (the JS forces the depth test to ALWAYS). */
+BABYLON.Effect.ShadersStore['bigelecVertexShader'] = `
+precision highp float;
+attribute vec3 position;
+attribute vec3 normal;
+uniform mat4 world;
+uniform mat4 view;
+uniform mat4 projection;
+varying vec3 vNrmV;
+varying vec3 vViewPos;
+void main(void){
+  vec4 wp = world * vec4(position, 1.0);
+  vec4 vp = view * wp;
+  vViewPos = vp.xyz;
+  vNrmV = (view * world * vec4(normal, 0.0)).xyz;
+  gl_Position = projection * vp;
+}`;
+BABYLON.Effect.ShadersStore['bigelecFragmentShader'] = `
+precision highp float;
+uniform float uT;
+varying vec3 vNrmV;
+varying vec3 vViewPos;
+vec3 wanderDir(float s){
+  return normalize(vec3(
+    sin(s) + 0.7*sin(s*2.3),
+    sin(s*1.7) + 0.7*sin(s*0.6),
+    sin(s*0.4) + 0.7*sin(s*3.1)));
+}
+vec3 toFront(vec3 w, vec3 V, vec3 fb){
+  float d = clamp(dot(w, V), -1.0, 1.0);
+  vec3 tang = w - d*V;
+  float tl = length(tang);
+  tang = tl > 1e-4 ? tang/tl : fb;
+  float polar = acos(d) * 0.26;
+  return cos(polar)*V + sin(polar)*tang;
+}
+void main(void){
+  vec3 N = normalize(vNrmV);
+  vec3 V = normalize(-vViewPos);
+  float t = uT * 0.10;                              // slow drift — movement reduced a lot
+  vec3 e = toFront(wanderDir(t), V, vec3(1.0, 0.0, 0.0));
+  float d = clamp(dot(N, e), -1.0, 1.0);
+  float dp = max(d, 0.0);
+  float glow = pow(dp, 5.0);                        // 3x wider than the normal pow(d, 44) electron spot
+  float core = pow(dp, 24.0);
+  float rad = acos(d);
+  float rings = (0.55 + 0.45*sin(rad*7.0 - uT*0.9)) * exp(-rad*1.1);   // slow, wide concentric breathing
+  float blue = clamp(glow*1.15 + rings*0.5, 0.0, 1.0);
+  vec3 col = vec3(0.34, 0.60, 1.0) * blue + vec3(0.75, 0.88, 1.0) * core * 0.85;
+  float a = clamp(blue + core, 0.0, 1.0);
+  if(a < 0.012) discard;
+  gl_FragColor = vec4(col, a);
+}`;
+
 /* Bond sticks — lit cylinders that only render inside the camera reveal-bubble. */
 BABYLON.Effect.ShadersStore['bondVertexShader'] = `
 precision highp float;
@@ -1964,6 +2020,12 @@ async function run(){
   let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
   let dnX = 0, dnY = 0;   // drag-start pointer pos (for the tap-vs-drag test)
   let panning = false, panDepth = 1, modelDrag = -1, modelDragDepth = 1, rotating = false;   // pan state · which molecule a left-drag is moving (+its depth) · middle-drag rotate
+  // Custom cursors (the grab PNG). setCursor writes the style ONLY when it actually changes — re-assigning a
+  // url() cursor every mousemove makes the browser re-fetch the image and FLICKER, so we guard every write.
+  const GRAB_CUR = "url('./cursor_grab.png') 20 24, grab";        // open hand → hovering something draggable/clickable
+  const GRABBING_CUR = "url('./cursor_grab.png') 20 24, grabbing";   // closed hand → actively dragging / panning / rotating
+  let gCurCur = 'x';
+  const setCursor = want => { if(want !== gCurCur){ gCurCur = want; canvas.style.cursor = want; } };
   /* Grab-pan: translate the pivot so the world point under the cursor stays glued to it. Moving the
      ArcRotateCamera target shifts the whole camera (position follows), and one screen pixel maps to a
      fixed world distance at a given depth — so scaling the pixel delta by the world-per-pixel at the
@@ -2004,7 +2066,7 @@ async function run(){
       if(e.button === 1){   // MIDDLE = rotate the camera. Driven manually (inertial offsets) so it works in
         rotating = true; dragging = true;                          // every browser, independent of Babylon's button filtering.
         cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
-        canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing";
+        setCursor(GRABBING_CUR);
         return;
       }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;   // remember the down point for the tap-vs-drag test
@@ -2015,11 +2077,11 @@ async function run(){
             const mi = mInfo[mid];
             modelDragDepth = (isFinite(_modelPickT) && _modelPickT > 0.5) ? _modelPickT
               : BABYLON.Vector3.Distance(cam.position, new BABYLON.Vector3(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]));
-            canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing"; return; }
+            setCursor(GRABBING_CUR); return; }
         } }
       if(e.button === 2 || e.button === 0){   // RIGHT — or LEFT on empty background — grab-pans the view. Anchor the
         panning = true; dragging = true;                                // depth to the EXACT point under the cursor so it stays glued there while panning.
-        canvas.style.cursor = "url('./cursor_grab.png') 20 24, grabbing";   // custom grab cursor while panning
+        setCursor(GRABBING_CUR);   // closed-hand cursor while panning
         scene.stopAnimation(cam);   // a focus animation (from selecting an atom) would otherwise keep resetting the target → pan looked dead
         cam.inertialPanningX = cam.inertialPanningY = cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
         const a = pickAtom();
@@ -2030,7 +2092,7 @@ async function run(){
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
-      canvas.style.cursor = '';   // revert to the default (CSS) cursor after pan/zoom
+      setCursor('');   // revert to the default cursor after a drag (the next hover re-applies the grab hand)
       if(e.button === 1){ rotating = false; return; }   // middle-drag rotate ends (inertia carries on)
       if(e.button === 2){ panning = false; return; }
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = []; return; }   // finished moving a spawned atom
@@ -3754,8 +3816,9 @@ async function run(){
   };
   const hideSelElec = () => selElec.setEnabled(false);
 
-  /* ── Extra "excited" electron on the lone chlorophyll's central Mg: a VERY bright,
-     always-on-top glowing point that orbits the magnesium (the light-driven charge). ── */
+  /* ── "Excited" electron on the lone chlorophyll's central Mg: ONE electron on Mg's biggest s orbital,
+     shown in the SAME blue reflection-on-the-orbital style as every other electron — but 3x bigger, barely
+     moving, always facing the camera, and drawn on top of everything (bigelec shader). ── */
   {
     const chlM = mols.find(m => m.cfg && m.cfg.match === 'chlorophyll');
     let mgK = -1;
@@ -3764,39 +3827,19 @@ async function run(){
       const mi = mols.indexOf(chlM);
       const rest = new BABYLON.Vector3(chlM.x[mgK]+chlM.ox, chlM.y[mgK]+chlM.oy, chlM.z[mgK]+chlM.oz);
       const eng = scene.getEngine();
-      // Soft round glow texture (radial gradient → transparent at the rim) for an additive halo.
-      const glowTex = new BABYLON.DynamicTexture('mgGlowTex', 128, scene, false);
-      { const g = glowTex.getContext();
-        const grd = g.createRadialGradient(64,64,0, 64,64,64);
-        grd.addColorStop(0.0, 'rgba(210,255,255,1)');
-        grd.addColorStop(0.30,'rgba(150,240,255,0.55)');
-        grd.addColorStop(1.0, 'rgba(120,220,255,0)');
-        g.fillStyle = grd; g.fillRect(0,0,128,128); glowTex.hasAlpha = true; glowTex.update(); }
-      // Bright unlit core
-      const coreMat = new BABYLON.StandardMaterial('mgElecMat', scene);
-      coreMat.emissiveColor = new BABYLON.Color3(0.85, 1.0, 1.0); coreMat.disableLighting = true; coreMat.disableDepthWrite = true;
-      const core = BABYLON.MeshBuilder.CreateSphere('mgElec', {segments:12, diameter:0.42}, scene);
-      core.material = coreMat; core.isPickable = false; core.alwaysSelectAsActiveMesh = true; core.renderingGroupId = 3;
-      // Additive glow halo (billboard)
-      const haloMat = new BABYLON.StandardMaterial('mgElecHalo', scene);
-      haloMat.emissiveTexture = glowTex; haloMat.diffuseColor = new BABYLON.Color3(0,0,0); haloMat.disableLighting = true;
-      haloMat.disableDepthWrite = true; haloMat.alphaMode = BABYLON.Constants.ALPHA_ADD; haloMat.needAlphaBlending = () => true;
-      const halo = BABYLON.MeshBuilder.CreatePlane('mgElecHaloM', {size:1.9}, scene);
-      halo.material = haloMat; halo.isPickable = false; halo.alwaysSelectAsActiveMesh = true; halo.renderingGroupId = 3;
-      halo.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-      // Always on top: ignore the depth test for both (restore LEQUAL right after).
-      const onTop = m => { m.onBeforeRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.ALWAYS));
-                           m.onAfterRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.LEQUAL)); };
-      onTop(halo); onTop(core);   // halo first, core over it
-      const _mx = new BABYLON.Matrix(), _p = new BABYLON.Vector3();
+      let sMax = 1; for(const sh of econf(chlM.el[mgK])) if(sh[1] === 0) sMax = Math.max(sMax, sh[0]);   // n of Mg's biggest s shell (3s)
+      const orbR = sMax * SHELL_STEP;   // that orbital's radius — same scale as the rendered orbitals → the reflection sits ON it
+      const eMat = new BABYLON.ShaderMaterial('mgElecMat', scene, 'bigelec', { attributes:['position','normal'], uniforms:['world','view','projection','uT'] });
+      eMat.needAlphaBlending = () => true; eMat.disableDepthWrite = true; eMat.backFaceCulling = true;
+      eMat.onBindObservable.add(() => { const eff=eMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
+      const elec = BABYLON.MeshBuilder.CreateSphere('mgElec', {segments:20, diameter: orbR*2.0}, scene);
+      elec.material = eMat; elec.isPickable = false; elec.alwaysSelectAsActiveMesh = true; elec.renderingGroupId = 3;
+      elec.onBeforeRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.ALWAYS));    // always on top
+      elec.onAfterRenderObservable.add(() => eng.setDepthFunction(BABYLON.Constants.LEQUAL));
+      const _mx = new BABYLON.Matrix();
       scene.onBeforeRenderObservable.add(() => {
-        BABYLON.Matrix.FromArrayToRef(gModelXform, mi*16, _mx);   // live model transform (identity unless moved in dev)
-        BABYLON.Vector3.TransformCoordinatesToRef(rest, _mx, _p);
-        const t = gWaveT, orb = 0.7;                              // orbit the Mg
-        core.position.set(_p.x + Math.cos(t*3.1)*orb, _p.y + Math.sin(t*3.1)*orb*0.6, _p.z + Math.sin(t*2.3)*orb);
-        halo.position.copyFrom(core.position);
-        const pulse = 0.85 + 0.35*Math.sin(t*6.0);               // brightness/size pulse
-        core.scaling.setAll(pulse); halo.scaling.setAll(pulse);
+        BABYLON.Matrix.FromArrayToRef(gModelXform, mi*16, _mx);   // follow the molecule if it is dragged
+        BABYLON.Vector3.TransformCoordinatesToRef(rest, _mx, elec.position);
       });
     }
   }
@@ -4937,10 +4980,14 @@ async function run(){
   scene.onPointerObservable.add(p => {
     if(p.type === BABYLON.PointerEventTypes.POINTERDOUBLETAP){ onDouble(); return; }        // touch double-tap
     if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){                                   // hover highlight
+      if(dragging || p.event.buttons) return;   // during a drag the pointer handler owns the cursor
+      // Cursor feedback runs on EVERY move (a cheap, stable bounding-box pick) → the grab hand shows the instant
+      // you are over any molecule, with no lag and no flicker (setCursor only writes when it actually changes).
+      setCursor(pickModelAtCursor() >= 0 ? GRAB_CUR : '');
       const now = performance.now();
-      if(dragging || p.event.buttons || now - hoverT < 80) return;   // skip while any button held; throttle
+      if(now - hoverT < 80) return;   // throttle only the heavier highlight picking below
       hoverT = now;
-      if(wholeInView()){ macroHover(); hl.setEnabled(false); canvas.style.cursor = gMacroHover ? 'grab' : ''; return; }   // zoomed out → hover the whole protein (white box), not atoms
+      if(wholeInView()){ macroHover(); hl.setEnabled(false); return; }   // zoomed out → hover the whole protein (white box), not atoms
       if(gMacroHover){ gMacroHover=false; if(!gMacroSel) setOutline(false); }
       const a = pickAtom();
       const overAtom = !!a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0;
@@ -4953,8 +5000,6 @@ async function run(){
         const gi = pickEtcGroup();
         gHoverGroup = gi >= 0 ? gi : -1;                                  // brighten the hovered cofactor group (no outline)
       }
-      // Cursor feedback: a grab hand over anything interactive (an atom, a cofactor, or a draggable molecule).
-      canvas.style.cursor = (overAtom || gHoverGroup >= 0 || pickModelAtCursor() >= 0) ? 'grab' : '';
     }
   });
 
