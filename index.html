@@ -2508,11 +2508,13 @@ async function run(){
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; } }
   // "Lantern" mode: darken the whole scene except the excited electron, which lights up the atoms near it.
   let gLantern = false;
+  let applyLantern = () => {};   // real impl set once the post-process exists — attaches/detaches it so it costs NOTHING when off
   const gLanternPos = new BABYLON.Vector3(1e6, 1e6, 1e6);   // the excited electron's live world position (drives the lantern spotlight)
   { const lb = document.getElementById('lantern-btn');
     if(lb) lb.addEventListener('click', () => { gLantern = !gLantern;
       lb.classList.toggle('on', gLantern);
-      const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
+      const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty';
+      applyLantern(); }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
   // Graphics mode 2 cone half-angle, as tan(angle) off the view axis. Sized from the LIVE viewport:
   // 0.78 × the wider half-FOV → a big reveal that still never fills the frame (the long axis' edges
@@ -3915,6 +3917,12 @@ async function run(){
         BABYLON.Vector3.LerpToRef(_pos, target, 0.22, _pos);   // ease toward home → the switch reads as a jump
         elec.position.copyFrom(_pos); corona.position.copyFrom(_pos);
         gLanternPos.copyFrom(_pos);   // publish for the lantern spotlight
+        // Cap the corona's ON-SCREEN size so a big additive quad can't fill the screen up close (fillrate/lag).
+        // At normal zoom this is 1.0 (full 3x rays); only very close does it clamp to ~30% of screen height.
+        const camD = BABYLON.Vector3.Distance(cam.position, _pos);
+        const wppH = 2.0 * camD * Math.tan(cam.fov * 0.5) / Math.max(1, eng.getRenderHeight());
+        const cap = Math.min(1.0, (eng.getRenderHeight() * 0.30 * wppH) / Math.max(1e-4, vdwR * 11.0 * 0.5));
+        corona.scaling.setAll(cap);
       });
     }
   }
@@ -5155,7 +5163,8 @@ void main(void){
   }
   gl_FragColor = vec4(c, 1.0);
 }`;
-  const lanternPP = new BABYLON.PostProcess('lantern', 'lantern', ['elecUV','lanternOn','aspect'], null, 1.0, cam);
+  // Created DETACHED (camera = null) → it only runs while lantern mode is on, so it adds zero cost otherwise.
+  const lanternPP = new BABYLON.PostProcess('lantern', 'lantern', ['elecUV','lanternOn','aspect'], null, 1.0, null, BABYLON.Texture.BILINEAR_SAMPLINGMODE, engine);
   { const _lvp = new BABYLON.Viewport(0, 0, 1, 1);
     lanternPP.onApply = eff => {
       const w = engine.getRenderWidth(), h = engine.getRenderHeight();
@@ -5167,6 +5176,7 @@ void main(void){
       eff.setFloat('aspect', w / h);
     };
   }
+  applyLantern = () => { if(gLantern) cam.attachPostProcess(lanternPP); else cam.detachPostProcess(lanternPP); };
   window.addEventListener('keydown', e => {
     if(e.key === 'p' || e.key === 'P'){
       painterlyOn = !painterlyOn;
