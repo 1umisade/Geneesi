@@ -159,7 +159,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
   border:3px solid var(--brown);border-radius:18px;box-shadow:0 5px 0 var(--brown);user-select:none}
 #eltable{padding:10px 11px;max-width:280px}
 #eltable .seg{display:flex;margin-bottom:9px;border:2.5px solid var(--brown);border-radius:99px;overflow:hidden}
-#eltable .segbtn{flex:1;font-family:inherit;font-size:11px;font-weight:bold;color:var(--ink);background:var(--paper);border:none;border-right:2px solid var(--brown);padding:5px 4px;cursor:pointer}
+#eltable .segbtn{flex:1;font-family:inherit;font-size:9.5px;font-weight:bold;color:var(--ink);background:var(--paper);border:none;border-right:2px solid var(--brown);padding:5px 2px;cursor:pointer;white-space:nowrap}
 #eltable .segbtn:last-child{border-right:none}
 #eltable .segbtn.on{background:var(--sage);color:var(--sageink)}
 #eltable .segpane{font-size:12px;color:var(--brown);opacity:.7;padding:22px 8px;text-align:center}
@@ -2360,6 +2360,21 @@ async function run(){
     const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
   });
+  // Arrow-key panning (same feel as the edge-pan). Ignored while typing in a dev slider/input.
+  const arrowKeys = Object.create(null);
+  window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'||e.key==='ArrowUp'||e.key==='ArrowDown'){ arrowKeys[e.key]=true; e.preventDefault(); } });
+  window.addEventListener('keyup', e => { arrowKeys[e.key]=false; });
+  scene.onBeforeRenderObservable.add(() => {
+    let ex=0, ey=0;
+    if(arrowKeys.ArrowLeft) ex-=1; if(arrowKeys.ArrowRight) ex+=1;
+    if(arrowKeys.ArrowUp) ey+=1; if(arrowKeys.ArrowDown) ey-=1;
+    if(!ex && !ey) return;
+    orbitLocked = false;
+    const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
+    cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
+  });
   scene.onPointerObservable.add(p => {
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
@@ -4474,9 +4489,9 @@ async function run(){
   });
   // ── Dev panel: a forward reveal/culling CONE size slider + a live camera-coordinate readout. ──
   const devPanel = document.createElement('div');
-  devPanel.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:22;display:none;flex-direction:column;gap:7px;'
+  devPanel.style.cssText = 'position:fixed;right:16px;top:56px;z-index:22;display:none;flex-direction:column;gap:7px;'
     + 'font:11px ui-monospace,monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);'
-    + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;max-height:86vh;overflow-y:auto;';
+    + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;max-height:calc(100vh - 140px);overflow-y:auto;';
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
@@ -4956,19 +4971,32 @@ async function run(){
   };
   {
     const eltable = document.createElement('div'); eltable.id = 'eltable';
-    // segmented selector: what gets added — atoms / molecules / proteins
+    // segmented selector: what gets added — atoms / molecules / proteins / quanta
     const seg = document.createElement('div'); seg.className = 'seg';
     const grid = document.createElement('div'); grid.className = 'elgrid';
-    const molPane = document.createElement('div'); molPane.className = 'segpane'; molPane.textContent = 'Molekyylit — tulossa';
-    const proPane = document.createElement('div'); proPane.className = 'segpane'; proPane.textContent = 'Proteiinit — tulossa';
-    molPane.style.display = proPane.style.display = 'none';
+    // item panes: 2-wide grids of named item buttons (wider than the element grid so the names fit)
+    const mkPane = () => { const p = document.createElement('div'); p.style.cssText = 'display:none;grid-template-columns:repeat(2,1fr);gap:6px'; return p; };
+    const molPane = mkPane(), proPane = mkPane(), kvPane = mkPane();
+    let gArmedItem = null;   // {kind,name} currently armed (UI selection — spawning into the scene is a follow-up)
+    const itemBtns = [];
+    const addItems = (pane, kind, items) => { for(const [name, col] of items){
+      const b = document.createElement('button'); b.className = 'elbtn';
+      const dot = document.createElement('span'); dot.className = 'eldot'; dot.style.background = col;
+      const lab = document.createElement('span'); lab.textContent = name;
+      b.appendChild(dot); b.appendChild(lab);
+      b.onclick = () => { const armed = !(gArmedItem && gArmedItem.kind === kind && gArmedItem.name === name);
+        gArmedItem = armed ? { kind, name } : null;
+        for(const x of itemBtns) x.classList.remove('on'); if(armed) b.classList.add('on'); };
+      itemBtns.push(b); pane.appendChild(b); } };
+    addItems(molPane, 'mol', [['CO₂','#8a8f98'],['H₂O','#4aa3c7'],['NADPH','#e08ac0'],['ADP','#caa24b'],['Pi','#e0803a'],['ATP','#d9b24b']]);
+    addItems(proPane, 'pro', [['Ferredoksiini','#c98a3a'],['Plastosyaniini','#5a86c0']]);
+    addItems(kvPane,  'kv',  [['Fotoni','#ffe066']]);
+    const panes = { atoms:grid, mol:molPane, pro:proPane, kv:kvPane };
     const segBtns = {};
-    for(const [id, labtxt] of [['atoms','Atomit'],['mol','Molekyylit'],['pro','Proteiinit']]){
+    for(const [id, labtxt] of [['atoms','Atomit'],['mol','Molekyylit'],['pro','Proteiinit'],['kv','Kvantit']]){
       const b = document.createElement('button'); b.className = 'segbtn'; b.textContent = labtxt;
       b.onclick = () => { for(const k in segBtns) segBtns[k].classList.toggle('on', k === id);
-        grid.style.display = id === 'atoms' ? 'grid' : 'none';
-        molPane.style.display = id === 'mol' ? 'block' : 'none';
-        proPane.style.display = id === 'pro' ? 'block' : 'none';
+        for(const k in panes) panes[k].style.display = (k === id) ? 'grid' : 'none';
         if(id !== 'atoms' && spawnEl) setSpawnEl(spawnEl);   // leaving the atoms tab disarms atom spawning
       };
       segBtns[id] = b; seg.appendChild(b);
@@ -4984,7 +5012,7 @@ async function run(){
       b.onclick = () => setSpawnEl(sym);
       elBtns.set(sym, b); grid.appendChild(b);
     }
-    eltable.appendChild(seg); eltable.appendChild(grid); eltable.appendChild(molPane); eltable.appendChild(proPane);
+    eltable.appendChild(seg); eltable.appendChild(grid); eltable.appendChild(molPane); eltable.appendChild(proPane); eltable.appendChild(kvPane);
     brStack.appendChild(eltable);
   }
 
