@@ -158,6 +158,11 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #econf,#eltable{font-family:'Courier New',monospace;background:var(--paper);color:var(--ink);
   border:3px solid var(--brown);border-radius:18px;box-shadow:0 5px 0 var(--brown);user-select:none}
 #eltable{padding:10px 11px;max-width:280px}
+#eltable .seg{display:flex;margin-bottom:9px;border:2.5px solid var(--brown);border-radius:99px;overflow:hidden}
+#eltable .segbtn{flex:1;font-family:inherit;font-size:11px;font-weight:bold;color:var(--ink);background:var(--paper);border:none;border-right:2px solid var(--brown);padding:5px 4px;cursor:pointer}
+#eltable .segbtn:last-child{border-right:none}
+#eltable .segbtn.on{background:var(--sage);color:var(--sageink)}
+#eltable .segpane{font-size:12px;color:var(--brown);opacity:.7;padding:22px 8px;text-align:center}
 #sc2-center svg{width:100%;height:100%;display:block}   /* fills the module box - viewBox+preserveAspectRatio letterbox the drawing to fit */
 #sc2-center img{max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto}
 #eltable .elhdr{font-size:12px;font-weight:bold;color:var(--brown);letter-spacing:.5px;margin-bottom:8px;
@@ -2157,20 +2162,44 @@ async function run(){
     for(let gi=0; gi<etcGroups.length; gi++){ const g=etcGroups[gi];
       if(g.cx>=md.x0&&g.cx<=md.x1&&g.cy>=md.y0&&g.cy<=md.y1&&g.cz>=md.z0&&g.cz<=md.z1){ found=gi; if(++cnt>1) return -1; } }
     return found; };
+  // Short Finnish note on each protein's role in photosynthesis → shown in the centre when it is selected.
+  const PROTEIN_DESC = {
+    'Photosystem II':'Hapettaa vettä valon avulla, vapauttaa hapen ja käynnistää elektroninsiirtoketjun.',
+    'Cytochrome b6f':'Siirtää elektroneja PSII:lta PSI:lle ja pumppaa protoneja tylakoidin sisään.',
+    'Photosystem I':'Virittää elektronit valolla ja pelkistää ferredoksiinin NADPH-tuotantoa varten.',
+    'NDH-1':'Syklinen elektroninkierto — pumppaa protoneja ja tasapainottaa ATP/NADPH-suhdetta.',
+    'ATP synthase':'Käyttää protonigradienttia ATP:n valmistamiseen.',
+    'Plastocyanin':'Kupariproteiini, joka kuljettaa elektroneja sytokromi b6f:ltä fotosysteemi I:lle.',
+    'Violaxanthin de-epoxidase':'Muuntaa violaksantiinin zeaksantiiniksi — suojaa liialliselta valolta (NPQ).',
+    'Ferredoxin':'Rauta-rikki-proteiini, joka kuljettaa PSI:n elektronit FNR:lle.',
+    'FNR':'Pelkistää NADP+:n NADPH:ksi ferredoksiinin elektroneilla.',
+    'RuBisCO':'Sitoo hiilidioksidin Calvinin kierrossa — hiilen sidonnan avainentsyymi.',
+    'PGR5':'Osallistuu sykliseen elektroninkiertoon fotosysteemi I:n ympärillä.',
+    'PGRL1':'Toimii PGR5:n kanssa syklisessä elektroninkierrossa.',
+    'STN7':'Kinaasi, joka säätää valonkeräyskompleksien jakautumista (state transitions).',
+    'PPH1':'Fosfataasi, joka purkaa LHCII:n fosforylaation — STN7:n vastapari.',
+    'Zeaxanthin epoxidase':'Palauttaa zeaksantiinin violaksantiiniksi hämärässä.' };
+  const showCenterProtein = mi => { const cp=document.getElementById('center-protein'); if(!cp) return; const md=mInfo[mi];
+    const sw=document.getElementById('center-protein-swatch'); if(sw) sw.style.background='rgb('+Math.round(gModelCol[mi*3]*255)+','+Math.round(gModelCol[mi*3+1]*255)+','+Math.round(gModelCol[mi*3+2]*255)+')';
+    const nm=document.getElementById('center-protein-name'); if(nm) nm.textContent=md.name;
+    const ds=document.getElementById('center-protein-desc'); if(ds) ds.textContent=PROTEIN_DESC[md.name]||'';
+    cp.style.display='flex'; };
+  const hideCenterProtein = () => { const cp=document.getElementById('center-protein'); if(cp) cp.style.display='none'; };
   const updateSelectionUI = () => {
-    if(!gSel.size){ selPanel.style.display='none'; if(updateCofInfo && etcSel<0) updateCofInfo(-1); return; }
-    let cof = -1;
+    if(!gSel.size){ selPanel.style.display='none'; hideCenterProtein(); if(updateCofInfo && etcSel<0) updateCofInfo(-1); return; }
+    let cof = -1, protein = false;
     if(gSel.size === 1){ const mi=[...gSel][0], md=mInfo[mi];
       selPanel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:3px">'+md.name+'</div>'
         + '<div style="font-size:12px;opacity:.8">'+mols[mi].na+' atomia</div>';
       cof = soleCofGroup(mi);
+      if(cof < 0 && PROTEIN_DESC[md.name]){ showCenterProtein(mi); protein = true; }
     } else { let h='<div style="font-weight:bold;font-size:14px;margin-bottom:5px">Valittu: '+gSel.size+'</div><div style="display:flex;flex-wrap:wrap;gap:5px">';
       for(const mi of gSel) h+='<span title="'+mInfo[mi].name+'" style="width:16px;height:16px;border-radius:5px;border:2px solid var(--brown);background:'+rgbSelCss(mi)+'"></span>';
       selPanel.innerHTML = h+'</div>'; }
-    // A lone cofactor molecule → the centre shows its 2D structural formula panel instead of the name card;
-    // don't clobber a cofactor already opened by double-click (etcSel).
+    // lone cofactor molecule → its 2D formula panel; a protein → its info card; else the plain name card
     if(updateCofInfo && (cof>=0 || etcSel<0)) updateCofInfo(cof);
-    selPanel.style.display = cof>=0 ? 'none' : 'block';
+    if(!protein) hideCenterProtein();
+    selPanel.style.display = (cof>=0 || protein) ? 'none' : 'block';
   };
   // full-viewport overlay canvas → selection brackets + the drag box
   const selOverlay = document.createElement('canvas');
@@ -4859,10 +4888,24 @@ async function run(){
   };
   {
     const eltable = document.createElement('div'); eltable.id = 'eltable';
-    const hdr = document.createElement('div'); hdr.className = 'elhdr';
-    const hlab = document.createElement('span'); hlab.textContent = 'spawn atom';
-    hdr.appendChild(hlab);   // 'clear' button removed
+    // segmented selector: what gets added — atoms / molecules / proteins
+    const seg = document.createElement('div'); seg.className = 'seg';
     const grid = document.createElement('div'); grid.className = 'elgrid';
+    const molPane = document.createElement('div'); molPane.className = 'segpane'; molPane.textContent = 'Molekyylit — tulossa';
+    const proPane = document.createElement('div'); proPane.className = 'segpane'; proPane.textContent = 'Proteiinit — tulossa';
+    molPane.style.display = proPane.style.display = 'none';
+    const segBtns = {};
+    for(const [id, labtxt] of [['atoms','Atomit'],['mol','Molekyylit'],['pro','Proteiinit']]){
+      const b = document.createElement('button'); b.className = 'segbtn'; b.textContent = labtxt;
+      b.onclick = () => { for(const k in segBtns) segBtns[k].classList.toggle('on', k === id);
+        grid.style.display = id === 'atoms' ? 'grid' : 'none';
+        molPane.style.display = id === 'mol' ? 'block' : 'none';
+        proPane.style.display = id === 'pro' ? 'block' : 'none';
+        if(id !== 'atoms' && spawnEl) setSpawnEl(spawnEl);   // leaving the atoms tab disarms atom spawning
+      };
+      segBtns[id] = b; seg.appendChild(b);
+    }
+    segBtns.atoms.classList.add('on');
     for(const sym of SPAWN_ELS){
       const el = ELEM[sym] || ELEM.FB;
       const b = document.createElement('button'); b.className = 'elbtn';
@@ -4873,7 +4916,7 @@ async function run(){
       b.onclick = () => setSpawnEl(sym);
       elBtns.set(sym, b); grid.appendChild(b);
     }
-    eltable.appendChild(hdr); eltable.appendChild(grid);
+    eltable.appendChild(seg); eltable.appendChild(grid); eltable.appendChild(molPane); eltable.appendChild(proPane);
     brStack.appendChild(eltable);
   }
 
@@ -4902,6 +4945,13 @@ async function run(){
       const nc = document.createElement('canvas'); nc.id = 'center-atom-nuc'; nc.width = nc.height = 140; nc.style.cssText = 'width:104px;height:104px;flex:0 0 auto';
       const tx = document.createElement('div'); tx.id = 'center-atom-text'; tx.style.cssText = 'text-align:left';
       ca.appendChild(nc); ca.appendChild(tx); center.appendChild(ca); }
+    // protein-info card — name + short photosynthesis role + a colour swatch (shown for a selected protein)
+    { const cp = document.createElement('div'); cp.id = 'center-protein';
+      cp.style.cssText = 'display:none;flex-direction:column;align-items:center;justify-content:center;gap:7px;width:100%;height:100%;box-sizing:border-box;text-align:center;font-family:"Courier New",monospace;color:var(--ink)';
+      cp.innerHTML = '<div id="center-protein-swatch" style="width:52px;height:52px;border-radius:14px;border:2.5px solid var(--brown);flex:0 0 auto"></div>'
+        + '<div id="center-protein-name" style="font-weight:bold;font-size:17px"></div>'
+        + '<div id="center-protein-desc" style="font-size:12px;line-height:1.5;max-width:90%;opacity:.9"></div>';
+      center.appendChild(cp); }
     const brs = document.getElementById('br-stack'); if(brs) brs.style.bottom = 'calc(25vh + 14px)';   // atom-detail panel above the console
     const zt = document.getElementById('zoomtips'); if(zt) zt.style.bottom = 'calc(25vh + 18px)';       // keep zoom buttons reachable
   }
