@@ -2116,6 +2116,74 @@ async function run(){
     }
   };
   const dragZoom = dz => zoomBy(dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005));  // middle-drag
+  /* ── RTS selection + movement ── LEFT click selects a molecule, LEFT drag boxes a group, and with a
+     selection a LEFT click on empty space orders them to glide there. Camera stays on middle (rotate),
+     right (pan), wheel (zoom). A full-viewport overlay draws the selection brackets + the drag box. */
+  const gSel = new Set();               // selected model indices
+  const gMoveTarget = new Map();        // mi → [tx,ty,tz] target gModelOff (glide destination)
+  let rtsBoxing=false, rtsBoxMoved=false, rtsDownModel=-1, rtsBoxSX=0, rtsBoxSY=0, rtsBoxCX=0, rtsBoxCY=0;
+  const rgbSelCss = mi => 'rgb('+Math.round(gModelCol[mi*3]*255)+','+Math.round(gModelCol[mi*3+1]*255)+','+Math.round(gModelCol[mi*3+2]*255)+')';
+  // subtle SC2-style bottom bar behind the docked panels
+  { const bar=document.createElement('div'); bar.style.cssText='position:fixed;left:0;right:0;bottom:0;height:104px;z-index:6;pointer-events:none;background:linear-gradient(to top,rgba(46,34,18,.5),rgba(46,34,18,0))'; document.body.appendChild(bar); }
+  // bottom-centre selection panel
+  const selPanel = document.createElement('div');
+  selPanel.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:12;display:none;min-width:210px;max-width:38vw;'
+    + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:8px 13px;'
+    + 'font-family:"Courier New",monospace;color:var(--ink);user-select:none;';
+  document.body.appendChild(selPanel);
+  const updateSelectionUI = () => {
+    if(!gSel.size){ selPanel.style.display='none'; return; }
+    selPanel.style.display='block';
+    if(gSel.size === 1){ const mi=[...gSel][0], md=mInfo[mi];
+      selPanel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:3px">'+md.name+'</div>'
+        + '<div style="font-size:12px;opacity:.8">'+mols[mi].na+' atomia</div>';
+    } else { let h='<div style="font-weight:bold;font-size:14px;margin-bottom:5px">Valittu: '+gSel.size+'</div><div style="display:flex;flex-wrap:wrap;gap:5px">';
+      for(const mi of gSel) h+='<span title="'+mInfo[mi].name+'" style="width:16px;height:16px;border-radius:5px;border:2px solid var(--brown);background:'+rgbSelCss(mi)+'"></span>';
+      selPanel.innerHTML = h+'</div>'; }
+  };
+  // full-viewport overlay canvas → selection brackets + the drag box
+  const selOverlay = document.createElement('canvas');
+  selOverlay.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:8;pointer-events:none';
+  document.body.appendChild(selOverlay);
+  const oc2 = selOverlay.getContext('2d');
+  const fitOverlay = () => { selOverlay.width = canvas.clientWidth; selOverlay.height = canvas.clientHeight; };
+  fitOverlay(); window.addEventListener('resize', fitOverlay);
+  const _vpSel = new BABYLON.Viewport(0,0,1,1);
+  const projModel = mi => { const md=mInfo[mi]; _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
+    return BABYLON.Vector3.Project(new BABYLON.Vector3(md.cx+gModelOff[mi*3], md.cy+gModelOff[mi*3+1], md.cz+gModelOff[mi*3+2]),
+      BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _vpSel); };
+  const modelScreenR = mi => { const md=mInfo[mi], wr=0.5*Math.hypot(md.x1-md.x0, md.y1-md.y0, md.z1-md.z0);
+    const d=Math.max(1, BABYLON.Vector3.Distance(cam.position, new BABYLON.Vector3(md.cx+gModelOff[mi*3], md.cy+gModelOff[mi*3+1], md.cz+gModelOff[mi*3+2])));
+    return Math.max(11, Math.min(140, wr * (canvas.clientHeight/(2*Math.tan(cam.fov/2))) / d)); };
+  const selectBox = (x0,y0,x1,y1, add) => { if(!add) gSel.clear();
+    const lx=Math.min(x0,x1), hx=Math.max(x0,x1), ly=Math.min(y0,y1), hy=Math.max(y0,y1);
+    for(let mi=0; mi<mols.length; mi++){ const s=projModel(mi);
+      if(s.z>=0 && s.z<=1 && s.x>=lx && s.x<=hx && s.y>=ly && s.y<=hy) gSel.add(mi); }
+    updateSelectionUI(); };
+  const moveSelectedTo = (px, py) => { if(!gSel.size) return;
+    let cx=0,cy=0,cz=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
+    const n=gSel.size; cx/=n; cy/=n; cz/=n;
+    const ray=scene.createPickingRay(px,py,BABYLON.Matrix.Identity(),cam), nrm=cam.getForwardRay(1).direction;
+    const denom=BABYLON.Vector3.Dot(ray.direction,nrm); if(Math.abs(denom)<1e-4) return;
+    const t=BABYLON.Vector3.Dot(new BABYLON.Vector3(cx,cy,cz).subtract(ray.origin),nrm)/denom;
+    const tg=ray.origin.add(ray.direction.scale(t)), dx=tg.x-cx, dy=tg.y-cy, dz=tg.z-cz;
+    for(const mi of gSel){ snapshotModel(mi); gMoveTarget.set(mi, [gModelOff[mi*3]+dx, gModelOff[mi*3+1]+dy, gModelOff[mi*3+2]+dz]); } };
+  // glide selected molecules toward their ordered destinations
+  scene.onBeforeRenderObservable.add(() => { if(!gMoveTarget.size) return;
+    for(const [mi, tg] of gMoveTarget){ const ox=gModelOff[mi*3], oy=gModelOff[mi*3+1], oz=gModelOff[mi*3+2];
+      const nx=ox+(tg[0]-ox)*0.16, ny=oy+(tg[1]-oy)*0.16, nz=oz+(tg[2]-oz)*0.16;
+      gModelOff[mi*3]=nx; gModelOff[mi*3+1]=ny; gModelOff[mi*3+2]=nz; rebuildModelXform(mi);
+      if((tg[0]-nx)*(tg[0]-nx)+(tg[1]-ny)*(tg[1]-ny)+(tg[2]-nz)*(tg[2]-nz) < 0.01) gMoveTarget.delete(mi); } });
+  // draw selection brackets + the drag box each frame
+  scene.registerAfterRender(() => {
+    oc2.clearRect(0,0,selOverlay.width, selOverlay.height);
+    for(const mi of gSel){ const s=projModel(mi); if(s.z<0||s.z>1) continue; const r=modelScreenR(mi), L=Math.min(r*0.45,14);
+      oc2.strokeStyle=rgbSelCss(mi); oc2.lineWidth=2.2;
+      for(const [sx,sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){ oc2.beginPath();
+        oc2.moveTo(s.x+sx*r, s.y+sy*r-sy*L); oc2.lineTo(s.x+sx*r, s.y+sy*r); oc2.lineTo(s.x+sx*r-sx*L, s.y+sy*r); oc2.stroke(); } }
+    if(rtsBoxing && rtsBoxMoved){ const lx=Math.min(rtsBoxSX,rtsBoxCX), ly=Math.min(rtsBoxSY,rtsBoxCY), w=Math.abs(rtsBoxCX-rtsBoxSX), h=Math.abs(rtsBoxCY-rtsBoxSY);
+      oc2.fillStyle='rgba(120,220,140,.12)'; oc2.fillRect(lx,ly,w,h); oc2.strokeStyle='rgba(140,235,160,.95)'; oc2.lineWidth=1.5; oc2.strokeRect(lx,ly,w,h); }
+  });
   scene.onPointerObservable.add(p => {
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
@@ -2128,17 +2196,14 @@ async function run(){
         return;
       }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;   // remember the down point for the tap-vs-drag test
-        if(!spawnEl){
-          const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; }   // grab a spawned atom → drag it
-          const mid = pickModelAtCursor();   // LEFT on a molecule → move THAT molecule in the camera plane
-          if(mid >= 0){ modelDrag = mid; snapshotModel(mid); dragging = true;
-            const mi = mInfo[mid];
-            modelDragDepth = (isFinite(_modelPickT) && _modelPickT > 0.5) ? _modelPickT
-              : BABYLON.Vector3.Distance(cam.position, new BABYLON.Vector3(mi.cx+gModelOff[mid*3], mi.cy+gModelOff[mid*3+1], mi.cz+gModelOff[mid*3+2]));
-            setCursor(GRABBING_CUR); return; }
-        } }
-      if(e.button === 2 || e.button === 0){   // RIGHT — or LEFT on empty background — grab-pans the view. Anchor the
-        panning = true; dragging = true;                                // depth to the EXACT point under the cursor so it stays glued there while panning.
+        if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it
+        if(!spawnEl){   // begin an RTS box / click-select (decided on release by the drag distance)
+          rtsDownModel = pickModelAtCursor(); rtsBoxing = true; rtsBoxMoved = false;
+          rtsBoxSX = scene.pointerX; rtsBoxSY = scene.pointerY; rtsBoxCX = rtsBoxSX; rtsBoxCY = rtsBoxSY; dragging = true; }
+        return;
+      }
+      if(e.button === 2){   // RIGHT = grab-pan the view. Anchor the depth to the EXACT point under the cursor.
+        panning = true; dragging = true;
         setCursor(GRABBING_CUR);   // closed-hand cursor while panning
         scene.stopAnimation(cam);   // a focus animation (from selecting an atom) would otherwise keep resetting the target → pan looked dead
         cam.inertialPanningX = cam.inertialPanningY = cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
@@ -2154,13 +2219,19 @@ async function run(){
       if(e.button === 1){ rotating = false; return; }   // middle-drag rotate ends (inertia carries on)
       if(e.button === 2){ panning = false; return; }
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = []; return; }   // finished moving a spawned atom
-      if(modelDrag >= 0){ modelDrag = -1; return; }   // finished moving a molecule
-      if(e.button === 0){
-        panning = false;   // left-drag grab-pan ends
+      if(e.button === 0 && rtsBoxing){ rtsBoxing = false;
+        if(rtsBoxMoved){ selectBox(rtsBoxSX, rtsBoxSY, rtsBoxCX, rtsBoxCY, e.shiftKey); }   // a drag → box-select the group
+        else if(rtsDownModel >= 0){   // a click on a molecule → select it (Shift adds / toggles)
+          if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
+          else { gSel.clear(); gSel.add(rtsDownModel); }
+          updateSelectionUI();
+        } else if(gSel.size){ moveSelectedTo(scene.pointerX, scene.pointerY); }   // click on empty WITH a selection → move order
+        else { gSel.clear(); updateSelectionUI(); }                                // click on empty, nothing selected
+        return;
+      }
+      if(e.button === 0 && spawnEl){   // armed element + tap on empty space → drop an atom
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
-        const isTap = mdx*mdx + mdy*mdy < 9;
-        if(isTap && spawnEl){ if(!pickAtom()) spawnAtPointer(); }   // armed element + tap on empty space → drop an atom
-        // A plain single click no longer selects — selection is double-click (see onDouble).
+        if(mdx*mdx + mdy*mdy < 9 && !pickAtom()) spawnAtPointer();
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
@@ -2169,19 +2240,12 @@ async function run(){
         cam.inertialBetaOffset  -= (e.movementY || 0) / cam.angularSensibilityY;
         showTips(); return;
       }
-      if(modelDrag >= 0){   // LEFT-drag → slide the grabbed molecule in the camera plane (world X/Y as seen)
-        const wpp = worldPerPixelAt(modelDragDepth);
-        const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
-        const dx = (e.movementX || 0) * wpp, dy = -(e.movementY || 0) * wpp;
-        gModelOff[modelDrag*3]   += right.x*dx + up.x*dy;
-        gModelOff[modelDrag*3+1] += right.y*dx + up.y*dy;
-        gModelOff[modelDrag*3+2] += right.z*dx + up.z*dy;
-        rebuildModelXform(modelDrag);
-        if(gSelModel === modelDrag){ const mi=mInfo[modelDrag];   // keep a selected model's gizmo node + label in sync
-          modelNode.position.set(mi.cx+gModelOff[modelDrag*3], mi.cy+gModelOff[modelDrag*3+1], mi.cz+gModelOff[modelDrag*3+2]); refreshModelLabel(); }
-        showTips(); return;
+      if(rtsBoxing){   // LEFT-drag → grow the selection box (the overlay draws it)
+        rtsBoxCX = scene.pointerX; rtsBoxCY = scene.pointerY;
+        if((rtsBoxCX-rtsBoxSX)*(rtsBoxCX-rtsBoxSX)+(rtsBoxCY-rtsBoxSY)*(rtsBoxCY-rtsBoxSY) > 25) rtsBoxMoved = true;   // enough motion → a box, not a click
+        return;
       }
-      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // left(empty)- or right-drag grab-pan
+      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // right-drag grab-pan
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
       // Plain hover (no button held) → grab hand over any molecule, default cursor over the background.
       // Done HERE (in the guaranteed-to-run pointer observer, keyed on the live button state) so the cursor
