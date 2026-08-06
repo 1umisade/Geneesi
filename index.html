@@ -2181,11 +2181,11 @@ async function run(){
   fitOverlay(); window.addEventListener('resize', fitOverlay);
   // Rotated arrow.png sprite shown while edge-panning (points in the pan direction). Above everything (z 30).
   const panCursor = document.createElement('img'); panCursor.src = './arrow.png'; panCursor.alt = '';
-  panCursor.style.cssText = 'position:fixed;left:0;top:0;width:44px;height:44px;z-index:30;pointer-events:none;display:none;transform-origin:50% 50%;will-change:transform';
+  panCursor.style.cssText = 'position:fixed;left:0;top:0;width:30px;height:30px;z-index:30;pointer-events:none;display:none;transform-origin:50% 50%;will-change:transform';
   document.body.appendChild(panCursor);
   let panCursorOn = false;
   const setPanCursor = (on, x, y, ex, ey) => {
-    if(on){ const ang = (Math.atan2(-ey, ex) - Math.PI) * 180/Math.PI;   // arrow.png points LEFT (angle pi) → rotate to the pan direction
+    if(on){ const ang = Math.atan2(-ey, ex) * 180/Math.PI;   // rotate arrow.png to point in the pan direction
       panCursor.style.left = x + 'px'; panCursor.style.top = y + 'px';
       panCursor.style.transform = 'translate(-50%,-50%) rotate(' + ang.toFixed(1) + 'deg)';
       if(!panCursorOn){ panCursor.style.display = 'block'; document.documentElement.classList.add('panning'); panCursorOn = true; } }
@@ -2222,15 +2222,16 @@ async function run(){
     const units=[...gSel];
     if(units.length===1){ const mi=units[0]; snapshotModel(mi);           // single unit → straight to the point
       gMoveTarget.set(mi, [wx - mInfo[mi].cx, wy - mInfo[mi].cy, FLOOR_Z - mInfo[mi].cz]); return; }
-    // spread the group into a RING around the target (not a rigid shift). Sized so the units sit side by
-    // side without overlapping, and each is slotted to the ring angle nearest its CURRENT bearing from the
-    // target → the group keeps its arrangement and the paths barely cross.
+    // PACK the group as tightly as possible AROUND the target (a filled cluster, not a ring): the units
+    // nearest the target take the inner slots and the rest spiral outward at a spacing that keeps them from
+    // overlapping, so everyone ends up as close to the target as they can fit.
     let avg=0; for(const mi of units) avg+=modelSize(mi); avg/=units.length;
-    const spacing = 0.6*avg + 8, R = Math.max(spacing, spacing/(2*Math.sin(Math.PI/units.length)));
-    const order = units.map(mi => ({ mi, a:Math.atan2((mInfo[mi].cy+gModelOff[mi*3+1])-wy, (mInfo[mi].cx+gModelOff[mi*3])-wx) })).sort((p,q)=>p.a-q.a);
-    const base = order[0].a, step = 2*Math.PI/order.length;
-    for(let k=0;k<order.length;k++){ const mi=order[k].mi; snapshotModel(mi);
-      const th=base+k*step, tx=wx+Math.cos(th)*R, ty=wy+Math.sin(th)*R;
+    const spacing = 0.55*avg + 6, GA = Math.PI*(3-Math.sqrt(5));   // golden angle → even sunflower packing
+    units.sort((a,b) => Math.hypot(mInfo[a].cx+gModelOff[a*3]-wx, mInfo[a].cy+gModelOff[a*3+1]-wy)
+                      - Math.hypot(mInfo[b].cx+gModelOff[b*3]-wx, mInfo[b].cy+gModelOff[b*3+1]-wy));   // closest first → fills the centre
+    for(let k=0;k<units.length;k++){ const mi=units[k]; snapshotModel(mi);
+      const rr = spacing*0.62*Math.sqrt(k), th = k*GA;   // r proportional to sqrt(k) → uniform-density disc centred ON the target
+      const tx = wx + Math.cos(th)*rr, ty = wy + Math.sin(th)*rr;
       gMoveTarget.set(mi, [tx - mInfo[mi].cx, ty - mInfo[mi].cy, FLOOR_Z - mInfo[mi].cz]); } };
   // glide selected molecules toward their ordered destinations
   scene.onBeforeRenderObservable.add(() => {
@@ -4331,18 +4332,10 @@ async function run(){
   { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200, sideOrientation:BABYLON.Mesh.DOUBLESIDE }, scene);
     floor.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, FLOOR_Z); floor.isPickable=false; floor.renderingGroupId=0;
     const fmat = new BABYLON.StandardMaterial('rtsFloorMat', scene);
-    // glassy sheet - a view-angle (Fresnel) opacity so the pane is near-invisible face-on (colours behind it
-    // pass through undistorted) yet catches a pale-sage sheen toward grazing angles, so it still reads as a surface.
-    // DOUBLESIDE + twoSidedLighting give each face a correct outward normal, so the Fresnel is not inverted when
-    // the camera views the plane's back (which was making the whole sheet opaque).
+    // flat, 95% transparent light-green (sage) sheet - does not distort the colours behind it
     fmat.diffuseColor = new BABYLON.Color3(0,0,0);
-    fmat.emissiveColor = new BABYLON.Color3(0.82,0.90,0.72);   // pale sage tint (near neutral - a Solukko sage hint)
-    fmat.disableLighting = true; fmat.twoSidedLighting = true; fmat.alpha = 1.0;   // real opacity comes from the Fresnel below
-    const fop = new BABYLON.FresnelParameters();
-    fop.leftColor = new BABYLON.Color3(0.55,0.55,0.55);        // grazing edges - a soft sheen
-    fop.rightColor = new BABYLON.Color3(0,0,0);                // face-on - transparent (no colour distortion)
-    fop.bias = 0.05; fop.power = 2.4;   // face-on opacity (dev "taso α" slider tunes this 0..1)
-    fmat.opacityFresnelParameters = fop;
+    fmat.emissiveColor = new BABYLON.Color3(0.64,0.78,0.51);
+    fmat.disableLighting = true; fmat.alpha = 0.05;            // 95% transparent (dev "taso alpha" slider tunes it)
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
   const undoModel = () => {
@@ -4405,9 +4398,9 @@ async function run(){
   });
   // ── Dev panel: a forward reveal/culling CONE size slider + a live camera-coordinate readout. ──
   const devPanel = document.createElement('div');
-  devPanel.style.cssText = 'position:fixed;left:16px;bottom:78px;z-index:12;display:none;flex-direction:column;gap:7px;'
+  devPanel.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:22;display:none;flex-direction:column;gap:7px;'
     + 'font:11px ui-monospace,monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);'
-    + 'border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 11px;user-select:none;min-width:196px;';
+    + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;max-height:86vh;overflow-y:auto;';
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
@@ -4483,7 +4476,7 @@ async function run(){
   const fpSld = document.createElement('input'); fpSld.type='range'; fpSld.min='0'; fpSld.max='100'; fpSld.value='5'; fpSld.style.cssText='width:100%;cursor:pointer;';
   const fpValEl = fpRow.querySelector('#dev-fp-val');
   fpSld.oninput = () => { const o = +fpSld.value/100; fpValEl.textContent = o.toFixed(2);
-    const fm = scene.getMaterialByName('rtsFloorMat'); if(fm && fm.opacityFresnelParameters) fm.opacityFresnelParameters.bias = o; };
+    const fm = scene.getMaterialByName('rtsFloorMat'); if(fm) fm.alpha = o; };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
   const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld];
   const devDefaults = devSliders.map(s => s.value);
@@ -4619,8 +4612,7 @@ async function run(){
       cofListPanel.appendChild(row);
     }
   }
-  cofListPanel.style.display = gEtc ? 'flex' : 'none';   // ETC on by default → show the cofactor-type list at startup
-  document.body.appendChild(cofListPanel);
+  cofListPanel.style.display = 'none';   // cofactor-type list removed from the UI (kept as a detached element so its togglers stay safe)
   // Ray vs the cofactor groups' bounding spheres → nearest group index, or −1.
   const pickEtcGroup = () => {
     if(!etcGroups.length) return -1;   // cofactors are pickable in any mode (not only ETC-ketju) → far selection works
@@ -4869,9 +4861,7 @@ async function run(){
     const eltable = document.createElement('div'); eltable.id = 'eltable';
     const hdr = document.createElement('div'); hdr.className = 'elhdr';
     const hlab = document.createElement('span'); hlab.textContent = 'spawn atom';
-    const clr = document.createElement('button'); clr.className = 'elclear'; clr.textContent = 'clear';
-    clr.onclick = clearSpawned;
-    hdr.appendChild(hlab); hdr.appendChild(clr);
+    hdr.appendChild(hlab);   // 'clear' button removed
     const grid = document.createElement('div'); grid.className = 'elgrid';
     for(const sym of SPAWN_ELS){
       const el = ELEM[sym] || ELEM.FB;
@@ -4906,6 +4896,12 @@ async function run(){
     dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none', background:'transparent', border:'none', padding:'0', width:'100%', height:'100%' });
     dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%', background:'transparent', border:'none', boxShadow:'none' });
     dock(document.getElementById('eltable'),     right,  { margin:'0', background:'transparent', border:'none', boxShadow:'none' });
+    // atom-info card — shown in the centre module when a single ATOM is selected
+    { const ca = document.createElement('div'); ca.id = 'center-atom';
+      ca.style.cssText = 'display:none;align-items:center;justify-content:center;gap:16px;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink)';
+      const nc = document.createElement('canvas'); nc.id = 'center-atom-nuc'; nc.width = nc.height = 140; nc.style.cssText = 'width:104px;height:104px;flex:0 0 auto';
+      const tx = document.createElement('div'); tx.id = 'center-atom-text'; tx.style.cssText = 'text-align:left';
+      ca.appendChild(nc); ca.appendChild(tx); center.appendChild(ca); }
     const brs = document.getElementById('br-stack'); if(brs) brs.style.bottom = 'calc(25vh + 14px)';   // atom-detail panel above the console
     const zt = document.getElementById('zoomtips'); if(zt) zt.style.bottom = 'calc(25vh + 18px)';       // keep zoom buttons reachable
   }
@@ -5197,10 +5193,13 @@ async function run(){
   document.body.appendChild(cofInfoPanel);
   // Relocate the cofactor detail into the console CENTRE module, stripped to just the title + 2D formula.
   { const c = document.getElementById('sc2-center');
-    if(c){ cofInfoPanel.style.cssText = 'display:none;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink);';
-      for(const el of [cofCanvas, cofAtoms, cofMass, cofGroups, cofLink]) el.style.display = 'none';   // hide everything except the 2D formula
-      cofTitle.style.cssText = 'font-weight:bold;font-size:14px;margin:0 0 5px;flex:0 0 auto';
-      cofFormula.style.cssText = 'flex:1 1 auto;min-height:0;width:100%;overflow:hidden;background:transparent;border:none';
+    if(c){ cofInfoPanel.style.cssText = 'display:none;flex-direction:column;align-items:stretch;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink);';
+      for(const el of [cofCanvas, cofAtoms, cofMass, cofLink]) el.style.display = 'none';   // hide the 3D render, atom count, mass, link
+      cofTitle.style.cssText = 'font-weight:bold;font-size:14px;margin:0 0 5px;flex:0 0 auto;text-align:center';
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;flex:1 1 auto;min-height:0;width:100%;gap:14px;align-items:center';
+      cofFormula.style.cssText = 'flex:1 1 auto;min-width:0;height:100%;overflow:hidden;background:transparent;border:none';
+      cofGroups.style.cssText = 'flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.55;text-align:left;overflow:auto;max-height:100%';   // functional-group list beside the formula
+      row.appendChild(cofFormula); row.appendChild(cofGroups); cofInfoPanel.appendChild(row);
       c.appendChild(cofInfoPanel); } }
 
   // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
@@ -5372,6 +5371,8 @@ async function run(){
       : COF_CID[g.type]
       ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500" alt="rakennekaava" style="max-width:100%;max-height:100%;display:block;background:#fff;border-radius:8px">'
       : buildStructuralFormula(g);
+    { const grps = ETC_GROUPS[g.type] || [];   // functional-group list beside the formula
+      cofGroups.innerHTML = grps.length ? '<b>Funktionaaliset<br>ryhmät:</b><br>' + grps.map(s => '• ' + s).join('<br>') : ''; }
     cofInfoPanel.style.display='flex';
   };
 
@@ -5482,11 +5483,25 @@ async function run(){
     draw2DNucleus(nucViz, e);       // flat 2D nucleus → the footer canvas
   };
 
+  // Atom-info card in the centre console module (element name, 2D nucleus, proton/neutron counts).
+  const showCenterAtom = atom => {
+    const ca = document.getElementById('center-atom'); if(!ca || !atom) return;
+    const e = atom.e, Z = info(e).z, A = info(e).n, N = Math.max(0, A - Z);
+    draw2DNucleus(document.getElementById('center-atom-nuc'), e);
+    document.getElementById('center-atom-text').innerHTML =
+      '<div style="font-weight:bold;font-size:19px;margin-bottom:4px">'+elemNameFi(e)+'</div>'
+      + '<div style="font-size:13px;color:#c0403a;font-weight:bold">'+Z+' protonia</div>'
+      + (N>0 ? '<div style="font-size:13px;color:#6a6a5a;font-weight:bold">'+N+' neutronia</div>' : '')
+      + '<div style="font-size:12px;opacity:.75;margin-top:3px">'+A+' nukleonia</div>';
+    ca.style.display = 'flex'; selPanel.style.display = 'none'; if(updateCofInfo) updateCofInfo(-1);
+  };
+  const hideCenterAtom = () => { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; };
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
   const clearAtomSel = () => {
     clearTimeout(flashTimer); flashTimer = null;   // stop a running flash so it can't re-show the outline
     selCenter.set(1e6,1e6,1e6); selOut.setEnabled(false); selNuc.setEnabled(false); selMask.setEnabled(false);
     hideSelElec(); orbitLocked = false; orbitCenter.set(1e6,1e6,1e6); selAtom = null; gFocusId = -1; hideConfig();
+    hideCenterAtom(); if(gSel.size) updateSelectionUI();   // restore the RTS selection panel if one is active
   };
   // Clear the current MODEL selection (hide the UI gizmo panel, drop the sage halo + label).
   const deselectModel = () => { gSelModel = -1; modelGizmo.attachedNode = null; modelRotGizmo.attachedNode = null;
@@ -5506,6 +5521,7 @@ async function run(){
     cam.inertialPanningX = cam.inertialPanningY = 0;
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
     focusCameraOn(a.center);   // one-shot swivel to centre the picked atom
+    showCenterAtom(a);         // atom info → the centre console module
   };
   // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
   // Double-click → select the nearest complex for moving (gizmo + live coord label).
@@ -5594,8 +5610,8 @@ async function run(){
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const w = (10.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // 10*NUCLEON_R = 5 proton diameters, in world units
     const lw = Math.max(1.0, Math.min(14.0, w));
-    eff.setFloat('lineW', lw);                                   // whole-assembly outer silhouette (looks good as-is)
-    eff.setFloat('cofW', Math.max(1.0, Math.min(3.0, lw*0.22)));  // cofactor outline - much thinner, the cofactors are tiny
+    eff.setFloat('lineW', lw);          // whole-assembly outer silhouette (zoom-scaled, looks good)
+    eff.setFloat('cofW', 1.5);          // cofactor outline - a thin fixed hairline (the cofactors are tiny)
     eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
