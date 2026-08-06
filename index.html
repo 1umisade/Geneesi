@@ -4358,7 +4358,7 @@ async function run(){
   /* ── RTS floor ── flatten every model onto ONE plane (perpendicular to the membrane, at the models'
      level) and lay a 90%-transparent white sheet there, so the scene reads as a flat RTS battlefield. */
   for(let mi=0; mi<mols.length; mi++){ gModelOff[mi*3+2] = FLOOR_Z - mInfo[mi].cz; rebuildModelXform(mi); }   // all model centres → Z = FLOOR_Z (declared with the RTS state above)
-  { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200, sideOrientation:BABYLON.Mesh.DOUBLESIDE }, scene);
+  { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200 }, scene);
     floor.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, FLOOR_Z); floor.isPickable=false; floor.renderingGroupId=0;
     const fmat = new BABYLON.StandardMaterial('rtsFloorMat', scene);
     // flat, 95% transparent light-green (sage) sheet - does not distort the colours behind it
@@ -5660,8 +5660,9 @@ async function run(){
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const w = (10.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // 10*NUCLEON_R = 5 proton diameters, in world units
     const lw = Math.max(1.0, Math.min(14.0, w));
-    eff.setFloat('lineW', lw);          // whole-assembly outer silhouette (zoom-scaled, looks good)
-    eff.setFloat('cofW', 1.5);          // cofactor outline - a thin fixed hairline (the cofactors are tiny)
+    eff.setFloat('lineW', lw);          // whole-assembly outer silhouette (5 proton-diameters, zoom-scaled)
+    const cofw = (4.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // cofactor outline = 2 proton-diameters, scales with zoom like the proton outline
+    eff.setFloat('cofW', Math.max(0.6, Math.min(6.0, cofw)));
     eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
