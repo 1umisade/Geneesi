@@ -2190,8 +2190,27 @@ async function run(){
     'STN7':'Kinaasi, joka säätää valonkeräyskompleksien jakautumista (state transitions).',
     'PPH1':'Fosfataasi, joka purkaa LHCII:n fosforylaation — STN7:n vastapari.',
     'Zeaxanthin epoxidase':'Palauttaa zeaksantiinin violaksantiiniksi hämärässä.' };
+  // A 2D scatter of the model's atoms (projected X-Y, z-shaded in the model colour) → a recognisable
+  // image of the protein's shape, drawn straight from its atom coordinates.
+  const drawProteinImage = (canvas, mi) => {
+    const ctx=canvas.getContext('2d'), W=canvas.width, H=canvas.height; ctx.clearRect(0,0,W,H);
+    const m=mols[mi]; if(!m || !m.na) return;
+    let miX=1e9,maX=-1e9,miY=1e9,maY=-1e9,miZ=1e9,maZ=-1e9;
+    for(let k=0;k<m.na;k++){ const x=m.x[k],y=m.y[k],z=m.z[k];
+      if(x<miX)miX=x; if(x>maX)maX=x; if(y<miY)miY=y; if(y>maY)maY=y; if(z<miZ)miZ=z; if(z>maZ)maZ=z; }
+    const pad=6, s=Math.min((W-2*pad)/Math.max(1,maX-miX),(H-2*pad)/Math.max(1,maY-miY));
+    const ox=(W-(maX-miX)*s)/2, oy=(H-(maY-miY)*s)/2, r=Math.max(1.0, s*1.1), dz=Math.max(1,maZ-miZ);
+    const cr=gModelCol[mi*3], cg=gModelCol[mi*3+1], cb=gModelCol[mi*3+2];
+    const stride=Math.max(1, Math.floor(m.na/12000)), idx=[];   // cap the dot count for big complexes
+    for(let k=0;k<m.na;k+=stride) idx.push(k);
+    idx.sort((a,b)=>m.z[a]-m.z[b]);                              // back-to-front for a little depth
+    for(const k of idx){ const px=ox+(m.x[k]-miX)*s, py=H-(oy+(m.y[k]-miY)*s);
+      const sh=0.5+0.5*((m.z[k]-miZ)/dz);
+      ctx.fillStyle='rgb('+Math.round(cr*255*sh)+','+Math.round(cg*255*sh)+','+Math.round(cb*255*sh)+')';
+      ctx.beginPath(); ctx.arc(px,py,r,0,6.2832); ctx.fill(); }
+  };
   const showCenterProtein = mi => { const cp=document.getElementById('center-protein'); if(!cp) return; const md=mInfo[mi];
-    const sw=document.getElementById('center-protein-swatch'); if(sw) sw.style.background='rgb('+Math.round(gModelCol[mi*3]*255)+','+Math.round(gModelCol[mi*3+1]*255)+','+Math.round(gModelCol[mi*3+2]*255)+')';
+    const img=document.getElementById('center-protein-img'); if(img) drawProteinImage(img, mi);
     const nm=document.getElementById('center-protein-name'); if(nm) nm.textContent=md.name;
     const ds=document.getElementById('center-protein-desc'); if(ds) ds.textContent=PROTEIN_DESC[md.name]||'';
     cp.style.display='flex'; };
@@ -4962,7 +4981,7 @@ async function run(){
     // protein-info card — name + short photosynthesis role + a colour swatch (shown for a selected protein)
     { const cp = document.createElement('div'); cp.id = 'center-protein';
       cp.style.cssText = 'display:none;flex-direction:column;align-items:center;justify-content:center;gap:7px;width:100%;height:100%;box-sizing:border-box;text-align:center;font-family:"Courier New",monospace;color:var(--ink)';
-      cp.innerHTML = '<div id="center-protein-swatch" style="width:52px;height:52px;border-radius:14px;border:2.5px solid var(--brown);flex:0 0 auto"></div>'
+      cp.innerHTML = '<canvas id="center-protein-img" width="220" height="150" style="width:150px;height:102px;border-radius:10px;border:2px solid var(--brown);background:#0e2416;flex:0 0 auto"></canvas>'
         + '<div id="center-protein-name" style="font-weight:bold;font-size:17px"></div>'
         + '<div id="center-protein-desc" style="font-size:12px;line-height:1.5;max-width:90%;opacity:.9"></div>';
       center.appendChild(cp); }
