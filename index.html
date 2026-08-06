@@ -4274,17 +4274,27 @@ async function run(){
       const _mxC = new BABYLON.Matrix(), _mxQ = new BABYLON.Matrix();
       const _chlPos = new BABYLON.Vector3(), _qPos = new BABYLON.Vector3(), _pos = mgRest.clone();
       const JUMP_DIST = 30;   // Å centre-to-centre within which the electron transfers to the quinone
+      const CHARGE_DUR = 0.7; // the quinone must stay this long before the electron commits to the jump
+      let onQuinone = false, chargeT = 0;
       scene.onBeforeRenderObservable.add(() => {
+        const dt = Math.min(50, eng.getDeltaTime())/1000;
         BABYLON.Matrix.FromArrayToRef(gModelXform, chlI*16, _mxC);
         BABYLON.Vector3.TransformCoordinatesToRef(mgRest, _mxC, _chlPos);   // live Chl Mg world position
-        let target = _chlPos;
+        let near = false;
         if(pqnRest){ BABYLON.Matrix.FromArrayToRef(gModelXform, pqnI*16, _mxQ);
           BABYLON.Vector3.TransformCoordinatesToRef(pqnRest, _mxQ, _qPos);   // live quinone world position
-          if(BABYLON.Vector3.Distance(_chlPos, _qPos) < JUMP_DIST) target = _qPos;
-        }
+          near = BABYLON.Vector3.Distance(_chlPos, _qPos) < JUMP_DIST; }
+        let target = _chlPos, shaking = false;
+        if(onQuinone){ if(near) target = _qPos; else { onQuinone = false; chargeT = 0; } }   // quinone drifted away → electron returns to the Chl
+        else if(near){ chargeT += dt; shaking = true;                                        // quinone close → WIND UP (shake) on the Chl first
+          if(chargeT >= CHARGE_DUR){ onQuinone = true; chargeT = 0; } }                      // stayed long enough → commit the transfer
+        else chargeT = 0;                                                                    // quinone left the vicinity too soon → abort, no transfer
         BABYLON.Vector3.LerpToRef(_pos, target, 0.22, _pos);   // ease toward home → the switch reads as a jump
-        elec.position.copyFrom(_pos); corona.position.copyFrom(_pos);
-        gLanternPos.copyFrom(_pos);   // publish for the lantern spotlight
+        let ex=_pos.x, ey=_pos.y, ez=_pos.z;
+        if(shaking){ const amp = 0.4 + 1.8*(chargeT/CHARGE_DUR), ph = performance.now()*0.06;   // the shake grows as it nears the jump
+          ex += Math.sin(ph*1.9)*amp; ey += Math.cos(ph*2.6)*amp; ez += Math.sin(ph*3.3)*amp*0.5; }
+        elec.position.set(ex, ey, ez); corona.position.set(ex, ey, ez);
+        gLanternPos.set(ex, ey, ez);   // publish for the lantern spotlight
       });
     }
   }
