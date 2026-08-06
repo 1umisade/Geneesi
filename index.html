@@ -537,10 +537,10 @@ void main(void){
 #ifdef LIPTILE
   base += tileOff;
 #endif
-#ifdef MODELMOVE
-  base = (modelXform[int(modelId + 0.5)] * vec4(base, 1.0)).xyz;
-#endif
-  vWCen = base;
+  // Shake/boil are computed on the ORIGINAL (pre-model-transform) centre, then modelXform is applied to
+  // BOTH the shaken point and the centre — exactly the order the orb shader uses. Doing modelXform first
+  // (as before) made the nuclei shake with the flattened Z while the orbitals shook with the original Z,
+  // so they waved out of phase and drifted apart. Now the nuclei ride WITH their orbitals.
   vec3 wc = shake(base);
   if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
     float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
@@ -556,6 +556,11 @@ void main(void){
   vMemAnc = memAnc;      // per-instance lipid anchor
 #endif
 #endif
+#ifdef MODELMOVE
+  wc   = (modelXform[int(modelId + 0.5)] * vec4(wc,   1.0)).xyz;
+  base = (modelXform[int(modelId + 0.5)] * vec4(base, 1.0)).xyz;
+#endif
+  vWCen = base;
 #ifdef MACROMOVE
   wc = (macroXform * vec4(wc - macroCenter, 1.0)).xyz;
 #endif
@@ -575,7 +580,9 @@ void main(void){
   vGid = groupId;
 #endif
 #ifdef MODELMOVE
-  if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];
+#ifndef NUCLEON
+  if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];   // colour-by-model tints atoms — but NEVER the nuclei (protons red / neutrons grey always)
+#endif
   vMid = modelId;
 #endif
   float rad = radius;
@@ -2951,12 +2958,12 @@ async function run(){
     mat.alpha = 0.999; mat.alphaMode = BABYLON.Constants.ALPHA_COMBINE; mat.forceDepthWrite = true;
     return mat;
   };
-  const impostorMat = (name, radius, isShell, protonOutline, movable) => {
+  const impostorMat = (name, radius, isShell, protonOutline, movable, nucleon) => {
     const opts = {
       attributes: ['position','instanceColor','world0','world1','world2','world3'].concat(movable ? ['modelId'] : []),
       uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelXform','modelCol','colorMode'] : [])
     };
-    if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE'];   // follows the PSII gizmo AND its own per-model drag
+    if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE'].concat(nucleon ? ['#define NUCLEON'] : []);   // follows the PSII gizmo AND its own per-model drag; NUCLEON keeps protons red / neutrons grey (never model-tinted)
       opts.uniforms = opts.uniforms.concat(['selModel','selCol']); }
     else opts.uniforms = opts.uniforms.concat(['selModel','selCol']);
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
@@ -2995,7 +3002,7 @@ async function run(){
      every cell (nucleon colour, orbital ocol, bond bcol). */
 
   // Shared materials (one of each kind for all cells).
-  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0, true);   // isShell=0; movable (follows PSII drag). Spawn nuclei use a separate non-movable material.
+  const nucMatG = impostorMat('nucG', NUCLEON_R, 0.0, 0.0, true, true);   // isShell=0; movable (follows PSII drag); nucleon → never model-tinted. Spawn nuclei use a separate non-movable material.
   const spawnNucMat = impostorMat('spawnNuc', NUCLEON_R, 0.0, 0.0, false);   // spawned-atom nuclei — never move with PSII
   spawnNucMat.setFloat('depthBias', 2.0); spawnNucMat.disableDepthWrite = true; spawnNucMat.setFloat('bubbleR', 1e9); spawnNucMat.setFloat('coneCos', -1.0);
   spawnNucMat.onBindObservable.add(() => { const eff=spawnNucMat.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
@@ -4128,6 +4135,10 @@ async function run(){
       if(foc >= 0 && !lobeMatch(lo[i])) continue;   // focus filter (per orbital; valence → lone pairs)
       copyLobe(lb, i*16, 1.0);
     }
+    // The lobes were matched in the atom's BAKED frame — shift them to where the atom actually renders
+    // (gModelXform flatten/drag + PSII gizmo) so the outline sits ON the orbitals, not at the pre-flatten spot.
+    if(atom.world){ const ddx=atom.world.x-atom.center.x, ddy=atom.world.y-atom.center.y, ddz=atom.world.z-atom.center.z;
+      if(ddx||ddy||ddz) for(let k=0;k<n;k++){ const o=k*16; buf[o+12]+=ddx; buf[o+13]+=ddy; buf[o+14]+=ddz; } }
     return n;
   };
 
@@ -4210,7 +4221,7 @@ async function run(){
   const selNucM=new Float32Array(80*16), selNucC=new Float32Array(80*4);
   let selNucA=0; const selNucCtr=new BABYLON.Vector3();   // for the per-frame tumble of the selected nucleus
   const setSelNuc = atom => {
-    const e=atom.e, A=info(e).n, Z=info(e).z, cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    const c=atom.world||atom.center, e=atom.e, A=info(e).n, Z=info(e).z, cx=c.x, cy=c.y, cz=c.z;   // build the highlight nucleus where the atom RENDERS (world), not at its baked position
     selNucA=A; selNucCtr.set(cx,cy,cz);
     for(let i=0;i<A;i++){ const o=i*16;
       selNucM[o]=1;selNucM[o+5]=1;selNucM[o+10]=1;selNucM[o+15]=1;
@@ -4835,12 +4846,13 @@ async function run(){
     let hox = ray.origin.x, hoy = ray.origin.y, hoz = ray.origin.z;
     const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
     const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
-    // Ray vs one lobe (unit sphere r=0.5 in its local space). Returns the hit distance or -1.
-    const hitLobe = (buf, off) => {
+    // Ray vs one lobe (unit sphere r=0.5 in its local space). ro/rd = the ray in the lobe's BAKED frame
+    // (each model's atoms are baked in their own frame → the ray is pre-transformed per model). Returns t or -1.
+    const hitLobe = (buf, off, ro, rd) => {
       BABYLON.Matrix.FromArrayToRef(buf, off, _pkM);
       _pkM.invertToRef(_pkInv);
-      BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(hox, hoy, hoz, _pkInv, _pkLo);
-      BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, _pkLd);
+      BABYLON.Vector3.TransformCoordinatesToRef(ro, _pkInv, _pkLo);
+      BABYLON.Vector3.TransformNormalToRef(rd, _pkInv, _pkLd);
       const A2 = _pkLd.x*_pkLd.x + _pkLd.y*_pkLd.y + _pkLd.z*_pkLd.z;
       const B2 = 2*(_pkLo.x*_pkLd.x + _pkLo.y*_pkLd.y + _pkLo.z*_pkLd.z);
       const C2 = _pkLo.x*_pkLo.x + _pkLo.y*_pkLo.y + _pkLo.z*_pkLo.z - 0.25;
@@ -4852,33 +4864,48 @@ async function run(){
       return t;
     };
     const cp = cam.position;                                     // only atoms whose orbitals actually render (inside the bubble) are pickable
-    // Shift the ray + camera into PSII-local space so the protein's baked (un-offset) coords test right.
+    // Macro-undo (the PSII gizmo is a pure translation by gPsiiOffset): the ray now lives in "gModelXform*base" space.
     hox = ox - gPsiiOffset.x; hoy = oy - gPsiiOffset.y; hoz = oz - gPsiiOffset.z;
     const pcx = cp.x - gPsiiOffset.x, pcy = cp.y - gPsiiOffset.y, pcz = cp.z - gPsiiOffset.z;
+    // Every model's atoms are BAKED in its own original frame but RENDER through gModelXform (flattened to
+    // the floor + any drag/rotate). Pre-transform the ray + camera into each model's baked frame so a click
+    // tests where the atom actually is on screen — without this, models whose original Z ≠ floor are unpickable.
+    const nMdl = mols.length, mLo = [], mLd = [], mCam = [];
+    for(let mi=0; mi<nMdl; mi++){
+      BABYLON.Matrix.FromArrayToRef(gModelXform, mi*16, _pkM); _pkM.invertToRef(_pkInv);
+      const lo = new BABYLON.Vector3(), ld = new BABYLON.Vector3(), lc = new BABYLON.Vector3();
+      BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(hox, hoy, hoz, _pkInv, lo);
+      BABYLON.Vector3.TransformNormalFromFloatsToRef(dx, dy, dz, _pkInv, ld);
+      BABYLON.Vector3.TransformCoordinatesFromFloatsToRef(pcx, pcy, pcz, _pkInv, lc);
+      mLo[mi] = lo; mLd[mi] = ld; mCam[mi] = lc;
+    }
+    const dfl = mLo.length ? { lo:mLo[0], ld:mLd[0], lc:mCam[0] } : null;
     let bestT = Infinity, bE = -1, bA = -1;
     for(let e=0;e<nEl;e++){
       const hr = Math.max(orbExtent(e), 2.6), vr2 = hr*hr, sb = sphBuf[e], cnt = atomCount[e];   // reach covers σ-lobe tips too
       const oc = orbCount(e), ob = orbBuf[e], cb = cylBuf[e], cs = cylAtStart[e], cl = cylAtList[e];
       const bub2 = (BUBBLE_R + hr) * (BUBBLE_R + hr);
       for(let a=0;a<cnt;a++){
-        const cxp = sb[a*16+12]-pcx, cyp = sb[a*16+13]-pcy, czp = sb[a*16+14]-pcz;
+        const bx = sb[a*16+12], by = sb[a*16+13], bz = sb[a*16+14];
+        const mi = modelOf(bx, by, bz), lo = mLo[mi] || dfl.lo, ld = mLd[mi] || dfl.ld, lc = mCam[mi] || dfl.lc;   // this atom's model-local ray
+        const cxp = bx-lc.x, cyp = by-lc.y, czp = bz-lc.z;
         if(cxp*cxp + cyp*cyp + czp*czp > bub2) continue;         // atom outside the reveal bubble → its orbitals aren't drawn
-        const px = sb[a*16+12]-hox, py = sb[a*16+13]-hoy, pz = sb[a*16+14]-hoz;
-        const tca = px*dx + py*dy + pz*dz;
+        const px = bx-lo.x, py = by-lo.y, pz = bz-lo.z;
+        const tca = px*ld.x + py*ld.y + pz*ld.z;
         if(tca <= 0) continue;                                   // atom behind the camera
         const d2 = px*px+py*py+pz*pz - tca*tca;
         if(d2 > vr2) continue;                                   // ray misses the atom's bounding sphere
         if(tca - Math.sqrt(vr2 - d2) >= bestT) continue;         // can't beat the current nearest hit
-        // narrow phase: intersect the atom's orbital lobes AND its bonding σ/knob/π lobes
+        // narrow phase: intersect the atom's orbital lobes AND its bonding σ/knob/π lobes (ray already in this model's frame)
         const base = a*oc*16;
         for(let i=0;i<oc;i++){
           const bo = base + i*16;
           if(ob[bo]*ob[bo] + ob[bo+1]*ob[bo+1] + ob[bo+2]*ob[bo+2] < 1e-9) continue;   // skipped (bond-doubled) lobe → zero matrix
-          const t = hitLobe(ob, bo);
+          const t = hitLobe(ob, bo, lo, ld);
           if(t > 0 && t < bestT){ bestT = t; bE = e; bA = a; }   // t is the world-space ray distance
         }
         for(let p=cs[a]; p<cs[a+1]; p++){                        // this atom's bonding lobes (so clicking a σ-lobe selects it)
-          const t = hitLobe(cb, cl[p]*16);
+          const t = hitLobe(cb, cl[p]*16, lo, ld);
           if(t > 0 && t < bestT){ bestT = t; bE = e; bA = a; }
         }
       }
@@ -4896,12 +4923,15 @@ async function run(){
         const px=chl.x[k]+chl.ox-ox, py=chl.y[k]+chl.oy-oy, pz=chl.z[k]+chl.oz-oz, tca=px*dx+py*dy+pz*dz;
         if(tca<=0) continue; const d2=px*px+py*py+pz*pz-tca*tca; if(d2>r*r) continue;
         const t=tca-Math.sqrt(r*r-d2); if(t>0 && t<bestT){ bestT=t; bE=-3; bA=k; } } }
-    if(bE === -3){ const k=bA; return { spawn:true, chl:true, sym:EL_LIST[chl.el[k]], e:chl.el[k], idx:-1,
-      center:new BABYLON.Vector3(chl.x[k]+chl.ox, chl.y[k]+chl.oy, chl.z[k]+chl.oz), si:-1 }; }
-    if(bE === -2){ const a=spawned[bA]; return { spawn:true, sym:a.sym, e:codeOf(a.sym), idx:-1, center:new BABYLON.Vector3(a.x,a.y,a.z), si:bA }; }
+    if(bE === -3){ const k=bA, c=new BABYLON.Vector3(chl.x[k]+chl.ox, chl.y[k]+chl.oy, chl.z[k]+chl.oz);
+      return { spawn:true, chl:true, sym:EL_LIST[chl.el[k]], e:chl.el[k], idx:-1, center:c, world:c.clone(), si:-1 }; }   // showcase atoms are world-space → world == baked
+    if(bE === -2){ const a=spawned[bA], c=new BABYLON.Vector3(a.x,a.y,a.z); return { spawn:true, sym:a.sym, e:codeOf(a.sym), idx:-1, center:c, world:c.clone(), si:bA }; }
     if(bE < 0) return null;
-    const sb = sphBuf[bE], o = bA*16;
-    return { center: new BABYLON.Vector3(sb[o+12], sb[o+13], sb[o+14]), e: bE, idx: bA };
+    const sb = sphBuf[bE], o = bA*16, bcx=sb[o+12], bcy=sb[o+13], bcz=sb[o+14];
+    // center = BAKED (matches the lobe buffers fillOutline/setSelNuc read); world = where it RENDERS (through gModelXform + the PSII gizmo).
+    BABYLON.Matrix.FromArrayToRef(gModelXform, modelOf(bcx,bcy,bcz)*16, _pkM);
+    const wc = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(bcx,bcy,bcz), _pkM).addInPlace(gPsiiOffset);
+    return { center: new BABYLON.Vector3(bcx, bcy, bcz), world: wc, e: bE, idx: bA };
   };
 
   let hoverT = 0;
@@ -5800,8 +5830,9 @@ async function run(){
     modelLabel.style.display = 'none'; highlightModel(-1); };
   const centerOnAtom = (a) => {
     if(!a) a = pickAtom(); if(!a) return;
-    selCenter.copyFrom(a.center);   // marks the selected atom
-    orbitCenter.copyFrom(a.center); // …and becomes the camera pivot
+    const w = a.world || a.center;  // WORLD (rendered) position — selCenter matches the flattened vWCen, and the camera swivels to where the atom actually is
+    selCenter.copyFrom(w);          // marks the selected atom (shader compares this to the flattened atom centre)
+    orbitCenter.copyFrom(w);        // …and becomes the camera pivot
     orbitLocked = true;             // rotation always orbits this atom while it stays selected
     selAtom = a; gFocusId = -1;      // new selection → show all its orbitals
     setSelOut(a);                   // build the atom's lobe geometry (feeds the mask + the flash)
@@ -5812,7 +5843,7 @@ async function run(){
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
-    focusCameraOn(a.center);   // one-shot swivel to centre the picked atom
+    focusCameraOn(w);   // one-shot swivel to centre the picked atom
   };
   // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
   // Double-click → select the nearest complex for moving (gizmo + live coord label).
@@ -5821,7 +5852,7 @@ async function run(){
   const onDouble = () => {
     if(spawnEl) return;
     const a = pickAtom();
-    if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15) — farther, fall through
+    if(a && BABYLON.Vector3.Distance(cam.position, a.world || a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15, to where they RENDER) — farther, fall through
     const gi = pickEtcGroup();
     if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
     if(gSel.size){   // nothing pickable under the cursor → centre the camera on the RTS selection (keeps rotation free)
