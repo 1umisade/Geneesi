@@ -2134,9 +2134,9 @@ async function run(){
   let rtsBoxing=false, rtsBoxMoved=false, rtsDownModel=-1, rtsBoxSX=0, rtsBoxSY=0, rtsBoxCX=0, rtsBoxCY=0;
   const rgbSelCss = mi => 'rgb('+Math.round(gModelCol[mi*3]*255)+','+Math.round(gModelCol[mi*3+1]*255)+','+Math.round(gModelCol[mi*3+2]*255)+')';
   // subtle SC2-style bottom bar behind the docked panels
-  { const bar=document.createElement('div'); bar.style.cssText='position:fixed;left:0;right:0;bottom:0;height:104px;z-index:6;pointer-events:none;background:linear-gradient(to top,rgba(46,34,18,.5),rgba(46,34,18,0))'; document.body.appendChild(bar); }
+  // (the flat bottom bar is now the full SC2 command console, assembled after the minimap + spawn table exist)
   // bottom-centre selection panel
-  const selPanel = document.createElement('div');
+  const selPanel = document.createElement('div'); selPanel.id = 'rts-selinfo';
   selPanel.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:12;display:none;min-width:210px;max-width:38vw;'
     + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:8px 13px;'
     + 'font-family:"Courier New",monospace;color:var(--ink);user-select:none;';
@@ -3630,7 +3630,7 @@ async function run(){
      Y→up): each complex a dot in its model colour, the membrane a line at Y=0, and a rectangle for the
      current view. Click to recentre the camera there (a one-shot setTarget, never per-frame → rotation is safe). */
   {
-    const mm = document.createElement('div');
+    const mm = document.createElement('div'); mm.id = 'rts-minimap';
     mm.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:12;padding:5px;background:var(--paper);'
       + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);user-select:none;';
     const mc = document.createElement('canvas'); mc.width=224; mc.height=150;
@@ -4833,6 +4833,28 @@ async function run(){
     }
     eltable.appendChild(hdr); eltable.appendChild(grid);
     brStack.appendChild(eltable);
+  }
+
+  // ── SC2-style bottom command console ── one solid bar across the bottom quarter: minimap (left) ·
+  //    selected-item info (centre) · spawn atoms (right). The three existing panels are re-parented into
+  //    it and their floating positioning is overridden. Detail/zoom panels are lifted above the console.
+  { const con = document.createElement('div'); con.id = 'sc2-console';
+    con.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:25vh;min-height:190px;z-index:11;box-sizing:border-box;'
+      + 'display:flex;align-items:stretch;padding:8px 12px;font-family:"Courier New",monospace;'
+      + 'background:linear-gradient(to top,#291d0f,#3a2c1c);border-top:3px solid var(--brown);box-shadow:0 -5px 16px rgba(0,0,0,.4);';
+    const sect = (grow, basis, extra) => { const s = document.createElement('div');
+      s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:4px 16px;overflow:hidden;flex:'+grow+' 0 '+basis+';' + (extra||''); return s; };
+    const left = sect(0,'auto',''),
+          center = sect(1,'0','border-left:2px solid rgba(163,184,129,.3);border-right:2px solid rgba(163,184,129,.3);'),
+          right = sect(0,'auto','');
+    con.appendChild(left); con.appendChild(center); con.appendChild(right);
+    document.body.appendChild(con);
+    const dock = (el, host, resets) => { if(!el) return; Object.assign(el.style, resets); host.appendChild(el); };
+    dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none' });
+    dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%' });
+    dock(document.getElementById('eltable'),     right,  { margin:'0' });
+    const brs = document.getElementById('br-stack'); if(brs) brs.style.bottom = 'calc(25vh + 14px)';   // atom-detail panel above the console
+    const zt = document.getElementById('zoomtips'); if(zt) zt.style.bottom = 'calc(25vh + 18px)';       // keep zoom buttons reachable
   }
 
   // ── Camera: swing perpendicular to the spawn plane (view the 2-D sheet head-on) ──
