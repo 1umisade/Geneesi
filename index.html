@@ -2141,15 +2141,26 @@ async function run(){
     + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:8px 13px;'
     + 'font-family:"Courier New",monospace;color:var(--ink);user-select:none;';
   document.body.appendChild(selPanel);
+  // The ONE cofactor group sitting inside a small molecule (e.g. the lone chlorophyll / quinone / NADPH),
+  // matched in the base frame so it works after the model is moved. −1 if none or several (big complexes).
+  const soleCofGroup = mid => { if(!etcGroups || !etcGroups.length) return -1; const md=mInfo[mid]; let found=-1, cnt=0;
+    for(let gi=0; gi<etcGroups.length; gi++){ const g=etcGroups[gi];
+      if(g.cx>=md.x0&&g.cx<=md.x1&&g.cy>=md.y0&&g.cy<=md.y1&&g.cz>=md.z0&&g.cz<=md.z1){ found=gi; if(++cnt>1) return -1; } }
+    return found; };
   const updateSelectionUI = () => {
-    if(!gSel.size){ selPanel.style.display='none'; return; }
+    if(!gSel.size){ selPanel.style.display='none'; if(updateCofInfo && etcSel<0) updateCofInfo(-1); return; }
     selPanel.style.display='block';
+    let cof = -1;
     if(gSel.size === 1){ const mi=[...gSel][0], md=mInfo[mi];
       selPanel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:3px">'+md.name+'</div>'
         + '<div style="font-size:12px;opacity:.8">'+mols[mi].na+' atomia</div>';
+      cof = soleCofGroup(mi);
     } else { let h='<div style="font-weight:bold;font-size:14px;margin-bottom:5px">Valittu: '+gSel.size+'</div><div style="display:flex;flex-wrap:wrap;gap:5px">';
       for(const mi of gSel) h+='<span title="'+mInfo[mi].name+'" style="width:16px;height:16px;border-radius:5px;border:2px solid var(--brown);background:'+rgbSelCss(mi)+'"></span>';
       selPanel.innerHTML = h+'</div>'; }
+    // selecting a lone cofactor molecule → show its detail panel (structural formula, mass, groups);
+    // don't clobber a cofactor already opened by double-click (etcSel)
+    if(updateCofInfo && (cof>=0 || etcSel<0)) updateCofInfo(cof);
   };
   // full-viewport overlay canvas → selection brackets + the drag box
   const selOverlay = document.createElement('canvas');
@@ -4839,22 +4850,42 @@ async function run(){
   //    selected-item info (centre) · spawn atoms (right). The three existing panels are re-parented into
   //    it and their floating positioning is overridden. Detail/zoom panels are lifted above the console.
   { const con = document.createElement('div'); con.id = 'sc2-console';
-    con.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:25vh;min-height:190px;z-index:11;box-sizing:border-box;'
-      + 'display:flex;align-items:stretch;padding:8px 12px;font-family:"Courier New",monospace;'
-      + 'background:linear-gradient(to top,#291d0f,#3a2c1c);border-top:3px solid var(--brown);box-shadow:0 -5px 16px rgba(0,0,0,.4);';
-    const sect = (grow, basis, extra) => { const s = document.createElement('div');
-      s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:4px 16px;overflow:hidden;flex:'+grow+' 0 '+basis+';' + (extra||''); return s; };
-    const left = sect(0,'auto',''),
-          center = sect(1,'0','border-left:2px solid rgba(163,184,129,.3);border-right:2px solid rgba(163,184,129,.3);'),
-          right = sect(0,'auto','');
+    con.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:25vh;min-height:196px;z-index:11;box-sizing:border-box;'
+      + 'display:flex;align-items:stretch;gap:10px;padding:9px 12px;font-family:"Courier New",monospace;'
+      + 'background:var(--paper2);border-top:3px solid var(--brown);box-shadow:0 -5px 16px rgba(0,0,0,.28);';
+    // each region is its OWN beige module (framed card), gaps between → SC2-style modular sections
+    const sect = (grow, basis) => { const s = document.createElement('div');
+      s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:8px 12px;overflow:hidden;'
+        + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
+    const left = sect(0,'auto'), center = sect(1,'0'), right = sect(0,'auto');
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
+    // dock the existing panels into the modules, stripping their own frames so the module IS the frame
     const dock = (el, host, resets) => { if(!el) return; Object.assign(el.style, resets); host.appendChild(el); };
-    dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none' });
-    dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%' });
-    dock(document.getElementById('eltable'),     right,  { margin:'0' });
+    dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none', background:'transparent', border:'none', padding:'0' });
+    dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%', background:'transparent', border:'none', boxShadow:'none' });
+    dock(document.getElementById('eltable'),     right,  { margin:'0', background:'transparent', border:'none', boxShadow:'none' });
     const brs = document.getElementById('br-stack'); if(brs) brs.style.bottom = 'calc(25vh + 14px)';   // atom-detail panel above the console
     const zt = document.getElementById('zoomtips'); if(zt) zt.style.bottom = 'calc(25vh + 18px)';       // keep zoom buttons reachable
+  }
+
+  // ── Settings dropdown: collapse the top-left toggle buttons under one gear icon ──
+  { const btnCss = 'font-family:"Courier New",monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;color:var(--ink);'
+      + 'background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;box-shadow:0 4px 0 var(--brown);'
+      + 'padding:8px 15px;display:inline-flex;align-items:center;gap:7px;line-height:1;user-select:none;';
+    const gear = document.createElement('button'); gear.id = 'settings-btn'; gear.title = 'Asetukset';
+    gear.innerHTML = '<span style="font-size:17px">⚙️</span>';
+    gear.style.cssText = 'position:fixed;left:16px;top:12px;z-index:15;' + btnCss;
+    const menu = document.createElement('div'); menu.id = 'settings-menu';
+    menu.style.cssText = 'position:fixed;left:16px;top:60px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';
+    document.body.appendChild(gear); document.body.appendChild(menu);
+    for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn']){
+      const b = document.getElementById(id); if(!b) continue;
+      b.style.position = 'static'; b.style.left = 'auto'; b.style.top = 'auto'; menu.appendChild(b);   // static → they stack in the menu
+    }
+    let open = false; const setOpen = o => { open = o; menu.style.display = o ? 'flex' : 'none'; gear.style.boxShadow = o ? '0 2px 0 var(--brown)' : '0 4px 0 var(--brown)'; };
+    gear.addEventListener('click', e => { e.stopPropagation(); setOpen(!open); });
+    document.addEventListener('pointerdown', e => { if(open && !menu.contains(e.target) && !gear.contains(e.target)) setOpen(false); });
   }
 
   // ── Camera: swing perpendicular to the spawn plane (view the 2-D sheet head-on) ──
