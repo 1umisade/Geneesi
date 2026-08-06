@@ -4865,12 +4865,12 @@ async function run(){
     return mant.toFixed(2)+' × 10'+String(exp).split('').map(c=>SUP[c]||c).join('')+' g'; };
 
   const cofInfoPanel = document.createElement('div');
-  cofInfoPanel.style.cssText = 'position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:13;display:none;width:198px;'
+  cofInfoPanel.style.cssText = 'position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:13;display:none;width:306px;'
     + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:12px;padding:10px 12px;'
     + 'font-family:"Courier New",monospace;color:var(--ink);box-shadow:0 3px 0 var(--brown)';
   const cofTitle = document.createElement('div'); cofTitle.style.cssText = 'font-weight:bold;font-size:15px;margin-bottom:6px';
   const cofCanvas = document.createElement('canvas'); cofCanvas.width = cofCanvas.height = 256;
-  cofCanvas.style.cssText = 'width:172px;height:172px;display:block;background:var(--paper2);border-radius:8px;border:1px solid var(--brown)';
+  cofCanvas.style.cssText = 'width:100%;height:276px;display:block;background:var(--paper2);border-radius:8px;border:1px solid var(--brown)';
   const cofAtoms = document.createElement('div'); cofAtoms.style.cssText = 'font-size:12px;margin-top:7px';
   const cofMass = document.createElement('div'); cofMass.style.cssText = 'font-size:12px;margin-top:3px';
   const cofLink = document.createElement('a'); cofLink.target = '_blank'; cofLink.rel = 'noopener noreferrer'; cofLink.textContent = 'PubChem →';
@@ -4901,7 +4901,8 @@ async function run(){
   const buildCofPrev = g => {
     const n = g.atoms.length, M=new Float32Array(n*16), C=new Float32Array(n*4), R=new Float32Array(n), gp=etcGroupPos;
     const tc = ETC_COL[g.type] || [0.6,0.6,0.6];   // the cofactor's ETC (type) colour → used for BOTH the shell and the orbitals
-    const oM=[], oC=[], oCen=[], oId=[];            // orbital lobe instances (core shells from orbBuf)
+    const oM=[], oC=[], oCen=[], oId=[];            // orbital lobe instances (full set via fillOutline)
+    const _pbuf = new Float32Array(OUT_MAX*16), _pa = { e:0, idx:0, center:{x:0,y:0,z:0}, spawn:false };
     let maxR = 0;
     for(let k=0;k<n;k++){ const i=g.atoms[k], o=k*16, e=etcEl[i], idx=etcIdx[i];
       M[o]=1;M[o+5]=1;M[o+10]=1;M[o+15]=1;
@@ -4910,11 +4911,12 @@ async function run(){
       const r=info(e).vr*FILL_SCALE;
       C[k*4]=tc[0];C[k*4+1]=tc[1];C[k*4+2]=tc[2];C[k*4+3]=0; R[k]=r;   // ETC colour, not element colour
       const d=Math.hypot(x,y,z)+r; if(d>maxR) maxR=d;
-      const ob=orbBuf[e];                            // this atom's core orbital lobes, world-positioned → re-centre on the cofactor centroid
-      if(ob && idx>=0){ const cnt=orbCount(e), base=idx*cnt*16;
-        for(let j=0;j<cnt;j++){ const s=base+j*16;
-          if(ob[s]*ob[s]+ob[s+1]*ob[s+1]+ob[s+2]*ob[s+2] < 1e-9) continue;   // skip empty (valence → hybridised) slots
-          const mo=oM.length; for(let t=0;t<16;t++) oM.push(ob[s+t]);
+      // FULL orbital set for this atom (core shells + σ/π hybrids + lone pairs) via fillOutline — same as the
+      // single-atom preview — at the atom's WORLD centre, then re-centred on the cofactor centroid.
+      if(idx>=0 && orbBuf[e]){ _pa.e=e; _pa.idx=idx; _pa.center.x=gp.gx[i]; _pa.center.y=gp.gy[i]; _pa.center.z=gp.gz[i];
+        const nl = fillOutline(_pbuf, _pa, false);
+        for(let li=0; li<nl; li++){ const s=li*16, mo=oM.length;
+          for(let t=0;t<16;t++) oM.push(_pbuf[s+t]);
           oM[mo+12]-=g.cx; oM[mo+13]-=g.cy; oM[mo+14]-=g.cz;
           oC.push(tc[0],tc[1],tc[2]); oCen.push(x,y,z); oId.push(0);
         } }
