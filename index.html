@@ -4357,9 +4357,11 @@ async function run(){
     ['konjugoitunut polyeeni','metyylihaarat','β-iononirenkaat'],                          // 8 Karotenoidi
     ['fenoli (hydroksyyli)','aromaattinen rengas','amiini','karboksyyli'],                 // 9 Tyr Z
     ['nikotiiniamidi (amidi)','adeniini (aromaattinen, amiini)','riboosit (hydroksyylit)','difosfaatti',"2'-fosfaatti"] ];   // 10 NADPH
-  // PubChem CID per cofactor type → its ready-made 2D structural-formula PNG (the most efficient option:
-  // one <img>, no parser/MOL file/iframe). Fallback for types without a CID = the generated 2D layout.
-  const COF_CID = { 7: 156620228 };   // 7 = chlorophyll a
+  // Structural-formula images. PubChem's rendered PNG is SKELETAL (implicit C/H), so to show EVERY atom
+  // (H + C) we use an all-atoms sprite where we have one; otherwise PubChem's PNG by CID; else the
+  // generated 2D layout. The CID also drives the PubChem link.
+  const COF_FORMULA_IMG = { 7: './chlorophyll_A_DetailSprite.png' };   // 7 = chlorophyll — all-atoms structural formula
+  const COF_CID = { 7: 156620228 };                                    // 7 = chlorophyll a (PubChem link + skeletal fallback)
   const showEtcSel = gi => {
     etcSel = gi;
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
@@ -5039,10 +5041,11 @@ async function run(){
     cofTitle.textContent = ETC_NAMES[g.type] || 'Kofaktori';
     cofAtoms.textContent = g.n + ' atomia';
     cofMass.textContent = 'Massa/kpl: ' + (groupMassDa(g) * 1.66053907e-6).toPrecision(3) + ' ag';   // Da → attograms (1 Da = 1.6605e-6 ag)
-    // Structural formula: PubChem's ready-made 2D PNG where we have a CID, else the generated 2D layout.
-    cofFormula.innerHTML = COF_CID[g.type]
-      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500"'
-        + ' alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
+    // Structural formula: all-atoms sprite → PubChem skeletal PNG → generated 2D layout.
+    cofFormula.innerHTML = COF_FORMULA_IMG[g.type]
+      ? '<img src="'+COF_FORMULA_IMG[g.type]+'" alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
+      : COF_CID[g.type]
+      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500" alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
       : buildStructuralFormula(g);
     { const grps = ETC_GROUPS[g.type] || [];   // vertical functional-group list
       cofGroups.innerHTML = grps.length ? '<b>Funktionaaliset ryhmät:</b><br>' + grps.map(s => '• ' + s).join('<br>') : ''; }
