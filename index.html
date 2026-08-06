@@ -4360,7 +4360,8 @@ async function run(){
   // Structural-formula images. PubChem's rendered PNG is SKELETAL (implicit C/H), so to show EVERY atom
   // (H + C) we use an all-atoms sprite where we have one; otherwise PubChem's PNG by CID; else the
   // generated 2D layout. The CID also drives the PubChem link.
-  const COF_FORMULA_IMG = { 7: './chlorophyll_A_DetailSprite.png' };   // 7 = chlorophyll — all-atoms structural formula
+  const COF_MOL = { 7: './Chlorophyll.mol' };                          // 7 = chlorophyll — 2D MOL file → drawn with EVERY atom (H + C)
+  const COF_FORMULA_IMG = {};                                          // static all-atoms sprites (unused now that chlorophyll has a MOL)
   const COF_CID = { 7: 156620228 };                                    // 7 = chlorophyll a (PubChem link + skeletal fallback)
   const showEtcSel = gi => {
     etcSel = gi;
@@ -4904,7 +4905,7 @@ async function run(){
   cofCanvas.style.cssText = 'width:100%;height:276px;display:block;background:var(--paper2);border-radius:8px;border:1px solid var(--brown)';
   const cofAtoms = document.createElement('div'); cofAtoms.style.cssText = 'font-size:12px;margin-top:7px';
   const cofMass = document.createElement('div'); cofMass.style.cssText = 'font-size:12px;margin-top:3px';
-  const cofFormula = document.createElement('div'); cofFormula.style.cssText = 'margin-top:8px;background:var(--paper2);border:1px solid var(--brown);border-radius:8px';   // 2D structural formula (SVG)
+  const cofFormula = document.createElement('div'); cofFormula.style.cssText = 'margin-top:8px;background:var(--paper2);border:1px solid var(--brown);border-radius:8px;overflow:auto';   // 2D structural formula (scrolls if the drawing is wide)
   const cofGroups = document.createElement('div'); cofGroups.style.cssText = 'font-size:12px;margin-top:9px;line-height:1.5';   // vertical functional-group list
   const cofLink = document.createElement('a'); cofLink.target = '_blank'; cofLink.rel = 'noopener noreferrer'; cofLink.textContent = 'PubChem →';
   cofLink.style.cssText = 'display:inline-block;margin-top:9px;font-size:12px;font-weight:bold;text-decoration:none;'
@@ -4997,6 +4998,41 @@ async function run(){
     return sv+'</svg>';
   };
 
+  /* ── Render an MDL MOL file (2D coords + explicit H + bond orders) as a full structural formula:
+     EVERY atom labelled and element-coloured, bonds drawn at their real order (double = two lines). ── */
+  const molToSVG = text => {
+    const L = text.split(/\r?\n/); if(L.length < 5) return '';
+    const na = parseInt(L[3].slice(0,3),10), nb = parseInt(L[3].slice(3,6),10); if(!(na>0)) return '';
+    const At=[], bonds=[];
+    for(let i=0;i<na;i++){ const ln=L[4+i]; At.push({ x:parseFloat(ln.slice(0,10)), y:parseFloat(ln.slice(10,20)), sym:(ln.slice(31,34)||'').trim() }); }
+    for(let i=0;i<nb;i++){ const ln=L[4+na+i]; bonds.push([parseInt(ln.slice(0,3),10)-1, parseInt(ln.slice(3,6),10)-1, parseInt(ln.slice(6,9),10)||1]); }
+    let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+    for(const a of At){ mnx=Math.min(mnx,a.x); mxx=Math.max(mxx,a.x); mny=Math.min(mny,a.y); mxy=Math.max(mxy,a.y); }
+    let bl=0; for(const [i,j] of bonds) bl+=Math.hypot(At[i].x-At[j].x, At[i].y-At[j].y); bl=(bl/Math.max(1,bonds.length))||1;
+    const s=19/bl, pad=16, W=(mxx-mnx)*s+2*pad, H=(mxy-mny)*s+2*pad;   // ~19px per bond → legible (scrolls if wide)
+    const PX=a=>pad+(a.x-mnx)*s, PY=a=>pad+(mxy-a.y)*s;               // flip Y (MOL is y-up, SVG is y-down)
+    const eCol=sym=>{ const c=(ELEM[(sym||'').toUpperCase()]||ELEM.FB).c; return 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')'; };
+    const paper2=(getComputedStyle(document.body).getPropertyValue('--paper2')||'#f3e9cf').trim();
+    const ink=(getComputedStyle(document.body).getPropertyValue('--ink')||'#4a3320').trim();
+    const seg=(x1,y1,x2,y2)=>'<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+'" stroke="'+ink+'" stroke-width="1.3"/>';
+    let sv='<svg viewBox="0 0 '+W.toFixed(0)+' '+H.toFixed(0)+'" width="'+W.toFixed(0)+'" height="'+H.toFixed(0)+'" style="display:block">';
+    for(const [i,j,ord] of bonds){ const x1=PX(At[i]),y1=PY(At[i]),x2=PX(At[j]),y2=PY(At[j]),dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy)||1,nx=-dy/len,ny=dx/len;
+      if(ord===2){ const o=2.3; sv+=seg(x1+nx*o,y1+ny*o,x2+nx*o,y2+ny*o)+seg(x1-nx*o,y1-ny*o,x2-nx*o,y2-ny*o); }
+      else if(ord===3){ const o=2.7; sv+=seg(x1,y1,x2,y2)+seg(x1+nx*o,y1+ny*o,x2+nx*o,y2+ny*o)+seg(x1-nx*o,y1-ny*o,x2-nx*o,y2-ny*o); }
+      else sv+=seg(x1,y1,x2,y2); }
+    for(const a of At){ const col=eCol(a.sym), x=PX(a).toFixed(1), y=PY(a).toFixed(1);
+      sv+='<circle cx="'+x+'" cy="'+y+'" r="6.5" fill="'+paper2+'" stroke="'+col+'" stroke-width="1.2"/>'
+        + '<text x="'+x+'" y="'+y+'" text-anchor="middle" dominant-baseline="central" font-size="8.5" font-weight="bold" fill="'+col+'">'+(a.sym||'?')+'</text>'; }
+    return sv+'</svg>';
+  };
+  const _molCache = {};
+  const renderMolInto = (url, el) => {
+    if(_molCache[url] !== undefined){ el.innerHTML = _molCache[url]; return; }
+    el.innerHTML = '<div style="padding:12px;font-size:12px;opacity:.6">Ladataan rakennekaavaa…</div>';
+    fetch(url).then(r => r.ok ? r.text() : Promise.reject()).then(t => { const svg=molToSVG(t); _molCache[url]=svg; el.innerHTML=svg; })
+      .catch(() => { _molCache[url]=''; el.innerHTML='<div style="padding:12px;font-size:12px;opacity:.6">Rakennekaavaa ei voitu ladata</div>'; });
+  };
+
   const buildCofPrev = g => {
     const n = g.atoms.length, M=new Float32Array(n*16), C=new Float32Array(n*4), R=new Float32Array(n), gp=etcGroupPos;
     const tc = ETC_COL[g.type] || [0.6,0.6,0.6];   // the cofactor's ETC (type) colour → the translucent vdW SHELL only (orbitals keep element colours)
@@ -5041,8 +5077,9 @@ async function run(){
     cofTitle.textContent = ETC_NAMES[g.type] || 'Kofaktori';
     cofAtoms.textContent = g.n + ' atomia';
     cofMass.textContent = 'Massa/kpl: ' + (groupMassDa(g) * 1.66053907e-6).toPrecision(3) + ' ag';   // Da → attograms (1 Da = 1.6605e-6 ag)
-    // Structural formula: all-atoms sprite → PubChem skeletal PNG → generated 2D layout.
-    cofFormula.innerHTML = COF_FORMULA_IMG[g.type]
+    // Structural formula: 2D MOL file (all atoms) → all-atoms sprite → PubChem skeletal PNG → generated 2D layout.
+    if(COF_MOL[g.type]) renderMolInto(COF_MOL[g.type], cofFormula);
+    else cofFormula.innerHTML = COF_FORMULA_IMG[g.type]
       ? '<img src="'+COF_FORMULA_IMG[g.type]+'" alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
       : COF_CID[g.type]
       ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500" alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
