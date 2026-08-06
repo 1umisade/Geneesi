@@ -7,6 +7,7 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;overflow:hidden;background:#0e2215}   /* static dark green (the scene draws its own dark-green bg on top) */
 #c{width:100%;height:100%;display:block;touch-action:none;cursor:url('./cursor_normal.png') 3 3, auto}
+html.panning, html.panning *{cursor:none !important}   /* edge-panning → the rotated arrow.png sprite replaces the system cursor */
 /* ── Solukko palette: dark brown, beige/paper, light green/sage — cartoony & round ── */
 :root{
   --paper:#f2e6c9; --paper2:#e7d4ac; --brown:#4a3320; --ink:#3a2716;
@@ -1804,6 +1805,7 @@ uniform sampler2D textureSampler;
 uniform sampler2D cofMask;
 uniform vec2 texel;
 uniform float lineW;
+uniform float cofW;
 uniform vec3 bgRef;   // the flat background colour (this pass runs on the RAW scene, so it matches exactly)
 // foreground = anything that isn't the background colour. Comparing to the EXACT flat background is
 // robust — green-tinted proteins are never mistaken for it, so no interior darkening.
@@ -1814,10 +1816,10 @@ void main(void){
   float f = isFg(scene), fmn = f, fmx = f;               // whole-scene foreground (proteins + membrane)
   for(int i=0;i<8;i++){
     float a = float(i) * 0.7853982;
-    vec2 d = vec2(cos(a), sin(a)) * texel * lineW;
-    float s = texture2D(cofMask, vUV + d).r;
+    vec2 dir = vec2(cos(a), sin(a)) * texel;
+    float s = texture2D(cofMask, vUV + dir*cofW).r;
     mn = min(mn, s); mx = max(mx, s);
-    float ff = isFg(texture2D(textureSampler, vUV + d).rgb);
+    float ff = isFg(texture2D(textureSampler, vUV + dir*lineW).rgb);
     fmn = min(fmn, ff); fmx = max(fmx, ff);
   }
   float cofLine  = smoothstep(0.2, 0.7, mx - mn);        // cofactor molecule silhouette
@@ -2177,6 +2179,18 @@ async function run(){
   const oc2 = selOverlay.getContext('2d');
   const fitOverlay = () => { selOverlay.width = canvas.clientWidth; selOverlay.height = canvas.clientHeight; };
   fitOverlay(); window.addEventListener('resize', fitOverlay);
+  // Rotated arrow.png sprite shown while edge-panning (points in the pan direction). Above everything (z 30).
+  const panCursor = document.createElement('img'); panCursor.src = './arrow.png'; panCursor.alt = '';
+  panCursor.style.cssText = 'position:fixed;left:0;top:0;width:44px;height:44px;z-index:30;pointer-events:none;display:none;transform-origin:50% 50%;will-change:transform';
+  document.body.appendChild(panCursor);
+  let panCursorOn = false;
+  const setPanCursor = (on, x, y, ex, ey) => {
+    if(on){ const ang = (Math.atan2(-ey, ex) - Math.PI) * 180/Math.PI;   // arrow.png points LEFT (angle pi) → rotate to the pan direction
+      panCursor.style.left = x + 'px'; panCursor.style.top = y + 'px';
+      panCursor.style.transform = 'translate(-50%,-50%) rotate(' + ang.toFixed(1) + 'deg)';
+      if(!panCursorOn){ panCursor.style.display = 'block'; document.documentElement.classList.add('panning'); panCursorOn = true; } }
+    else if(panCursorOn){ panCursor.style.display = 'none'; document.documentElement.classList.remove('panning'); panCursorOn = false; }
+  };
   const _vpSel = new BABYLON.Viewport(0,0,1,1);
   const projModel = mi => { const md=mInfo[mi]; _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
     return BABYLON.Vector3.Project(new BABYLON.Vector3(md.cx+gModelOff[mi*3], md.cy+gModelOff[mi*3+1], md.cz+gModelOff[mi*3+2]),
@@ -2258,7 +2272,7 @@ async function run(){
   window.addEventListener('pointermove', ev => { edgeMX=ev.clientX; edgeMY=ev.clientY; edgeOnCanvas=(ev.target===canvas); edgeIn=true; }, {passive:true});
   window.addEventListener('pointerout', ev => { if(!ev.relatedTarget){ edgeOnCanvas=false; edgeIn=false; } });
   scene.onBeforeRenderObservable.add(() => {
-    if(dragging || !edgeIn) return;
+    if(dragging || !edgeIn){ setPanCursor(false); return; }
     const W=canvas.clientWidth, H=canvas.clientHeight, M=EDGE_M;
     let ex=0, ey=0;
     // BOTTOM: only the very last pixels of the viewport (no buffer) — works even over the console bar
@@ -2268,7 +2282,8 @@ async function run(){
       if(edgeMX < M) ex=-(1-edgeMX/M); else if(edgeMX > W-M) ex=(edgeMX-(W-M))/M;
       if(edgeMY < M) ey=(1-edgeMY/M);
     }
-    if(!ex && !ey) return;
+    if(!ex && !ey){ setPanCursor(false); return; }
+    setPanCursor(true, edgeMX, edgeMY, ex, ey);   // arrow.png points in the pan direction
     orbitLocked = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
     const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
@@ -5570,7 +5585,7 @@ async function run(){
   // Silhouette pass — runs FIRST, on the RAW scene (background is the exact flat colour). Inks a black
   // outline where the frame meets the background (the whole assembly) AND around each cofactor molecule
   // (from the coverage mask). fxaa + the painterly grade then blend it into the comic look.
-  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','bgRef'], ['cofMask'], 1.0, cam);
+  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','cofW','bgRef'], ['cofMask'], 1.0, cam);
   cofsil.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     // silhouette thickness tracks zoom → always ~5 proton-diameters on screen (thinner zoomed out, thicker in).
@@ -5578,7 +5593,9 @@ async function run(){
     const dist = Math.max(1, Math.abs(cam.radius));
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const w = (10.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // 10*NUCLEON_R = 5 proton diameters, in world units
-    eff.setFloat('lineW', Math.max(1.0, Math.min(14.0, w)));
+    const lw = Math.max(1.0, Math.min(14.0, w));
+    eff.setFloat('lineW', lw);                                   // whole-assembly outer silhouette (looks good as-is)
+    eff.setFloat('cofW', Math.max(1.0, Math.min(3.0, lw*0.22)));  // cofactor outline - much thinner, the cofactors are tiny
     eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
