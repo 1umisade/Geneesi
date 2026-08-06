@@ -4884,7 +4884,7 @@ async function run(){
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
     uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel'],
     defines:['#define IMPRAD'] });
-  cofPrevMat.setFloat('radius',1.0); cofPrevMat.setFloat('isShell',1); cofPrevMat.setFloat('shellMin',0.25); cofPrevMat.setFloat('bubbleR',1e9);   // translucent shell → the orbitals show through
+  cofPrevMat.setFloat('radius',1.0); cofPrevMat.setFloat('isShell',1); cofPrevMat.setFloat('shellMin',0.12); cofPrevMat.setFloat('bubbleR',1e9);   // faint translucent ETC shell → the element-coloured orbitals + electrons show clearly through
   cofPrevMat.setFloat('protonOutline',0); cofPrevMat.setFloat('coneCos',-1.0); cofPrevMat.setFloat('depthBias',0); cofPrevMat.setFloat('selModel',-1);
   cofPrevMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); cofPrevMat.backFaceCulling=false; realAlpha(cofPrevMat);
   cofPrevMat.onBindObservable.add(()=>{ const eff=cofPrevMat.getEffect(); if(!eff)return; eff.setFloat('uT',0.0);
@@ -4900,7 +4900,7 @@ async function run(){
 
   const buildCofPrev = g => {
     const n = g.atoms.length, M=new Float32Array(n*16), C=new Float32Array(n*4), R=new Float32Array(n), gp=etcGroupPos;
-    const tc = ETC_COL[g.type] || [0.6,0.6,0.6];   // the cofactor's ETC (type) colour → used for BOTH the shell and the orbitals
+    const tc = ETC_COL[g.type] || [0.6,0.6,0.6];   // the cofactor's ETC (type) colour → the translucent vdW SHELL only (orbitals keep element colours)
     const oM=[], oC=[], oCen=[], oId=[];            // orbital lobe instances (full set via fillOutline)
     const _pbuf = new Float32Array(OUT_MAX*16), _pa = { e:0, idx:0, center:{x:0,y:0,z:0}, spawn:false };
     let maxR = 0;
@@ -4914,11 +4914,12 @@ async function run(){
       // FULL orbital set for this atom (core shells + σ/π hybrids + lone pairs) via fillOutline — same as the
       // single-atom preview — at the atom's WORLD centre, then re-centred on the cofactor centroid.
       if(idx>=0 && orbBuf[e]){ _pa.e=e; _pa.idx=idx; _pa.center.x=gp.gx[i]; _pa.center.y=gp.gy[i]; _pa.center.z=gp.gz[i];
+        const ecol = info(e).c;   // orbitals keep their real ELEMENT colour (so C/N/O read apart + the blue electrons show)
         const nl = fillOutline(_pbuf, _pa, false);
         for(let li=0; li<nl; li++){ const s=li*16, mo=oM.length;
           for(let t=0;t<16;t++) oM.push(_pbuf[s+t]);
           oM[mo+12]-=g.cx; oM[mo+13]-=g.cy; oM[mo+14]-=g.cz;
-          oC.push(tc[0],tc[1],tc[2]); oCen.push(x,y,z); oId.push(0);
+          oC.push(ecol[0],ecol[1],ecol[2]); oCen.push(x,y,z); oId.push(0);
         } }
     }
     cofPrev.thinInstanceSetBuffer('matrix',M,16,true);
