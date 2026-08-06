@@ -2124,6 +2124,12 @@ async function run(){
   const gSel = new Set();               // selected model indices
   const gMoveTarget = new Map();        // mi → [tx,ty,tz] target gModelOff (glide destination)
   let gPing = null;                     // {x,y,z,t0} → the expanding move-order ping on the floor
+  const gFollow = new Map();            // mi → {tmi, ang, ring} → keep chasing molecule tmi at a standoff
+  const modelSize = mi => { const md=mInfo[mi]; return Math.hypot(md.x1-md.x0, md.y1-md.y0, md.z1-md.z0); };   // bbox diagonal
+  // per-model glide rate → bigger complexes move slower, small cofactors nip about (mapped across the size range)
+  const gModelGlide = new Float32Array(mols.length);
+  { let sMin=1e9, sMax=0; for(let mi=0; mi<mols.length; mi++){ const s=modelSize(mi); if(s<sMin)sMin=s; if(s>sMax)sMax=s; }
+    for(let mi=0; mi<mols.length; mi++){ const t=(sMax>sMin)?(modelSize(mi)-sMin)/(sMax-sMin):0; gModelGlide[mi]=0.30-t*0.22; } }   // ~0.30 fast … ~0.08 slow
   let rtsBoxing=false, rtsBoxMoved=false, rtsDownModel=-1, rtsBoxSX=0, rtsBoxSY=0, rtsBoxCX=0, rtsBoxCY=0;
   const rgbSelCss = mi => 'rgb('+Math.round(gModelCol[mi*3]*255)+','+Math.round(gModelCol[mi*3+1]*255)+','+Math.round(gModelCol[mi*3+2]*255)+')';
   // subtle SC2-style bottom bar behind the docked panels
@@ -2164,21 +2170,36 @@ async function run(){
       if(s.z>=0 && s.z<=1 && s.x>=lx && s.x<=hx && s.y>=ly && s.y<=hy) gSel.add(mi); }
     updateSelectionUI(); };
   const moveSelectedTo = (px, py) => { if(!gSel.size) return;
+    const tmi = pickModelAtCursor();                                    // right-clicked directly ON a molecule → FOLLOW it
+    if(tmi >= 0 && !gSel.has(tmi)){
+      const fx=mInfo[tmi].cx+gModelOff[tmi*3], fy=mInfo[tmi].cy+gModelOff[tmi*3+1];
+      for(const mi of gSel){ if(mi===tmi) continue; snapshotModel(mi);
+        const ang=Math.atan2((mInfo[mi].cy+gModelOff[mi*3+1])-fy, (mInfo[mi].cx+gModelOff[mi*3])-fx);   // approach from / hold the side they came from
+        gFollow.set(mi, { tmi, ang, ring: 0.5*modelSize(tmi)+0.5*modelSize(mi) }); }   // stand off just outside the followed molecule
+      gPing = { x:fx, y:fy, z:FLOOR_Z, t0:performance.now(), follow:true };   // gold ping on the followed molecule
+      return;
+    }
+    for(const mi of gSel) gFollow.delete(mi);                           // a ground order cancels any follow on the selected units only
     let cx=0,cy=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; }
     const n=gSel.size; cx/=n; cy/=n;
     const ray=scene.createPickingRay(px,py,BABYLON.Matrix.Identity(),cam);
     if(Math.abs(ray.direction.z) < 1e-6) return;                       // ray parallel to the floor → no destination
     const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; if(t < 0) return;   // intersect the FLOOR plane Z = FLOOR_Z
     const wx=ray.origin.x + ray.direction.x*t, wy=ray.origin.y + ray.direction.y*t;   // destination on the floor
-    gPing = { x:wx, y:wy, z:FLOOR_Z, t0:performance.now() };               // drop a move-order ping there
+    gPing = { x:wx, y:wy, z:FLOOR_Z, t0:performance.now() };               // green move-order ping there
     const dx=wx-cx, dy=wy-cy;                                              // move only within the plane (X/Y)
     for(const mi of gSel){ snapshotModel(mi); gMoveTarget.set(mi, [gModelOff[mi*3]+dx, gModelOff[mi*3+1]+dy, FLOOR_Z - mInfo[mi].cz]); } };   // Z pinned to the floor
   // glide selected molecules toward their ordered destinations
-  scene.onBeforeRenderObservable.add(() => { if(!gMoveTarget.size) return;
-    for(const [mi, tg] of gMoveTarget){ const ox=gModelOff[mi*3], oy=gModelOff[mi*3+1], oz=gModelOff[mi*3+2];
-      const nx=ox+(tg[0]-ox)*0.16, ny=oy+(tg[1]-oy)*0.16, nz=oz+(tg[2]-oz)*0.16;
+  scene.onBeforeRenderObservable.add(() => {
+    for(const [mi, f] of gFollow){   // refresh each follower's target from the chased molecule's LIVE position
+      const fx=mInfo[f.tmi].cx+gModelOff[f.tmi*3], fy=mInfo[f.tmi].cy+gModelOff[f.tmi*3+1];
+      gMoveTarget.set(mi, [ fx+Math.cos(f.ang)*f.ring - mInfo[mi].cx, fy+Math.sin(f.ang)*f.ring - mInfo[mi].cy, FLOOR_Z - mInfo[mi].cz ]); }
+    if(!gMoveTarget.size) return;
+    for(const [mi, tg] of gMoveTarget){ const k=gModelGlide[mi];   // per-size rate → big complexes glide slower
+      const ox=gModelOff[mi*3], oy=gModelOff[mi*3+1], oz=gModelOff[mi*3+2];
+      const nx=ox+(tg[0]-ox)*k, ny=oy+(tg[1]-oy)*k, nz=oz+(tg[2]-oz)*k;
       gModelOff[mi*3]=nx; gModelOff[mi*3+1]=ny; gModelOff[mi*3+2]=nz; rebuildModelXform(mi);
-      if((tg[0]-nx)*(tg[0]-nx)+(tg[1]-ny)*(tg[1]-ny)+(tg[2]-nz)*(tg[2]-nz) < 0.01) gMoveTarget.delete(mi); } });
+      if(!gFollow.has(mi) && (tg[0]-nx)*(tg[0]-nx)+(tg[1]-ny)*(tg[1]-ny)+(tg[2]-nz)*(tg[2]-nz) < 0.01) gMoveTarget.delete(mi); } });   // static orders end on arrival, follows persist
   // draw selection brackets + the drag box each frame
   scene.registerAfterRender(() => {
     oc2.clearRect(0,0,selOverlay.width, selOverlay.height);
@@ -2193,8 +2214,9 @@ async function run(){
       else { _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
         const s=BABYLON.Vector3.Project(new BABYLON.Vector3(gPing.x,gPing.y,gPing.z), BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _vpSel);
         if(s.z>=0 && s.z<=1){ const a=(1-el).toFixed(3);
-          oc2.strokeStyle='rgba(80,240,120,'+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
-          oc2.strokeStyle='rgba(150,255,175,'+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
+          const c1=gPing.follow?'255,205,70':'80,240,120', c2=gPing.follow?'255,232,150':'150,255,175';   // gold = follow, green = ground move
+          oc2.strokeStyle='rgba('+c1+','+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
+          oc2.strokeStyle='rgba('+c2+','+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
   });
   // SC2-style screen-edge panning — cursor near a viewport edge scrolls the camera that way (disabled mid-drag and over the docked UI)
   let edgeMX=-1, edgeMY=-1, edgeOnCanvas=false;
