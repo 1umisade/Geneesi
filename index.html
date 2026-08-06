@@ -157,7 +157,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 /* Panels — thick brown outline, big round corners, chunky drop shadow */
 #econf,#eltable{font-family:'Courier New',monospace;background:var(--paper);color:var(--ink);
   border:3px solid var(--brown);border-radius:18px;box-shadow:0 5px 0 var(--brown);user-select:none}
-#eltable{padding:10px 11px;max-width:280px}
+#eltable{padding:10px 11px;width:274px;box-sizing:border-box}   /* fixed width so it doesn't resize when switching tabs */
 #eltable .seg{display:flex;margin-bottom:9px;border:2.5px solid var(--brown);border-radius:99px;overflow:hidden}
 #eltable .segbtn{flex:1;font-family:inherit;font-size:9.5px;font-weight:bold;color:var(--ink);background:var(--paper);border:none;border-right:2px solid var(--brown);padding:5px 2px;cursor:pointer;white-space:nowrap}
 #eltable .segbtn:last-child{border-right:none}
@@ -2238,7 +2238,7 @@ async function run(){
       for(const mi of gSel) h+='<span title="'+mInfo[mi].name+'" style="width:16px;height:16px;border-radius:5px;border:2px solid var(--brown);background:'+rgbSelCss(mi)+'"></span>';
       selPanel.innerHTML = h+'</div>'; }
     // lone cofactor molecule → its 2D formula panel; a protein → its info card; else the plain name card
-    if(updateCofInfo && (cof>=0 || etcSel<0)) updateCofInfo(cof);
+    if(updateCofInfo) updateCofInfo(cof);   // an RTS selection always owns the cofactor panel: protein/plain (cof=-1) hides a leftover double-click cofactor, a lone cofactor molecule shows its formula
     if(!protein) hideCenterProtein();
     selPanel.style.display = (cof>=0 || protein) ? 'none' : 'block';
   };
@@ -3805,13 +3805,15 @@ async function run(){
     mm.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:12;padding:5px;background:var(--paper);'
       + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);user-select:none;';
     const mc = document.createElement('canvas'); mc.width=300; mc.height=210;
-    mc.style.cssText = 'display:block;width:100%;height:100%;border-radius:8px;cursor:pointer';   // fills its module
+    mc.style.cssText = 'display:block;height:100%;border-radius:8px;cursor:pointer';   // height fills the module; width follows the viewport aspect
     mm.appendChild(mc); document.body.appendChild(mm);
     const g2 = mc.getContext('2d'), pad=10;
     const spanX=Math.max(1,gMaX-gMiX), spanY=Math.max(1,gMaY-gMiY);
     let W=mc.width, HH=mc.height, sc=1, offX=0, offY=0;
-    const syncSize = () => {   // match the canvas resolution to its displayed size → fills the module, no distortion
-      const cw=Math.max(2,Math.round(mc.clientWidth)), ch=Math.max(2,Math.round(mc.clientHeight));
+    const syncSize = () => {   // keep the module HEIGHT, set width = height * the viewport's aspect ratio
+      const ch=Math.max(2,Math.round(mc.clientHeight)), asp=canvas.clientWidth/Math.max(1,canvas.clientHeight);
+      const cw=Math.max(2,Math.round(ch*asp));
+      mc.style.width = cw+'px';
       if(mc.width!==cw || mc.height!==ch){ mc.width=cw; mc.height=ch; }
       W=mc.width; HH=mc.height;
       sc=Math.min((W-2*pad)/spanX, (HH-2*pad)/spanY); offX=(W-spanX*sc)/2; offY=(HH-spanY*sc)/2;
@@ -3843,13 +3845,14 @@ async function run(){
   cam.setPosition(new BABYLON.Vector3(50, -6, -1184));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
   cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
-  // Centre a freshly-selected object: an INSTANT one-shot setTarget. Deliberately NOT animated —
-  // ANY time-based camera-target motion (an animation OR a per-frame observer) fights ArcRotateCamera's
-  // rotation input and kills dragging (see the CLAUDE.md note). setTarget swivels in place (keeps the
-  // camera position → same on-screen size) and leaves nothing running, so rotation stays free.
+  // Centre a freshly-selected object: a SHORT one-shot target animation (smooth swivel). This would
+  // fight ArcRotateCamera rotation if it kept running during a drag, so it stays safe ONLY because the
+  // pointer-down handler calls scene.stopAnimation(cam) first — the animation is killed the instant a
+  // drag begins, leaving rotation free. Do NOT add a per-frame follow or drop that stopAnimation.
   const focusCameraOn = center => {
     scene.stopAnimation(cam);
-    cam.setTarget(center.clone());
+    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+    BABYLON.Animation.CreateAndStartAnimation('focusTgt', cam, 'target', 60, 14, cam.getTarget().clone(), center.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
@@ -5111,12 +5114,12 @@ async function run(){
     const sect = (grow, basis, pad) => { const s = document.createElement('div');
       s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:'+(pad||'8px 12px')+';overflow:hidden;pointer-events:auto;'
         + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
-    const left = sect(0,'clamp(220px,26vw,340px)','5px'), center = sect(1,'0'), right = sect(0,'auto'); center.id = 'sc2-center';
+    const left = sect(0,'auto','5px'), center = sect(1,'0'), right = sect(0,'auto'); center.id = 'sc2-center';
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
     // dock the existing panels into the modules, stripping their own frames so the module IS the frame
     const dock = (el, host, resets) => { if(!el) return; Object.assign(el.style, resets); host.appendChild(el); };
-    dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none', background:'transparent', border:'none', padding:'0', width:'100%', height:'100%' });
+    dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none', background:'transparent', border:'none', padding:'0', width:'auto', height:'100%' });
     dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%', background:'transparent', border:'none', boxShadow:'none' });
     dock(document.getElementById('eltable'),     right,  { margin:'0', background:'transparent', border:'none', boxShadow:'none' });
     // atom-info card — shown in the centre module when a single ATOM is selected
