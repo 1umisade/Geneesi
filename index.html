@@ -3993,15 +3993,16 @@ async function run(){
         continue;
       }
       const cR = cell.r;
+      const cM = cR + 14;   // frustum margin: the atoms' orbital clouds + thermal jitter reach BEYOND the cell box, so cull only when the cell is clearly outside — otherwise edge cells vanish while their orbitals are still on screen
       let wcx, wcy, wcz;
       if(cell.macro){ const lx=cell.cx-cx0, ly=cell.cy-cy0, lz=cell.cz-cz0;
         wcx=M[0]*lx+M[4]*ly+M[8]*lz+M[12]; wcy=M[1]*lx+M[5]*ly+M[9]*lz+M[13]; wcz=M[2]*lx+M[6]*ly+M[10]*lz+M[14]; }
       else { wcx=cell.cx; wcy=cell.cy; wcz=cell.cz; }   // membrane cells don't follow the PSII gizmo
       const vx=wcx-cp.x, vy=wcy-cp.y, vz=wcz-cp.z, d2=vx*vx+vy*vy+vz*vz;
       let vis = true;                                    // in the view frustum?
-      if(d2 > cR*cR){
+      if(d2 > cM*cM){
         for(let p=0;p<6;p++){ const pl=fplanes[p];
-          if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ vis=false; break; }
+          if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cM){ vis=false; break; }
         }
       }
       const nr = REVEAL_DIST + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
