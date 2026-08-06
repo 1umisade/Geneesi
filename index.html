@@ -610,6 +610,9 @@ uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on proton
 uniform float depthBias;   // nuclei: push toward camera (view units) so they clear their OWN orbitals (0 elsewhere)
 uniform vec3 selCenter;    // the focused atom (its static nucleus is hidden → the spinning highlight shows instead)
 uniform float coneCos;     // reveal only atoms within this cosine of the view axis (negative disables the cone)
+#ifdef DEPTHSHADE
+uniform float focalD;      // camera-to-pivot distance → shade atoms nearer than it brighter, farther darker
+#endif
 #ifdef COFHIDE
 uniform sampler2D cofDepth;   // nearest cofactor's view-space depth per screen pixel (1e9 = none)
 uniform vec2 cofTexel;        // 1 / render size → gl_FragCoord to [0,1]
@@ -690,6 +693,9 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
+#ifdef DEPTHSHADE
+  col *= clamp(1.0 + (focalD - posV.z) * 0.016, 0.58, 1.14);  // front-to-back depth shading (near brighter, far darker) - the rounded 3D look
+#endif
 #ifdef ETCHL
   bool hl = abs(vGid - hlGroup) < 0.5;                        // hovered / flashing cofactor group
   if(hl) col *= hlBright;                                     // → brighter FILL (the dark outline is applied AFTER, so it stays dark)
@@ -2175,21 +2181,21 @@ async function run(){
     return found; };
   // Short Finnish note on each protein's role in photosynthesis → shown in the centre when it is selected.
   const PROTEIN_DESC = {
-    'Photosystem II':'Hapettaa vettä valon avulla, vapauttaa hapen ja käynnistää elektroninsiirtoketjun.',
-    'Cytochrome b6f':'Siirtää elektroneja PSII:lta PSI:lle ja pumppaa protoneja tylakoidin sisään.',
-    'Photosystem I':'Virittää elektronit valolla ja pelkistää ferredoksiinin NADPH-tuotantoa varten.',
-    'NDH-1':'Syklinen elektroninkierto — pumppaa protoneja ja tasapainottaa ATP/NADPH-suhdetta.',
-    'ATP synthase':'Käyttää protonigradienttia ATP:n valmistamiseen.',
-    'Plastocyanin':'Kupariproteiini, joka kuljettaa elektroneja sytokromi b6f:ltä fotosysteemi I:lle.',
-    'Violaxanthin de-epoxidase':'Muuntaa violaksantiinin zeaksantiiniksi — suojaa liialliselta valolta (NPQ).',
-    'Ferredoxin':'Rauta-rikki-proteiini, joka kuljettaa PSI:n elektronit FNR:lle.',
-    'FNR':'Pelkistää NADP+:n NADPH:ksi ferredoksiinin elektroneilla.',
-    'RuBisCO':'Sitoo hiilidioksidin Calvinin kierrossa — hiilen sidonnan avainentsyymi.',
-    'PGR5':'Osallistuu sykliseen elektroninkiertoon fotosysteemi I:n ympärillä.',
-    'PGRL1':'Toimii PGR5:n kanssa syklisessä elektroninkierrossa.',
-    'STN7':'Kinaasi, joka säätää valonkeräyskompleksien jakautumista (state transitions).',
-    'PPH1':'Fosfataasi, joka purkaa LHCII:n fosforylaation — STN7:n vastapari.',
-    'Zeaxanthin epoxidase':'Palauttaa zeaksantiinin violaksantiiniksi hämärässä.' };
+    'Photosystem II':'Käyttää valoenergiaa veden hajottamiseen (fotolyysi): irrottaa elektronit ja protonit sekä vapauttaa ilmakehän hapen. Virittyneet elektronit siirtyvät feofytiinin kautta plastokinonille, mikä käynnistää koko elektroninsiirtoketjun.',
+    'Cytochrome b6f':'Vastaanottaa elektronit pelkistyneeltä plastokinonilta ja luovuttaa ne plastosyaniinille. Samalla se pumppaa protoneja tylakoidin luumeniin (Q-sykli) ja kasvattaa ATP-synteesiä ajavaa protonigradienttia.',
+    'Photosystem I':'Absorboi valoa ja nostaa elektronin niin korkeaan energiaan, että se pelkistää ferredoksiinin luumenin puolelta. Elektronit päätyvät NADPH:n valmistukseen tai palaavat sykliseen kiertoon.',
+    'NDH-1':'Palauttaa elektroneja ferredoksiililta plastokinonipooliin ja pumppaa samalla protoneja kalvon läpi. Osa syklistä elektroninkiertoa, joka hienosäätää ATP:n ja NADPH:n suhdetta.',
+    'ATP synthase':'Käyttää tylakoidin protonigradienttia (protonimotorista voimaa) pyörittämään roottoriaan ja liittää ADP:n ja fosfaatin ATP:ksi. Tuottaa suurimman osan solun energiavaluutasta.',
+    'Plastocyanin':'Pieni liikkuva kupariproteiini luumenissa. Kuljettaa yhden elektronin kerrallaan sytokromi b6f:ltä fotosysteemi I:lle vaihtamalla kuparin hapetustilaa (Cu²⁺ ↔ Cu⁺).',
+    'Violaxanthin de-epoxidase':'Aktivoituu happamassa luumenissa kirkkaassa valossa ja muuntaa violaksantiinin zeaksantiiniksi. Zeaksantiini haihduttaa ylimääräisen valoenergian lämpönä ja suojaa fotosysteemejä (NPQ).',
+    'Ferredoxin':'Pieni rauta-rikki-proteiini, joka ottaa elektronin vastaan fotosysteemi I:ltä. Jakaa elektronit eteenpäin NADPH-synteesiin, typen- ja rikinaineenvaihduntaan sekä sykliseen kiertoon.',
+    'FNR':'Ferredoksiini-NADP⁺-reduktaasi kerää kaksi elektronia ferredoksiililta ja pelkistää NADP⁺:n NADPH:ksi. NADPH toimii pelkistysvoimana Calvinin kierrossa hiilen sitomiseksi.',
+    'RuBisCO':'Sitoo ilmakehän hiilidioksidin RuBP-sokeriin Calvinin kierron ensimmäisessä vaiheessa. Maapallon runsain entsyymi ja koko hiilensidonnan pullonkaula.',
+    'PGR5':'Ohjaa syklistä elektroninkiertoa fotosysteemi I:n ympärillä yhdessä PGRL1:n kanssa. Kasvattaa protonigradienttia ja ATP-tuotantoa ilman että NADPH:ta syntyy.',
+    'PGRL1':'Muodostaa PGR5:n kanssa reitin, joka palauttaa elektronit ferredoksiililta plastokinonille. Tämä syklinen kierto tasapainottaa ATP/NADPH-suhdetta solun tarpeen mukaan.',
+    'STN7':'Tylakoidikinaasi, joka aistii elektroninsiirtoketjun tilan ja fosforyloi LHCII-valonkeräyskompleksit. Siirtää niitä fotosysteemien välillä ja tasapainottaa valon jakautumisen (state transitions).',
+    'PPH1':'Fosfataasi, joka poistaa LHCII:n fosfaattiryhmät ja palauttaa valonkeräyskompleksit fotosysteemi II:lle. Toimii STN7-kinaasin vastaparina valon säädössä.',
+    'Zeaxanthin epoxidase':'Muuntaa zeaksantiinin takaisin violaksantiiniksi hämärässä NADPH:n ja hapen avulla. Palauttaa ksantofyllikierron ja valmistaa lehden tehokkaaseen valonkeräykseen.' };
   const PROTEIN_SUBSTRATE = {
     'Photosystem II':['Vesi (H₂O)','Plastokinoni'],
     'Cytochrome b6f':['Plastokinoli (PQH₂)','Plastosyaniini'],
@@ -2243,8 +2249,8 @@ async function run(){
     if(gSel.size === 1){ const mi=[...gSel][0], md=mInfo[mi];
       selPanel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:3px">'+md.name+'</div>'
         + '<div style="font-size:12px;opacity:.8">'+mols[mi].na+' atomia</div>';
-      cof = soleCofGroup(mi);
-      if(cof < 0 && PROTEIN_DESC[md.name]){ showCenterProtein(mi); protein = true; }
+      if(PROTEIN_DESC[md.name]){ showCenterProtein(mi); protein = true; }   // a known protein → its info, even if it holds a single cofactor (FeS / NADP / Cu)
+      else cof = soleCofGroup(mi);                                          // else a lone cofactor molecule → its 2D formula
     } else { let h='<div style="font-weight:bold;font-size:14px;margin-bottom:5px">Valittu: '+gSel.size+'</div><div style="display:flex;flex-wrap:wrap;gap:5px">';
       for(const mi of gSel) h+='<span title="'+mInfo[mi].name+'" style="width:16px;height:16px;border-radius:5px;border:2px solid var(--brown);background:'+rgbSelCss(mi)+'"></span>';
       selPanel.innerHTML = h+'</div>'; }
@@ -3065,9 +3071,9 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD'],
     samplers:['cofDepth'],
-    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE'] });
+    defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
   vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false; realAlpha(vdwMat);
@@ -3075,19 +3081,19 @@ async function run(){
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
-    bindCof(eff); });
+    eff.setFloat('focalD', Math.abs(cam.radius)); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD'],
     samplers:['cofDepth'],
-    defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE'] });   // MEMFADE = membrane cross-cut fade
+    defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    bindCof(eff); });
+    eff.setFloat('focalD', Math.abs(cam.radius)); bindCof(eff); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -3096,8 +3102,8 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright'],
-      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL'] });
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD'],
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define DEPTHSHADE'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
     etcMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); etcMat.backFaceCulling=false; realAlpha(etcMat);
@@ -3106,7 +3112,7 @@ async function run(){
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
-      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); });
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', Math.abs(cam.radius)); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
     etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
     etcOverlay.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
@@ -5006,7 +5012,7 @@ async function run(){
       cp.innerHTML = '<div style="flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:5px">'   // LEFT: image + name
           + '<canvas id="center-protein-img" width="230" height="170" style="width:150px;height:111px;flex:0 0 auto"></canvas>'
           + '<div id="center-protein-name" style="font-weight:bold;font-size:14px;text-align:center"></div></div>'
-        + '<div id="center-protein-desc" style="flex:1 1 0;font-size:13px;line-height:1.55;text-align:center;max-width:42%"></div>'   // CENTRE: description
+        + '<div id="center-protein-desc" style="flex:1 1 0;font-size:12.5px;line-height:1.5;text-align:center;max-width:46%;max-height:100%;overflow:auto"></div>'   // CENTRE: description
         + '<div id="center-protein-subs" style="flex:0 0 auto;font-size:12px;line-height:1.6;text-align:left;max-width:30%"></div>';   // RIGHT: substrates
       center.appendChild(cp); }
     // zoom readout → top-left corner of the minimap module, beige, shown only in dev mode
