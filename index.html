@@ -613,6 +613,7 @@ uniform float coneCos;     // reveal only atoms within this cosine of the view a
 #ifdef DEPTHSHADE
 uniform float focalD;      // camera-to-pivot distance → shade atoms nearer than it brighter, farther darker
 uniform float depthK;      // depth-shading strength (dev slider)
+uniform float depthLo;     // darkest floor the shading reaches - lower = more contrast (dev slider)
 #endif
 #ifdef COFHIDE
 uniform sampler2D cofDepth;   // nearest cofactor's view-space depth per screen pixel (1e9 = none)
@@ -695,7 +696,7 @@ void main(void){
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
 #ifdef DEPTHSHADE
-  col *= clamp(1.0 + (focalD - posV.z) * depthK, 0.28, 1.15);  // front-to-back depth shading (near brighter, far darker), strength = dev slider
+  col *= clamp(1.0 + (focalD - posV.z) * depthK, depthLo, 1.15);  // front-to-back depth shading (near brighter, far darker), strength + floor = dev sliders
 #endif
 #ifdef ETCHL
   bool hl = abs(vGid - hlGroup) < 0.5;                        // hovered / flashing cofactor group
@@ -2700,6 +2701,7 @@ async function run(){
   let gConeReach = 0.0;       // how far BEHIND the cofactor atom the cone still clears (Å). Dev slider.
   let gCofLineW = 2.2;        // cofactor silhouette outline thickness (px). Dev slider.
   let gDepthK = 0.03;         // front-to-back depth-shading strength on the molecules. Dev slider.
+  let gDepthLo = 0.28;        // darkest floor the depth-shading reaches (lower = more contrast). Dev slider.
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
   let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
   const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
@@ -3076,7 +3078,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
@@ -3086,10 +3088,10 @@ async function run(){
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
-    eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); bindCof(eff); });
+    eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
@@ -3098,7 +3100,7 @@ async function run(){
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); bindCof(eff); });
+    eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); bindCof(eff); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -3107,7 +3109,7 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define DEPTHSHADE','#define ETCTHIN'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
@@ -3117,7 +3119,7 @@ async function run(){
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
-      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); });
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
     etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
     etcOverlay.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
@@ -4576,8 +4578,13 @@ async function run(){
   const dsSld = document.createElement('input'); dsSld.type='range'; dsSld.min='0'; dsSld.max='100'; dsSld.value='30'; dsSld.style.cssText='width:100%;cursor:pointer;';   // 30 → 0.030 (range 0…0.10)
   const dsValEl = dsRow.querySelector('#dev-ds-val');
   dsSld.oninput = () => { gDepthK = (+dsSld.value/100)*0.10; dsValEl.textContent = gDepthK.toFixed(3); };
+  // Depth-shading CONTRAST: how dark the far side is allowed to go (higher slider = lower floor = more contrast).
+  const dcRow = document.createElement('div'); dcRow.innerHTML = 'varjostuksen kontrasti: <b id="dev-dc-val">0.28</b>';
+  const dcSld = document.createElement('input'); dcSld.type='range'; dcSld.min='0'; dcSld.max='100'; dcSld.value='72'; dcSld.style.cssText='width:100%;cursor:pointer;';   // 72 → floor 0.28
+  const dcValEl = dcRow.querySelector('#dev-dc-val');
+  dcSld.oninput = () => { gDepthLo = (1 - +dcSld.value/100); dcValEl.textContent = gDepthLo.toFixed(2); };   // higher slider → lower floor → more contrast
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4594,7 +4601,7 @@ async function run(){
   backRow.onclick = () => { const url = new URL(location.href);
     if(gBackend === 'WebGPU') url.searchParams.delete('webgpu'); else url.searchParams.set('webgpu', '1');
     location.href = url.toString(); };
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
