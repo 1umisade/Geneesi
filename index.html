@@ -5042,6 +5042,21 @@ async function run(){
     document.addEventListener('pointerdown', e => { if(open && !menu.contains(e.target) && !gear.contains(e.target)) setOpen(false); });
   }
 
+  // ── Fullscreen toggle (top-right) ──
+  { const fs = document.createElement('button'); fs.id = 'fs-btn'; fs.title = 'Koko näyttö';
+    fs.style.cssText = 'position:fixed;top:12px;right:16px;z-index:15;font-family:"Courier New",monospace;font-size:18px;line-height:1;'
+      + 'color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;box-shadow:0 4px 0 var(--brown);padding:6px 12px;user-select:none';
+    const D = document, root = D.documentElement;
+    const isFs = () => D.fullscreenElement || D.webkitFullscreenElement;
+    const sync = () => { fs.textContent = isFs() ? '🡼' : '⛶'; };   // arrows-in when full, expand when not
+    sync();
+    fs.addEventListener('click', () => {
+      if(isFs()){ (D.exitFullscreen || D.webkitExitFullscreen || function(){}).call(D); }
+      else { (root.requestFullscreen || root.webkitRequestFullscreen || function(){}).call(root); }
+    });
+    D.addEventListener('fullscreenchange', sync); D.addEventListener('webkitfullscreenchange', sync);
+    D.body.appendChild(fs); }
+
   // ── Camera: swing perpendicular to the spawn plane (view the 2-D sheet head-on) ──
   const viewPerp = () => {
     let best = null, bd = Infinity;                            // nearest raw alpha looking along ±Z
@@ -5646,14 +5661,14 @@ async function run(){
   // MEDIUM → the whole ETC cofactor, FAR → the whole complex; empty space clears + swings perpendicular.
   const onDouble = () => {
     if(spawnEl) return;
-    if(gSel.size){   // an RTS selection → centre the camera on it (one-shot setTarget, keeps rotation free)
+    const a = pickAtom();
+    if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15) — farther, fall through
+    const gi = pickEtcGroup();
+    if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
+    if(gSel.size){   // nothing pickable under the cursor → centre the camera on the RTS selection (keeps rotation free)
       let cx=0,cy=0,cz=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
       const n=gSel.size; focusCameraOn(new BABYLON.Vector3(cx/n, cy/n, cz/n)); return;
     }
-    const a = pickAtom();
-    if(a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15) — farther, fall through to the molecule it belongs to
-    const gi = pickEtcGroup();
-    if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
     // Whole-complex selection (→ move/rotate gizmo) is a DEV-mode tool only.
     if(gDev){ const mid = pickModelAtCursor();
       if(mid >= 0 && _modelPickT > BUBBLE_R){ clearAtomSel(); clearEtcSel(); selectModel(mid); return; } }
