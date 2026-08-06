@@ -2125,6 +2125,7 @@ async function run(){
   const gMoveTarget = new Map();        // mi → [tx,ty,tz] target gModelOff (glide destination)
   let gPing = null;                     // {x,y,z,t0} → the expanding move-order ping on the floor
   const gFollow = new Map();            // mi → {tmi, ang, ring} → keep chasing molecule tmi at a standoff
+  const EDGE_M = 110;                    // screen-edge pan band width (px) — panning ramps up across this margin
   const modelSize = mi => { const md=mInfo[mi]; return Math.hypot(md.x1-md.x0, md.y1-md.y0, md.z1-md.z0); };   // bbox diagonal
   // per-model glide rate → bigger complexes move slower, small cofactors nip about (mapped across the size range)
   const gModelGlide = new Float32Array(mols.length);
@@ -2214,9 +2215,13 @@ async function run(){
       else { _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
         const s=BABYLON.Vector3.Project(new BABYLON.Vector3(gPing.x,gPing.y,gPing.z), BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _vpSel);
         if(s.z>=0 && s.z<=1){ const a=(1-el).toFixed(3);
-          const c1=gPing.follow?'255,205,70':'80,240,120', c2=gPing.follow?'255,232,150':'150,255,175';   // gold = follow, green = ground move
+          const c1=gPing.follow?'74,51,32':'163,184,129', c2=gPing.follow?'124,92,57':'196,214,150';   // dark-brown = follow, sage = ground move (Solukko palette)
           oc2.strokeStyle='rgba('+c1+','+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
           oc2.strokeStyle='rgba('+c2+','+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
+    if(gDev){ const W=selOverlay.width, H=selOverlay.height, M=EDGE_M;   // dev: show the edge-pan trigger bands (sage)
+      oc2.fillStyle='rgba(163,184,129,0.12)';
+      oc2.fillRect(0,0,M,H); oc2.fillRect(W-M,0,M,H); oc2.fillRect(M,0,W-2*M,M); oc2.fillRect(M,H-M,W-2*M,M);
+      oc2.strokeStyle='rgba(74,51,32,0.55)'; oc2.lineWidth=1.5; oc2.setLineDash([7,5]); oc2.strokeRect(M,M,W-2*M,H-2*M); oc2.setLineDash([]); }
   });
   // SC2-style screen-edge panning — cursor near a viewport edge scrolls the camera that way (disabled mid-drag and over the docked UI)
   let edgeMX=-1, edgeMY=-1, edgeOnCanvas=false;
@@ -2224,7 +2229,7 @@ async function run(){
   window.addEventListener('pointerout', ev => { if(!ev.relatedTarget) edgeOnCanvas=false; });
   scene.onBeforeRenderObservable.add(() => {
     if(!edgeOnCanvas || dragging) return;
-    const W=canvas.clientWidth, H=canvas.clientHeight, M=34;
+    const W=canvas.clientWidth, H=canvas.clientHeight, M=EDGE_M;
     let ex=0, ey=0;
     if(edgeMX < M) ex=-(1-edgeMX/M); else if(edgeMX > W-M) ex=(edgeMX-(W-M))/M;   // left/right edge
     if(edgeMY < M) ey=(1-edgeMY/M);  else if(edgeMY > H-M) ey=-((edgeMY-(H-M))/M);  // top edge scrolls up, bottom down
@@ -4265,7 +4270,7 @@ async function run(){
   { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200 }, scene);
     floor.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, FLOOR_Z); floor.isPickable=false; floor.renderingGroupId=0;
     const fmat = new BABYLON.StandardMaterial('rtsFloorMat', scene);
-    fmat.emissiveColor = new BABYLON.Color3(1,1,1); fmat.disableLighting=true; fmat.alpha=0.10;   // 90% transparent white
+    fmat.emissiveColor = new BABYLON.Color3(0.64,0.78,0.51); fmat.disableLighting=true; fmat.alpha=0.055;   // faint light-green (sage) sheet, ~94% transparent
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
   const undoModel = () => {
