@@ -5009,20 +5009,20 @@ async function run(){
     let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
     for(const a of At){ mnx=Math.min(mnx,a.x); mxx=Math.max(mxx,a.x); mny=Math.min(mny,a.y); mxy=Math.max(mxy,a.y); }
     let bl=0; for(const [i,j] of bonds) bl+=Math.hypot(At[i].x-At[j].x, At[i].y-At[j].y); bl=(bl/Math.max(1,bonds.length))||1;
-    const s=19/bl, pad=16, W=(mxx-mnx)*s+2*pad, H=(mxy-mny)*s+2*pad;   // ~19px per bond → legible (scrolls if wide)
+    const s=19/bl, pad=16, W=(mxx-mnx)*s+2*pad, H=(mxy-mny)*s+2*pad;   // ~19px per bond in viewBox units (SVG scales to fit width)
     const PX=a=>pad+(a.x-mnx)*s, PY=a=>pad+(mxy-a.y)*s;               // flip Y (MOL is y-up, SVG is y-down)
-    const eCol=sym=>{ const c=(ELEM[(sym||'').toUpperCase()]||ELEM.FB).c; return 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')'; };
-    const paper2=(getComputedStyle(document.body).getPropertyValue('--paper2')||'#f3e9cf').trim();
+    const eArr=sym=>(ELEM[(sym||'').toUpperCase()]||ELEM.FB).c;       // EXACT element colour (same table the orbitals use)
+    const rgbOf=c=>'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')';
     const ink=(getComputedStyle(document.body).getPropertyValue('--ink')||'#4a3320').trim();
     const seg=(x1,y1,x2,y2)=>'<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+'" stroke="'+ink+'" stroke-width="1.3"/>';
-    let sv='<svg viewBox="0 0 '+W.toFixed(0)+' '+H.toFixed(0)+'" width="'+W.toFixed(0)+'" height="'+H.toFixed(0)+'" style="display:block">';
+    let sv='<svg viewBox="0 0 '+W.toFixed(0)+' '+H.toFixed(0)+'" width="100%" style="display:block">';   // width:100% → fits the panel
     for(const [i,j,ord] of bonds){ const x1=PX(At[i]),y1=PY(At[i]),x2=PX(At[j]),y2=PY(At[j]),dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy)||1,nx=-dy/len,ny=dx/len;
       if(ord===2){ const o=2.3; sv+=seg(x1+nx*o,y1+ny*o,x2+nx*o,y2+ny*o)+seg(x1-nx*o,y1-ny*o,x2-nx*o,y2-ny*o); }
       else if(ord===3){ const o=2.7; sv+=seg(x1,y1,x2,y2)+seg(x1+nx*o,y1+ny*o,x2+nx*o,y2+ny*o)+seg(x1-nx*o,y1-ny*o,x2-nx*o,y2-ny*o); }
       else sv+=seg(x1,y1,x2,y2); }
-    for(const a of At){ const col=eCol(a.sym), x=PX(a).toFixed(1), y=PY(a).toFixed(1);
-      sv+='<circle cx="'+x+'" cy="'+y+'" r="6.5" fill="'+paper2+'" stroke="'+col+'" stroke-width="1.2"/>'
-        + '<text x="'+x+'" y="'+y+'" text-anchor="middle" dominant-baseline="central" font-size="8.5" font-weight="bold" fill="'+col+'">'+(a.sym||'?')+'</text>'; }
+    for(const a of At){ const c=eArr(a.sym), col=rgbOf(c), lum=0.299*c[0]+0.587*c[1]+0.114*c[2], tcol=lum>0.6?'#1a1a1a':'#ffffff', x=PX(a).toFixed(1), y=PY(a).toFixed(1);
+      sv+='<circle cx="'+x+'" cy="'+y+'" r="7" fill="'+col+'" stroke="'+ink+'" stroke-width="0.5"/>'   // SOLID element colour, like the orbital spheres
+        + '<text x="'+x+'" y="'+y+'" text-anchor="middle" dominant-baseline="central" font-size="8.5" font-weight="bold" fill="'+tcol+'">'+(a.sym||'?')+'</text>'; }
     return sv+'</svg>';
   };
   const _molCache = {};
