@@ -2241,24 +2241,27 @@ async function run(){
           oc2.strokeStyle='rgba('+c1+','+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
           oc2.strokeStyle='rgba('+c2+','+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
     if(gDev){ const W=selOverlay.width, H=selOverlay.height, M=EDGE_M;   // dev: show the edge-pan trigger bands (sage)
-      const con=document.getElementById('sc2-console'), bE=H-(con?con.offsetHeight:0);   // bottom band sits just above the console
+      const con=document.getElementById('sc2-console'), bE=H-(con?con.offsetHeight:0);   // left/right/top bands live over the play area
       oc2.fillStyle='rgba(163,184,129,0.12)';
-      oc2.fillRect(0,0,M,bE); oc2.fillRect(W-M,0,M,bE); oc2.fillRect(M,0,W-2*M,M); oc2.fillRect(M,bE-M,W-2*M,M);
-      oc2.strokeStyle='rgba(74,51,32,0.55)'; oc2.lineWidth=1.5; oc2.setLineDash([7,5]); oc2.strokeRect(M,M,W-2*M,bE-2*M); oc2.setLineDash([]); }
+      oc2.fillRect(0,0,M,bE); oc2.fillRect(W-M,0,M,bE); oc2.fillRect(M,0,W-2*M,M);   // left / right / top ramps
+      oc2.fillStyle='rgba(163,184,129,0.5)'; oc2.fillRect(0,H-3,W,3);                 // bottom: only the very edge (no buffer)
+      oc2.strokeStyle='rgba(74,51,32,0.55)'; oc2.lineWidth=1.5; oc2.setLineDash([7,5]); oc2.strokeRect(M,M,W-2*M,bE-M); oc2.setLineDash([]); }
   });
-  // SC2-style screen-edge panning — cursor near a viewport edge scrolls the camera that way (disabled mid-drag and over the docked UI)
-  let edgeMX=-1, edgeMY=-1, edgeOnCanvas=false;
-  window.addEventListener('pointermove', ev => { edgeMX=ev.clientX; edgeMY=ev.clientY; edgeOnCanvas=(ev.target===canvas); }, {passive:true});
-  window.addEventListener('pointerout', ev => { if(!ev.relatedTarget) edgeOnCanvas=false; });
-  let _sc2con = null;
+  // SC2-style screen-edge panning — cursor near a viewport edge scrolls the camera that way (disabled mid-drag)
+  let edgeMX=-1, edgeMY=-1, edgeOnCanvas=false, edgeIn=false;
+  window.addEventListener('pointermove', ev => { edgeMX=ev.clientX; edgeMY=ev.clientY; edgeOnCanvas=(ev.target===canvas); edgeIn=true; }, {passive:true});
+  window.addEventListener('pointerout', ev => { if(!ev.relatedTarget){ edgeOnCanvas=false; edgeIn=false; } });
   scene.onBeforeRenderObservable.add(() => {
-    if(!edgeOnCanvas || dragging) return;
-    if(!_sc2con) _sc2con = document.getElementById('sc2-console');
+    if(dragging || !edgeIn) return;
     const W=canvas.clientWidth, H=canvas.clientHeight, M=EDGE_M;
-    const bE = H - (_sc2con ? _sc2con.offsetHeight : 0);   // play-area bottom = top of the SC2 console → bottom-edge pan works just above it
     let ex=0, ey=0;
-    if(edgeMX < M) ex=-(1-edgeMX/M); else if(edgeMX > W-M) ex=(edgeMX-(W-M))/M;   // left/right edge
-    if(edgeMY < M) ey=(1-edgeMY/M);  else if(edgeMY > bE-M && edgeMY < bE) ey=-((edgeMY-(bE-M))/M);   // top scrolls up, above-console scrolls down
+    // BOTTOM: only the very last pixels of the viewport (no buffer) — works even over the console bar
+    if(edgeMY >= H - 3) ey = -1;
+    // LEFT / RIGHT / TOP: the usual ramped band, only while the cursor is over the play area (not the docked UI)
+    if(edgeOnCanvas){
+      if(edgeMX < M) ex=-(1-edgeMX/M); else if(edgeMX > W-M) ex=(edgeMX-(W-M))/M;
+      if(edgeMY < M) ey=(1-edgeMY/M);
+    }
     if(!ex && !ey) return;
     orbitLocked = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
