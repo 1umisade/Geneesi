@@ -2701,9 +2701,10 @@ async function run(){
   let gDepthLo = 0.40;        // darkest floor the depth-shading reaches (lower = more contrast). Dev slider.
   let gDepthStart = 0.0;      // where the darkening begins, WORLD units from the shading plane. Dev slider.
   let gDepthSpread = 120.0;   // world distance over which it fades to the floor. Dev slider.
-  let gShadePlane = -60.0;    // FIXED shading reference plane (near-Z face of the scene box) - recomputed from the models below
-  { let mh=1; for(let mi=0;mi<mols.length;mi++){ const md=mInfo[mi]; mh=Math.max(mh, md.cz-md.z0, md.z1-md.cz); }
-    gShadePlane = -mh; gDepthSpread = Math.max(20, 2*mh); }   // near face + full-thickness spread
+  let gShadePlane = -60.0;    // FIXED shading reference = the near-Z FACE of the scene's bounding box (flattened world Z). Recomputed below.
+  let gSceneZmin = -60, gSceneZmax = 60;
+  { let zmin=1e9, zmax=-1e9; for(let mi=0;mi<mols.length;mi++){ const md=mInfo[mi]; zmin=Math.min(zmin, md.z0-md.cz); zmax=Math.max(zmax, md.z1-md.cz); }
+    gSceneZmin=zmin; gSceneZmax=zmax; gShadePlane=zmin; gDepthStart=0; gDepthSpread=Math.max(20, zmax-zmin); }   // exact near face + full-thickness spread
   let gArmedItem = null;      // {kind,name} armed in the spawn selector (molecule / protein / photon)
   let gCollScale = 1.0;       // reactive-site / collision sphere radius multiplier. Dev slider.
   let gReactSites = null;     // { count, siteWorld(gi,out), radiusOf(gi), typeOf(gi) } → cofactor reactive spheres
@@ -3003,7 +3004,7 @@ async function run(){
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
     uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel'],
     samplers: ['cofDepth'],
-    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define COFHIDE']   // drag offset + per-model move; electrons only up close; COFHIDE = drop orbitals in front of a cofactor reveal cone
+    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close (COFHIDE reveal-discard removed: it also ate the cofactors' OWN front orbital lobes, and the cofactor spheres are always visible now anyway)
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1); realAlpha(orbMatG);   // always fully revealed; blended fades
   orbMatG.backFaceCulling = true;
@@ -4479,7 +4480,7 @@ async function run(){
     floor.material=fmat; }
   // Dev-only WHITE plane marking the fixed shading reference (the near-Z face of the scene box). The
   // depth darkening is measured from here, so seeing it helps tune the start/spread sliders.
-  { const sp = BABYLON.MeshBuilder.CreatePlane('shadePlane', { width:(gMaX-gMiX)*1.4+200, height:(gMaY-gMiY)*1.4+200 }, scene);
+  { const sp = BABYLON.MeshBuilder.CreatePlane('shadePlane', { width:(gMaX-gMiX), height:(gMaY-gMiY) }, scene);   // exact bounding-box X-Y face
     sp.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, gShadePlane); sp.isPickable=false; sp.renderingGroupId=0;
     const spm = new BABYLON.StandardMaterial('shadePlaneMat', scene); spm.emissiveColor=new BABYLON.Color3(1,1,1);
     spm.disableLighting=true; spm.alpha=0.30; spm.backFaceCulling=false; spm.disableDepthWrite=true;
