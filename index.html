@@ -4270,7 +4270,16 @@ async function run(){
   { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200 }, scene);
     floor.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, FLOOR_Z); floor.isPickable=false; floor.renderingGroupId=0;
     const fmat = new BABYLON.StandardMaterial('rtsFloorMat', scene);
-    fmat.emissiveColor = new BABYLON.Color3(0.64,0.78,0.51); fmat.disableLighting=true; fmat.alpha=0.055;   // faint light-green (sage) sheet, ~94% transparent
+    // glassy sheet - a view-angle (Fresnel) opacity so the pane is near-invisible face-on (colours behind it
+    // pass through undistorted) yet catches a pale-sage sheen toward grazing angles, so it still reads as a surface
+    fmat.diffuseColor = new BABYLON.Color3(0,0,0);
+    fmat.emissiveColor = new BABYLON.Color3(0.82,0.90,0.72);   // pale sage tint (near neutral - a Solukko sage hint)
+    fmat.disableLighting = true; fmat.alpha = 1.0;             // real opacity comes from the Fresnel below
+    const fop = new BABYLON.FresnelParameters();
+    fop.leftColor = new BABYLON.Color3(0.6,0.6,0.6);           // grazing edges - a soft sheen
+    fop.rightColor = new BABYLON.Color3(0,0,0);                // face-on - transparent (no colour distortion)
+    fop.bias = 0.04; fop.power = 2.2;
+    fmat.opacityFresnelParameters = fop;
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
   const undoModel = () => {
