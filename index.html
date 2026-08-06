@@ -4357,10 +4357,9 @@ async function run(){
     ['konjugoitunut polyeeni','metyylihaarat','β-iononirenkaat'],                          // 8 Karotenoidi
     ['fenoli (hydroksyyli)','aromaattinen rengas','amiini','karboksyyli'],                 // 9 Tyr Z
     ['nikotiiniamidi (amidi)','adeniini (aromaattinen, amiini)','riboosit (hydroksyylit)','difosfaatti',"2'-fosfaatti"] ];   // 10 NADPH
-  // Structural-formula EMBEDS by cofactor type — a live MolView view (fallback = the generated 2D layout).
-  // molview.org itself sends X-Frame-Options: SAMEORIGIN, so we frame the embed.molview.org endpoint
-  // (which allows it) and link out to the full site.
-  const COF_FORMULA_EMBED = { 7: { embed:'https://embed.molview.org/v1/?mode=balls&q=Chlorophyll', link:'https://molview.org/?q=Chlorophyll' } };   // 7 = chlorophyll
+  // PubChem CID per cofactor type → its ready-made 2D structural-formula PNG (the most efficient option:
+  // one <img>, no parser/MOL file/iframe). Fallback for types without a CID = the generated 2D layout.
+  const COF_CID = { 7: 156620228 };   // 7 = chlorophyll a
   const showEtcSel = gi => {
     etcSel = gi;
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
@@ -5040,17 +5039,15 @@ async function run(){
     cofTitle.textContent = ETC_NAMES[g.type] || 'Kofaktori';
     cofAtoms.textContent = g.n + ' atomia';
     cofMass.textContent = 'Massa/kpl: ' + (groupMassDa(g) * 1.66053907e-6).toPrecision(3) + ' ag';   // Da → attograms (1 Da = 1.6605e-6 ag)
-    // Structural formula: a live MolView embed where we have one (chlorophyll), else the generated 2D layout.
-    { const cf = COF_FORMULA_EMBED[g.type];
-      cofFormula.innerHTML = cf
-        ? '<iframe src="'+cf.embed+'" title="MolView" loading="lazy" referrerpolicy="no-referrer"'
-          + ' style="width:100%;height:300px;border:0;border-radius:8px;display:block"></iframe>'
-          + '<a href="'+cf.link+'" target="_blank" rel="noopener noreferrer"'
-          + ' style="display:block;text-align:center;font-size:11px;margin-top:3px;color:var(--sageink)">Avaa MolView&#39;ssa &#8599;</a>'
-        : buildStructuralFormula(g); }
+    // Structural formula: PubChem's ready-made 2D PNG where we have a CID, else the generated 2D layout.
+    cofFormula.innerHTML = COF_CID[g.type]
+      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500"'
+        + ' alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
+      : buildStructuralFormula(g);
     { const grps = ETC_GROUPS[g.type] || [];   // vertical functional-group list
       cofGroups.innerHTML = grps.length ? '<b>Funktionaaliset ryhmät:</b><br>' + grps.map(s => '• ' + s).join('<br>') : ''; }
-    cofLink.href = 'https://pubchem.ncbi.nlm.nih.gov/#query=' + encodeURIComponent(PUBCHEM_Q[g.type] || ETC_NAMES[g.type] || '');
+    cofLink.href = COF_CID[g.type] ? 'https://pubchem.ncbi.nlm.nih.gov/compound/' + COF_CID[g.type]
+      : 'https://pubchem.ncbi.nlm.nih.gov/#query=' + encodeURIComponent(PUBCHEM_Q[g.type] || ETC_NAMES[g.type] || '');
     cofInfoPanel.style.display='block';
     const maxR = buildCofPrev(g);                       // 3D image → render the centred cofactor into the panel canvas
     prevCam.setTarget(BABYLON.Vector3.Zero());
