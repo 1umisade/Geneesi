@@ -2101,7 +2101,6 @@ async function run(){
   const _zSel = new BABYLON.Vector3();
   let gZoomVel = 0;   // pending zoom (accumulated from wheel/buttons) → applied smoothly over frames
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
-  let gZoomRecenter = 0.5;  // extra pull of the pivot toward the cursor while zooming IN (0 = none). Dev slider.
   const zoomBy = delta => {                 // delta < 0 = closer
     // Ease the zoom down as the camera nears the SELECTED object — an atom, a cofactor, or a whole
     // complex — so you glide in instead of overshooting; it speeds back up once you dolly past. The
@@ -2127,11 +2126,7 @@ async function run(){
       // Zoom TOWARD the cursor (not the viewport centre): keep the world point under the cursor fixed by
       // shifting the pivot the same fraction the distance changed - target = P + f*(target - P).
       if(gZoomP){ const f = newR / oldR;
-        cam.target.set(gZoomP.x + f*(cam.target.x-gZoomP.x), gZoomP.y + f*(cam.target.y-gZoomP.y), gZoomP.z + f*(cam.target.z-gZoomP.z));
-        if(gZoomRecenter > 0.001 && delta < 0){   // zooming IN → additionally pull the pivot toward the cursor point (re-centre the view there)
-          const a = Math.min(0.5, gZoomRecenter * 0.16);
-          cam.target.set(cam.target.x + (gZoomP.x-cam.target.x)*a, cam.target.y + (gZoomP.y-cam.target.y)*a, cam.target.z + (gZoomP.z-cam.target.z)*a);
-        } }
+        cam.target.set(gZoomP.x + f*(cam.target.x-gZoomP.x), gZoomP.y + f*(cam.target.y-gZoomP.y), gZoomP.z + f*(cam.target.z-gZoomP.z)); }
       cam.radius = newR;
     }
   };
@@ -4638,13 +4633,8 @@ async function run(){
   const csSld = document.createElement('input'); csSld.type='range'; csSld.min='0'; csSld.max='100'; csSld.value='25'; csSld.style.cssText='width:100%;cursor:pointer;';   // 25 → 1.0 (range 0…4)
   const csValEl = csRow.querySelector('#dev-cs-val');
   csSld.oninput = () => { gCollScale = (+csSld.value/100)*4.0; csValEl.textContent = gCollScale.toFixed(2); if(gCollVizUpdate) gCollVizUpdate(); };
-  // Zoom-to-cursor RE-CENTER strength: how strongly the pivot slides to the cursor point while zooming in.
-  const zrRow = document.createElement('div'); zrRow.innerHTML = 'zoom-keskitys: <b id="dev-zr-val">0.50</b>';
-  const zrSld = document.createElement('input'); zrSld.type='range'; zrSld.min='0'; zrSld.max='100'; zrSld.value='50'; zrSld.style.cssText='width:100%;cursor:pointer;';
-  const zrValEl = zrRow.querySelector('#dev-zr-val');
-  zrSld.oninput = () => { gZoomRecenter = +zrSld.value/100; zrValEl.textContent = gZoomRecenter.toFixed(2); };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, zrSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4655,7 +4645,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(zrRow); devPanel.appendChild(zrSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
