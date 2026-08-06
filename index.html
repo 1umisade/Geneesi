@@ -3604,9 +3604,9 @@ async function run(){
       const wx=m2wx((e.clientX-r.left)*(W/r.width)), wy=m2wy((e.clientY-r.top)*(HH/r.height));
       scene.stopAnimation(cam); cam.setTarget(new BABYLON.Vector3(wx, wy, cam.getTarget().z)); });   // one-shot recentre
   }
-  // Fixed default view (read off the dev cam-coords panel): straight along +Z toward the membrane.
-  cam.setTarget(new BABYLON.Vector3(50, -6, 223));
-  cam.setPosition(new BABYLON.Vector3(50, -6, -961));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
+  // Fixed default view: straight along +Z at the flattened RTS floor plane (models are all at Z=0).
+  cam.setTarget(new BABYLON.Vector3(50, -6, 0));
+  cam.setPosition(new BABYLON.Vector3(50, -6, -1184));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
   cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
   // Centre a freshly-selected object: an INSTANT one-shot setTarget. Deliberately NOT animated —
@@ -3741,12 +3741,7 @@ async function run(){
     // conditions below form a single on/off threshold (with hysteresis so it can't chatter on the
     // boundary), and gCut[2] then eases to that target over MEM_FADE_S seconds. At rest it is always
     // exactly 0 or 1, so lipids are either fully solid or completely gone.
-    const fy = Math.abs(f.y);                                        // 0 = looking horizontally, 1 = straight down/up
-    const elevAbs = Math.abs(cp.y - bilayerCen.y);                   // camera height above/below the membrane plane
-    const elevLim = Math.max(220, ar*0.55);                          // "at membrane level" scales with zoom distance
-    const wantCut = memCutOn                                          // hysteresis: wider band to stay on than to switch on
-      ? (fy < 0.42 && elevAbs < elevLim*1.25)
-      : (fy < 0.30 && elevAbs < elevLim);
+    const wantCut = true;   // camera-side membrane is hidden PERMANENTLY (RTS view) — always cut the near half
     memCutOn = wantCut;
     const step = Math.min(engine.getDeltaTime(), 50) / (MEM_FADE_S * 1000);
     gCut[2] += Math.max(-step, Math.min(step, (wantCut ? 1 : 0) - gCut[2]));   // 1 s linear fade to full-on / full-off
@@ -4222,6 +4217,16 @@ async function run(){
     q.toRotationMatrix(_tmpR);
     const nx=mi.cx+gModelOff[mid*3], ny=mi.cy+gModelOff[mid*3+1], nz=mi.cz+gModelOff[mid*3+2];
     BABYLON.Matrix.Translation(-mi.cx,-mi.cy,-mi.cz).multiply(_tmpR).multiply(BABYLON.Matrix.Translation(nx,ny,nz)).copyToArray(gModelXform, mid*16); };
+  /* ── RTS floor ── flatten every model onto ONE plane (perpendicular to the membrane, at the models'
+     level) and lay a 90%-transparent white sheet there, so the scene reads as a flat RTS battlefield. */
+  const FLOOR_Z = 0;
+  for(let mi=0; mi<mols.length; mi++){ gModelOff[mi*3+2] = FLOOR_Z - mInfo[mi].cz; rebuildModelXform(mi); }   // all model centres → Z = FLOOR_Z
+  { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200 }, scene);
+    floor.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, FLOOR_Z); floor.isPickable=false; floor.renderingGroupId=0;
+    const fmat = new BABYLON.StandardMaterial('rtsFloorMat', scene);
+    fmat.emissiveColor = new BABYLON.Color3(1,1,1); fmat.disableLighting=true; fmat.alpha=0.10;   // 90% transparent white
+    fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
+    floor.material=fmat; }
   const undoModel = () => {
     const s = undoStack.pop(); if(!s) return; const mid=s.mid;
     gModelOff[mid*3]=s.off[0]; gModelOff[mid*3+1]=s.off[1]; gModelOff[mid*3+2]=s.off[2];
