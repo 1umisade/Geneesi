@@ -4004,7 +4004,7 @@ async function run(){
           if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cR){ vis=false; break; }
         }
       }
-      const near = vis && d2 < REVEAL2;                   // close enough for electrons + nuclei
+      const nr = REVEAL_DIST + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
       const wantOrb = vis && gGfxMode === 1 && near;      // orbitals only for NEAR cells in mode 1 (never rendered out of range)
       const wantSph = vis && !!cell.sphere;               // vdW always drawn; in mode 1 it goes 50% transparent where its atom reveals orbitals
       const wantNuc = near && gGfxMode === 1;             // nuclei: mode 1, up close only (shader further gates them to the reveal range)
