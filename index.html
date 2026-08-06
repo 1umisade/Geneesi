@@ -163,8 +163,8 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #eltable .segbtn:last-child{border-right:none}
 #eltable .segbtn.on{background:var(--sage);color:var(--sageink)}
 #eltable .segpane{font-size:12px;color:var(--brown);opacity:.7;padding:22px 8px;text-align:center}
-#sc2-center svg{width:100%;height:100%;display:block}   /* fills the module box - viewBox+preserveAspectRatio letterbox the drawing to fit */
-#sc2-center img{max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto}
+#cof-formula svg{width:100%;height:100%;display:block}   /* the cofactor 2D formula fills its box - viewBox+preserveAspectRatio letterbox the drawing to fit */
+#cof-formula img{max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto}
 #eltable .elhdr{font-size:12px;font-weight:bold;color:var(--brown);letter-spacing:.5px;margin-bottom:8px;
   display:flex;justify-content:space-between;align-items:center;gap:10px}
 #eltable .elclear{font-family:inherit;font-size:11px;font-weight:bold;color:var(--sageink);background:var(--sage);
@@ -5139,6 +5139,7 @@ async function run(){
   // ── SC2-style bottom command console ── one solid bar across the bottom quarter: minimap (left) ·
   //    selected-item info (centre) · spawn atoms (right). The three existing panels are re-parented into
   //    it and their floating positioning is overridden. Detail/zoom panels are lifted above the console.
+  let gInfoRight = null;   // the right-side info module (holds the selection / atom / protein / cofactor card, one at a time)
   { const con = document.createElement('div'); con.id = 'sc2-console';
     // no bar background - the three modules float separately over the scene; con itself passes clicks through
     con.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:25vh;min-height:196px;z-index:11;box-sizing:border-box;'
@@ -5147,27 +5148,34 @@ async function run(){
     const sect = (grow, basis, pad) => { const s = document.createElement('div');
       s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:'+(pad||'8px 12px')+';overflow:hidden;pointer-events:auto;'
         + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
-    const left = sect(0,'auto','5px'), center = sect(1,'0'), right = sect(0,'auto'); center.id = 'sc2-center';
+    const left = sect(0,'auto','5px'), center = document.createElement('div'), right = sect(0,'auto'); center.id = 'sc2-center';
+    center.style.cssText = 'flex:1 0 0;pointer-events:none;';   // info module moved to the RIGHT (above the spawn module) → the centre is now a transparent spacer keeping minimap left / spawn right
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
+    // ── Info module: relocated to the RIGHT, stacked directly ABOVE the spawn (element) module, vertical,
+    //    matched to its width. Holds the selection / atom / protein / cofactor cards (one visible at a time).
+    gInfoRight = document.createElement('div'); gInfoRight.id = 'info-right';
+    gInfoRight.style.cssText = 'position:fixed;right:12px;bottom:calc(25vh + 16px);width:300px;max-height:66vh;z-index:11;box-sizing:border-box;'
+      + 'display:none;flex-direction:column;align-items:stretch;gap:8px;padding:11px 12px;overflow:auto;'
+      + 'font-family:"Courier New",monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);pointer-events:auto;';
+    document.body.appendChild(gInfoRight);
     // dock the existing panels into the modules, stripping their own frames so the module IS the frame
     const dock = (el, host, resets) => { if(!el) return; Object.assign(el.style, resets); host.appendChild(el); };
-    dock(document.getElementById('rts-minimap'), left,   { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none', background:'transparent', border:'none', padding:'0', width:'auto', height:'100%' });
-    dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%', background:'transparent', border:'none', boxShadow:'none' });
-    dock(document.getElementById('eltable'),     right,  { margin:'0', background:'transparent', border:'none', boxShadow:'none' });
-    // atom-info card — shown in the centre module when a single ATOM is selected
-    { const ca = document.createElement('div'); ca.id = 'center-atom';   // full atom info (render - table - 3D nucleus) is built into this by showConfig
-      ca.style.cssText = 'display:none;align-items:stretch;justify-content:center;gap:16px;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink)';
-      center.appendChild(ca); }
-    // protein-info card — name + short photosynthesis role + a colour swatch (shown for a selected protein)
+    dock(document.getElementById('rts-minimap'), left,      { position:'static', left:'', bottom:'', zIndex:'', boxShadow:'none', background:'transparent', border:'none', padding:'0', width:'auto', height:'100%' });
+    dock(document.getElementById('rts-selinfo'), gInfoRight, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%', width:'100%', background:'transparent', border:'none', boxShadow:'none' });
+    dock(document.getElementById('eltable'),     right,     { margin:'0', background:'transparent', border:'none', boxShadow:'none' });
+    // atom-info card — full atom info (render → orbital table → 3D nucleus) built into this by showConfig, VERTICAL
+    { const ca = document.createElement('div'); ca.id = 'center-atom';
+      ca.style.cssText = 'display:none;flex-direction:column;align-items:center;gap:6px;width:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink)';
+      gInfoRight.appendChild(ca); }
+    // protein-info card — image, name, role, substrates, stacked vertically for the narrow right module
     { const cp = document.createElement('div'); cp.id = 'center-protein';
-      cp.style.cssText = 'display:none;flex-direction:row;align-items:center;justify-content:space-around;gap:18px;width:100%;height:100%;box-sizing:border-box;padding:4px 10px;font-family:"Courier New",monospace;color:var(--ink)';
-      cp.innerHTML = '<div style="flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:5px">'   // LEFT: image + name
-          + '<canvas id="center-protein-img" width="230" height="170" style="width:150px;height:111px;flex:0 0 auto"></canvas>'
-          + '<div id="center-protein-name" style="font-weight:bold;font-size:14px;text-align:center"></div></div>'
-        + '<div id="center-protein-desc" style="flex:1 1 0;font-size:12.5px;line-height:1.5;text-align:center;max-width:46%;max-height:100%;overflow:auto"></div>'   // CENTRE: description
-        + '<div id="center-protein-subs" style="flex:0 0 auto;font-size:12px;line-height:1.6;text-align:left;max-width:30%"></div>';   // RIGHT: substrates
-      center.appendChild(cp); }
+      cp.style.cssText = 'display:none;flex-direction:column;align-items:center;gap:8px;width:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink)';
+      cp.innerHTML = '<canvas id="center-protein-img" width="230" height="170" style="width:100%;max-width:220px;height:auto;flex:0 0 auto"></canvas>'
+        + '<div id="center-protein-name" style="font-weight:bold;font-size:15px;text-align:center"></div>'
+        + '<div id="center-protein-desc" style="font-size:12.5px;line-height:1.5;text-align:center;width:100%"></div>'
+        + '<div id="center-protein-subs" style="font-size:12px;line-height:1.6;text-align:left;width:100%"></div>';
+      gInfoRight.appendChild(cp); }
     // zoom readout → top-left corner of the minimap module, beige, shown only in dev mode
     { const zv = document.getElementById('zoomval');
       if(zv){ zv.style.cssText = 'position:absolute;left:8px;top:8px;z-index:3;font-family:"Courier New",monospace;font-size:12px;font-weight:bold;color:var(--brown);background:var(--paper);border:2px solid var(--brown);border-radius:8px;padding:1px 8px;display:none;pointer-events:none';
@@ -5474,23 +5482,25 @@ async function run(){
   cofCanvas.style.cssText = 'width:100%;height:276px;display:block;background:var(--paper2);border-radius:8px;border:1px solid var(--brown)';
   const cofAtoms = document.createElement('div'); cofAtoms.style.cssText = 'font-size:12px;margin-top:7px';
   const cofMass = document.createElement('div'); cofMass.style.cssText = 'font-size:12px;margin-top:3px';
-  const cofFormula = document.createElement('div'); cofFormula.style.cssText = 'margin-top:8px;background:var(--paper2);border:1px solid var(--brown);border-radius:8px;overflow:auto';   // 2D structural formula (scrolls if the drawing is wide)
+  const cofFormula = document.createElement('div'); cofFormula.id = 'cof-formula'; cofFormula.style.cssText = 'margin-top:8px;background:var(--paper2);border:1px solid var(--brown);border-radius:8px;overflow:auto';   // 2D structural formula (scrolls if the drawing is wide)
   const cofGroups = document.createElement('div'); cofGroups.style.cssText = 'font-size:12px;margin-top:9px;line-height:1.5';   // vertical functional-group list
   const cofLink = document.createElement('a'); cofLink.target = '_blank'; cofLink.rel = 'noopener noreferrer'; cofLink.textContent = 'PubChem →';
   cofLink.style.cssText = 'display:inline-block;margin-top:9px;font-size:12px;font-weight:bold;text-decoration:none;'
     + 'color:var(--sageink);background:var(--sage);border-radius:999px;padding:3px 11px;box-shadow:0 2px 0 var(--brown)';
   cofInfoPanel.append(cofTitle, cofCanvas, cofFormula, cofAtoms, cofMass, cofGroups, cofLink);
   document.body.appendChild(cofInfoPanel);
-  // Relocate the cofactor detail into the console CENTRE module, stripped to just the title + 2D formula.
-  { const c = document.getElementById('sc2-center');
-    if(c){ cofInfoPanel.style.cssText = 'display:none;flex-direction:column;align-items:stretch;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink);';
-      for(const el of [cofCanvas, cofAtoms, cofMass, cofLink]) el.style.display = 'none';   // hide the 3D render, atom count, mass, link
-      cofTitle.style.cssText = 'font-weight:bold;font-size:14px;margin:0 0 5px;flex:0 0 auto;text-align:center';
-      const row = document.createElement('div'); row.style.cssText = 'display:flex;flex:1 1 auto;min-height:0;width:100%;gap:14px;align-items:center';
-      cofFormula.style.cssText = 'flex:1 1 auto;min-width:0;height:100%;overflow:hidden;background:transparent;border:none';
-      cofGroups.style.cssText = 'flex:0 0 auto;max-width:40%;font-size:12px;line-height:1.55;text-align:left;overflow:auto;max-height:100%';   // functional-group list beside the formula
-      row.appendChild(cofFormula); row.appendChild(cofGroups); cofInfoPanel.appendChild(row);
-      c.appendChild(cofInfoPanel); } }
+  // Relocate the cofactor detail into the RIGHT info module — title, 2D formula, functional groups, stacked vertically.
+  if(gInfoRight){ cofInfoPanel.style.cssText = 'display:none;flex-direction:column;align-items:stretch;width:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink);';
+    for(const el of [cofCanvas, cofAtoms, cofMass, cofLink]) el.style.display = 'none';   // hide the 3D render, atom count, mass, link
+    cofTitle.style.cssText = 'font-weight:bold;font-size:14px;margin:0 0 5px;flex:0 0 auto;text-align:center';
+    cofFormula.style.cssText = 'width:100%;height:160px;overflow:hidden;background:transparent;border:none';
+    cofGroups.style.cssText = 'width:100%;font-size:12px;line-height:1.55;text-align:left;margin-top:6px';   // functional-group list under the formula
+    cofInfoPanel.appendChild(cofFormula); cofInfoPanel.appendChild(cofGroups);   // (moves them after the title → vertical stack)
+    gInfoRight.appendChild(cofInfoPanel);
+    // Show the info module frame only while one of its cards is visible; hide it (no empty box) otherwise.
+    const cards = [selPanel, document.getElementById('center-atom'), document.getElementById('center-protein'), cofInfoPanel].filter(Boolean);
+    const sync = () => { let any=false; for(const el of cards){ const d=el.style.display; if(d && d!=='none'){ any=true; break; } } gInfoRight.style.display = any ? 'flex' : 'none'; };
+    const mo = new MutationObserver(sync); for(const el of cards) mo.observe(el, {attributes:true, attributeFilter:['style']}); sync(); }
 
   // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
   const cofPrevMat = new BABYLON.ShaderMaterial('cofPrevMat', scene, 'imp', {
@@ -5711,10 +5721,10 @@ async function run(){
     const grid = document.createElement('div');
     grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,auto);align-items:stretch;';
     const gcell = (col, css) => { const d = document.createElement('div');
-      d.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:6px 10px;'
+      d.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:3px 5px;'   // tight → the 4-column table fits the narrow right module
         + (col>0 ? 'border-left:2px solid var(--brown);' : '') + (css||'');
       return d; };
-    ['orbitaali','muoto','elektroneja','energia'].forEach((t,i)=>{ const c = gcell(i,'font-size:14px;font-weight:bold;opacity:.72;padding-bottom:5px;');
+    ['orbitaali','muoto','elektroneja','energia'].forEach((t,i)=>{ const c = gcell(i,'font-size:10.5px;font-weight:bold;opacity:.72;padding-bottom:4px;');
       c.textContent = t; grid.appendChild(c); });
     // Group the atom's real orbitals by shell n (hybrids / π / lone pairs sit in the valence shell).
     const shellN = oid => oid >= 900 ? maxN : Math.floor(oid/100);
@@ -5734,7 +5744,7 @@ async function run(){
       grid.appendChild(gap);
       for(const {oid, ev} of rows.filter(r => r.n===n).sort((a,b)=> a.ev - b.ev)){
         const ne = orbElectrons(e, oid);
-        const nameC = gcell(0,'font-size:16px;font-weight:bold;'); nameC.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN)+'</span>';
+        const nameC = gcell(0,'font-size:13px;font-weight:bold;'); nameC.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN)+'</span>';
         const shapeC = gcell(1); shapeC.innerHTML = orbShapeSVG(+oid, rgbCss(info(e).c));   // muoto = the orbital's real shape
         const box = document.createElement('span'); box.className = 'orb-box';
         const isBond = (oid >= 1000 && oid < 2000) || oid === 900;   // σ hybrid or π → one of the two electrons comes from the OTHER atom
@@ -5742,7 +5752,7 @@ async function run(){
           dot.className = (isBond && k === ne-1) ? 'orb-e orb-e-shared' : 'orb-e';   // partner atom's electron = darker
           box.appendChild(dot); }
         const elecC = gcell(2); elecC.appendChild(box);
-        const enC = gcell(3,'font-size:14px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;'); enC.textContent = fmtAJ(ev);
+        const enC = gcell(3,'font-size:11px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;white-space:nowrap;'); enC.textContent = fmtAJ(ev);
         const cells = [nameC, shapeC, elecC, enC];
         cellsByOid.set(oid, cells);
         for(const c of cells){ c.style.cursor = 'pointer'; c.title = ne + ' elektronia';
@@ -5757,30 +5767,23 @@ async function run(){
       }
     }
     repaint();
-    // ── 3D nucleus render (protons red - neutrons grey) + proton/neutron/nucleon counts — RIGHT region ──
+    // ── 3D nucleus render (protons red - neutrons grey), flanked by proton (left) + neutron (right) counts ──
     const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
-    nucViz.style.cssText = 'width:92px;height:92px;flex:0 0 auto;';
+    nucViz.style.cssText = 'width:82px;height:82px;flex:0 0 auto;';
     const Nn = Math.max(0, info(e).n - Z);
     const protonLbl = document.createElement('div'); protonLbl.textContent = Z + ' protonia';
-    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:center;';
+    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:1 1 0;';
     const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + ' neutronia' : '';   // hide neutrons when there are none (H)
-    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:center;';
-    const nukLbl = document.createElement('div'); nukLbl.textContent = info(e).n + ' nukleonia';
-    nukLbl.style.cssText = 'font-size:11px;opacity:.72;text-align:center;margin-top:2px;';
-    // Three horizontal regions fitted into the short-and-wide centre console module: render | table | nucleus.
-    const leftCol = document.createElement('div');
-    leftCol.style.cssText = 'flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;';
-    leftCol.appendChild(title); leftCol.appendChild(orbViz);
-    const midCol = document.createElement('div');
-    midCol.style.cssText = 'flex:0 1 auto;min-width:0;max-height:100%;overflow-y:auto;overflow-x:hidden;display:flex;align-items:center;';
-    midCol.appendChild(grid);
-    const rightCol = document.createElement('div');
-    rightCol.style.cssText = 'flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;';
-    rightCol.appendChild(protonLbl); rightCol.appendChild(nucViz); rightCol.appendChild(neutronLbl); rightCol.appendChild(nukLbl);
-    ca.appendChild(leftCol); ca.appendChild(midCol); ca.appendChild(rightCol);
+    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:1 1 0;';
+    const nucRow = document.createElement('div');
+    nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;width:100%;margin-top:2px;flex:0 0 auto;';
+    nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
+    // Vertical stack in the narrow right-side info module: name → 3D orbital render → orbital table → nucleus row.
+    grid.style.margin = '0 auto';   // centre the table in the column
+    ca.appendChild(title); ca.appendChild(orbViz); ca.appendChild(grid); ca.appendChild(nucRow);
     ca.style.display = 'flex';
-    hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1); selPanel.style.display = 'none';   // atom info OWNS the centre module
-    renderPreviews(atom, orbViz, nucViz);   // 3D orbitals (+ composited nucleus) → left canvas, real-scale 3D nucleus → right canvas
+    hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1); selPanel.style.display = 'none';   // atom info OWNS the info module
+    renderPreviews(atom, orbViz, nucViz);   // 3D orbitals (+ composited nucleus) → the render canvas, real-scale 3D nucleus → the nucleus canvas
   };
 
   // The full atom info now lives in the centre console module — built by showConfig, hidden here.
