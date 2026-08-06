@@ -2116,12 +2116,14 @@ async function run(){
     }
   };
   const dragZoom = dz => zoomBy(dz * Math.max(fitRadius * 0.0025, Math.abs(cam.radius) * 0.005));  // middle-drag
-  /* ── RTS selection + movement ── LEFT click selects a molecule, LEFT drag boxes a group, and with a
-     selection a LEFT click on empty space orders them to glide there. Camera stays on middle (rotate),
-     right (pan), wheel (zoom). A full-viewport overlay draws the selection brackets + the drag box. */
+  /* ── RTS selection + movement (SC2 scheme) ── LEFT click selects a molecule, LEFT drag boxes a group,
+     LEFT click on empty deselects. RIGHT click orders the selection to glide to that floor point (with a
+     ping). Camera: middle = rotate, wheel = zoom, screen-EDGE = pan. A full-viewport overlay draws the
+     selection brackets, the drag box, and the move ping. */
   const FLOOR_Z = 0;                    // the RTS floor plane — all models live at Z = FLOOR_Z and move within it
   const gSel = new Set();               // selected model indices
   const gMoveTarget = new Map();        // mi → [tx,ty,tz] target gModelOff (glide destination)
+  let gPing = null;                     // {x,y,z,t0} → the expanding move-order ping on the floor
   let rtsBoxing=false, rtsBoxMoved=false, rtsDownModel=-1, rtsBoxSX=0, rtsBoxSY=0, rtsBoxCX=0, rtsBoxCY=0;
   const rgbSelCss = mi => 'rgb('+Math.round(gModelCol[mi*3]*255)+','+Math.round(gModelCol[mi*3+1]*255)+','+Math.round(gModelCol[mi*3+2]*255)+')';
   // subtle SC2-style bottom bar behind the docked panels
@@ -2167,7 +2169,9 @@ async function run(){
     const ray=scene.createPickingRay(px,py,BABYLON.Matrix.Identity(),cam);
     if(Math.abs(ray.direction.z) < 1e-6) return;                       // ray parallel to the floor → no destination
     const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; if(t < 0) return;   // intersect the FLOOR plane Z = FLOOR_Z
-    const dx=(ray.origin.x + ray.direction.x*t)-cx, dy=(ray.origin.y + ray.direction.y*t)-cy;   // move only within the plane (X/Y)
+    const wx=ray.origin.x + ray.direction.x*t, wy=ray.origin.y + ray.direction.y*t;   // destination on the floor
+    gPing = { x:wx, y:wy, z:FLOOR_Z, t0:performance.now() };               // drop a move-order ping there
+    const dx=wx-cx, dy=wy-cy;                                              // move only within the plane (X/Y)
     for(const mi of gSel){ snapshotModel(mi); gMoveTarget.set(mi, [gModelOff[mi*3]+dx, gModelOff[mi*3+1]+dy, FLOOR_Z - mInfo[mi].cz]); } };   // Z pinned to the floor
   // glide selected molecules toward their ordered destinations
   scene.onBeforeRenderObservable.add(() => { if(!gMoveTarget.size) return;
@@ -2184,6 +2188,29 @@ async function run(){
         oc2.moveTo(s.x+sx*r, s.y+sy*r-sy*L); oc2.lineTo(s.x+sx*r, s.y+sy*r); oc2.lineTo(s.x+sx*r-sx*L, s.y+sy*r); oc2.stroke(); } }
     if(rtsBoxing && rtsBoxMoved){ const lx=Math.min(rtsBoxSX,rtsBoxCX), ly=Math.min(rtsBoxSY,rtsBoxCY), w=Math.abs(rtsBoxCX-rtsBoxSX), h=Math.abs(rtsBoxCY-rtsBoxSY);
       oc2.fillStyle='rgba(120,220,140,.12)'; oc2.fillRect(lx,ly,w,h); oc2.strokeStyle='rgba(140,235,160,.95)'; oc2.lineWidth=1.5; oc2.strokeRect(lx,ly,w,h); }
+    if(gPing){ const el=(performance.now()-gPing.t0)/620;   // SC2-style move ping — two green rings expanding out of the target
+      if(el>=1){ gPing=null; }
+      else { _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
+        const s=BABYLON.Vector3.Project(new BABYLON.Vector3(gPing.x,gPing.y,gPing.z), BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _vpSel);
+        if(s.z>=0 && s.z<=1){ const a=(1-el).toFixed(3);
+          oc2.strokeStyle='rgba(80,240,120,'+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
+          oc2.strokeStyle='rgba(150,255,175,'+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
+  });
+  // SC2-style screen-edge panning — cursor near a viewport edge scrolls the camera that way (disabled mid-drag and over the docked UI)
+  let edgeMX=-1, edgeMY=-1, edgeOnCanvas=false;
+  window.addEventListener('pointermove', ev => { edgeMX=ev.clientX; edgeMY=ev.clientY; edgeOnCanvas=(ev.target===canvas); }, {passive:true});
+  window.addEventListener('pointerout', ev => { if(!ev.relatedTarget) edgeOnCanvas=false; });
+  scene.onBeforeRenderObservable.add(() => {
+    if(!edgeOnCanvas || dragging) return;
+    const W=canvas.clientWidth, H=canvas.clientHeight, M=34;
+    let ex=0, ey=0;
+    if(edgeMX < M) ex=-(1-edgeMX/M); else if(edgeMX > W-M) ex=(edgeMX-(W-M))/M;   // left/right edge
+    if(edgeMY < M) ey=(1-edgeMY/M);  else if(edgeMY > H-M) ey=-((edgeMY-(H-M))/M);  // top edge scrolls up, bottom down
+    if(!ex && !ey) return;
+    orbitLocked = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
+    const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
+    cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
   });
   scene.onPointerObservable.add(p => {
     const e = p.event;
@@ -2203,22 +2230,15 @@ async function run(){
           rtsBoxSX = scene.pointerX; rtsBoxSY = scene.pointerY; rtsBoxCX = rtsBoxSX; rtsBoxCY = rtsBoxSY; dragging = true; }
         return;
       }
-      if(e.button === 2){   // RIGHT = grab-pan the view. Anchor the depth to the EXACT point under the cursor.
-        panning = true; dragging = true;
-        setCursor(GRABBING_CUR);   // closed-hand cursor while panning
-        scene.stopAnimation(cam);   // a focus animation (from selecting an atom) would otherwise keep resetting the target → pan looked dead
-        cam.inertialPanningX = cam.inertialPanningY = cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
-        const a = pickAtom();
-        if(a) panDepth = BABYLON.Vector3.Distance(cam.position, a.center);   // grabbed an atom → its true depth
-        else { pickModelAtCursor();   // else a complex's surface; if the camera is INSIDE its box (entry ≈ 0,
-          panDepth = (isFinite(_modelPickT) && _modelPickT > 0.5) ? _modelPickT : Math.abs(cam.radius); }  // e.g. focused on a selected atom) fall back to the pivot distance, never 0
+      if(e.button === 2){   // RIGHT = SC2 move command → order the selection to the floor point under the cursor (fires on press)
+        if(gSel.size) moveSelectedTo(scene.pointerX, scene.pointerY);   // sets the glide target + drops the ping
         return;
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
       setCursor('');   // revert to the default cursor after a drag (the next hover re-applies the grab hand)
       if(e.button === 1){ rotating = false; return; }   // middle-drag rotate ends (inertia carries on)
-      if(e.button === 2){ panning = false; return; }
+      if(e.button === 2){ return; }   // right-button up → nothing (the move order already fired on press)
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = []; return; }   // finished moving a spawned atom
       if(e.button === 0 && rtsBoxing){ rtsBoxing = false;
         if(rtsBoxMoved){ selectBox(rtsBoxSX, rtsBoxSY, rtsBoxCX, rtsBoxCY, e.shiftKey); }   // a drag → box-select the group
@@ -2226,8 +2246,7 @@ async function run(){
           if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
           else { gSel.clear(); gSel.add(rtsDownModel); }
           updateSelectionUI();
-        } else if(gSel.size){ moveSelectedTo(scene.pointerX, scene.pointerY); }   // click on empty WITH a selection → move order
-        else { gSel.clear(); updateSelectionUI(); }                                // click on empty, nothing selected
+        } else { gSel.clear(); updateSelectionUI(); }                              // click on empty → deselect (move order is on RIGHT-click)
         return;
       }
       if(e.button === 0 && spawnEl){   // armed element + tap on empty space → drop an atom
@@ -2246,7 +2265,7 @@ async function run(){
         if((rtsBoxCX-rtsBoxSX)*(rtsBoxCX-rtsBoxSX)+(rtsBoxCY-rtsBoxSY)*(rtsBoxCY-rtsBoxSY) > 25) rtsBoxMoved = true;   // enough motion → a box, not a click
         return;
       }
-      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // right-drag grab-pan
+      if(panning){ panBy(e.movementX || 0, e.movementY || 0); showTips(); return; }   // (legacy grab-pan — panning is now edge-scroll)
       if(dragAtom >= 0){ dragSpawnedTo(dragAtom); return; }    // dragging a spawned atom along the sheet
       // Plain hover (no button held) → grab hand over any molecule, default cursor over the background.
       // Done HERE (in the guaranteed-to-run pointer observer, keyed on the live button state) so the cursor
