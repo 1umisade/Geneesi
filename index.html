@@ -4576,8 +4576,14 @@ async function run(){
   resetBtn.onclick = () => devSliders.forEach((s, i) => { s.value = devDefaults[i]; s.dispatchEvent(new Event('input')); });
   resetRow.appendChild(resetBtn);
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
-  const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
-  backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
+  // renderer row → click to toggle WebGL ↔ WebGPU (reloads the page with/without ?webgpu, chosen at init)
+  const backRow = document.createElement('button');
+  backRow.textContent = 'renderer: ' + gBackend + '  ⇄ ' + (gBackend === 'WebGPU' ? 'WebGL' : 'WebGPU');
+  backRow.title = 'Vaihda renderöijää (lataa sivun uudelleen)';
+  backRow.style.cssText = 'font:inherit;font-weight:bold;color:var(--sageink);background:var(--sage);border:2px solid var(--brown);border-radius:8px;padding:3px 9px;align-self:flex-start;cursor:pointer;box-shadow:0 2px 0 var(--brown);';
+  backRow.onclick = () => { const url = new URL(location.href);
+    if(gBackend === 'WebGPU') url.searchParams.delete('webgpu'); else url.searchParams.set('webgpu', '1');
+    location.href = url.toString(); };
   devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
