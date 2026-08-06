@@ -2100,6 +2100,7 @@ async function run(){
   // floor, the pivot dollies forward along the view instead of the radius going negative.
   const _zSel = new BABYLON.Vector3();
   let gZoomVel = 0;   // pending zoom (accumulated from wheel/buttons) → applied smoothly over frames
+  let gZoomEase = 0.16;   // per-frame bleed of gZoomVel (small → slower, smoother arrival). Middle-held wheel drops it.
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
   const zoomBy = delta => {                 // delta < 0 = closer
     // Ease the zoom down as the camera nears the SELECTED object — an atom, a cofactor, or a whole
@@ -2224,10 +2225,12 @@ async function run(){
     const ds=document.getElementById('center-protein-desc'); if(ds) ds.textContent=PROTEIN_DESC[md.name]||'';
     const su=document.getElementById('center-protein-subs'); if(su){ const subs=PROTEIN_SUBSTRATE[md.name]||[];
       su.innerHTML = subs.length ? '<b>Substraatit:</b><br>'+subs.map(s=>'• '+s).join('<br>') : ''; }
+    { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; }   // protein card OWNS the centre → hide a leftover atom card
     cp.style.display='flex'; };
   const hideCenterProtein = () => { const cp=document.getElementById('center-protein'); if(cp) cp.style.display='none'; };
   const updateSelectionUI = () => {
     if(!gSel.size){ selPanel.style.display='none'; hideCenterProtein(); if(updateCofInfo && etcSel<0) updateCofInfo(-1); return; }
+    { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; }   // an RTS selection owns the centre → drop any leftover atom card
     let cof = -1, protein = false;
     if(gSel.size === 1){ const mi=[...gSel][0], md=mInfo[mi];
       selPanel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:3px">'+md.name+'</div>'
@@ -2452,7 +2455,11 @@ async function run(){
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     if(Math.abs(ray.direction.z) > 1e-6){ const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; gZoomP = t>0 ? ray.origin.add(ray.direction.scale(t)) : null; }
     else gZoomP = null;
-    gZoomVel += Math.sign(e.deltaY) * Math.max(fitRadius * 0.03, Math.abs(cam.radius) * 0.06) * Math.max(0.2, gSpeed);
+    const slow = (e.buttons & 4) === 4;   // MIDDLE button held while scrolling → extremely slow, smooth creep zoom
+    const mag = slow ? Math.max(fitRadius * 0.004, Math.abs(cam.radius) * 0.008)
+                     : Math.max(fitRadius * 0.03,  Math.abs(cam.radius) * 0.06);
+    gZoomEase = slow ? 0.05 : 0.16;   // slow mode bleeds out over many more frames
+    gZoomVel += Math.sign(e.deltaY) * mag * Math.max(0.2, gSpeed);
     showTips(); hideTipsSoon();
   }, {passive:false});
   const btnZoom = dir => { gZoomP = null; gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08) * Math.max(0.2, gSpeed); showTips(); hideTipsSoon(); };
@@ -2462,7 +2469,7 @@ async function run(){
   // through zoomBy so the per-object slow-down keeps easing the arrival. Total travel = the impulse.
   scene.onBeforeRenderObservable.add(() => {
     if(Math.abs(gZoomVel) < 1e-4){ gZoomVel = 0; return; }
-    const d = gZoomVel * 0.16; zoomBy(d); gZoomVel -= d;
+    const d = gZoomVel * gZoomEase; zoomBy(d); gZoomVel -= d;
   });
   // Ambient fill + a headlight that follows the camera (direction set each frame),
   // so shading stays consistent as the model rotates instead of sweeping around.
@@ -5639,6 +5646,7 @@ async function run(){
       : buildStructuralFormula(g);
     { const grps = ETC_GROUPS[g.type] || [];   // functional-group list beside the formula
       cofGroups.innerHTML = grps.length ? '<b>Funktionaaliset<br>ryhmät:</b><br>' + grps.map(s => '• ' + s).join('<br>') : ''; }
+    { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; hideCenterProtein(); }   // cofactor card OWNS the centre → hide atom + protein cards
     cofInfoPanel.style.display='flex';
   };
 
@@ -5759,7 +5767,7 @@ async function run(){
       + '<div style="font-size:13px;color:#c0403a;font-weight:bold">'+Z+' protonia</div>'
       + (N>0 ? '<div style="font-size:13px;color:#6a6a5a;font-weight:bold">'+N+' neutronia</div>' : '')
       + '<div style="font-size:12px;opacity:.75;margin-top:3px">'+A+' nukleonia</div>';
-    ca.style.display = 'flex'; selPanel.style.display = 'none'; if(updateCofInfo) updateCofInfo(-1);
+    ca.style.display = 'flex'; selPanel.style.display = 'none'; hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1);   // atom card OWNS the centre → hide protein + cofactor + RTS panels
   };
   const hideCenterAtom = () => { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; };
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
