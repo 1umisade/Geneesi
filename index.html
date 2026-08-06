@@ -1236,6 +1236,11 @@ uniform float nElec;   // electrons shown on this lobe: 2 (lone pair / atomic) o
 uniform float focusId; // negative shows all, otherwise the selected atom's other subshells go 50% transparent
 uniform float coneCos; // reveal only atoms within this cosine of the view axis (negative disables)
 uniform float drawElec; // 1 = draw electrons inline (chlorophyll / aromatic π), 0 = electrons come from the additive orbE pass
+#ifdef COFHIDE
+uniform sampler2D cofDepth;
+uniform float cofHideOn;
+uniform vec2 cofTexel;
+#endif
 #ifdef ELECGATE
 uniform float elecR;    // view distance within which electrons draw (used by the tiled membrane)
 #endif
@@ -1317,6 +1322,12 @@ void main(void){
 #endif
   alpha *= 1.0 - smoothstep(bubbleR - 8.0, bubbleR, length(vViewPos));   // fade in inside the camera sphere
   if(coneCos > -0.5) alpha *= 1.0 - smoothstep(coneCos*0.86, coneCos, vCang);   // soft-edged forward cone
+#ifdef COFHIDE
+  if(cofHideOn > 0.5){
+    float rd = texture2D(cofDepth, gl_FragCoord.xy * cofTexel).r;
+    if(rd > 0.5 && vViewPos.z < rd - 0.6) discard;   // orbital lobe in FRONT of a cofactor reveal cone - drop it entirely
+  }
+#endif
   if(alpha < 0.004) discard;
   vec3 N = normalize(vNrmV);
   float ndl = dot(N, L) * 0.5 + 0.5;
@@ -2928,8 +2939,9 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
-    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel'],
+    samplers: ['cofDepth'],
+    defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define COFHIDE']   // drag offset + per-model move; electrons only up close; COFHIDE = drop orbitals in front of a cofactor reveal cone
   });
   orbMatG.setFloat('bubbleR', 1e9); orbMatG.setFloat('nElec', 2); orbMatG.setFloat('coneCos', -1.0); orbMatG.setFloat('drawElec', 1); realAlpha(orbMatG);   // always fully revealed; blended fades
   orbMatG.backFaceCulling = true;
@@ -2940,6 +2952,7 @@ async function run(){
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+    eff.setFloat('cofHideOn', gRevealOn); eff.setVector2('cofTexel', gCofTexel); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT);   // drop orbitals in front of a revealed cofactor
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
@@ -4364,7 +4377,7 @@ async function run(){
     // flat, 95% transparent light-green (sage) sheet - does not distort the colours behind it
     fmat.diffuseColor = new BABYLON.Color3(0,0,0);
     fmat.emissiveColor = new BABYLON.Color3(0.64,0.78,0.51);
-    fmat.disableLighting = true; fmat.alpha = 0.05;            // 95% transparent (dev "taso alpha" slider tunes it)
+    fmat.disableLighting = true; fmat.alpha = 0.20;            // 80% transparent (dev "taso alpha" slider tunes it)
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
   const undoModel = () => {
@@ -4501,8 +4514,8 @@ async function run(){
   const clValEl = clRow.querySelector('#dev-cl-val');
   clSld.oninput = () => { gCofLineW = (+clSld.value/100)*6.0; clValEl.textContent = gCofLineW.toFixed(1); };
   // RTS FLOOR-plane opacity (face-on) — 0 = clear glass … 1 = solid sheet. Drives the material's Fresnel bias.
-  const fpRow = document.createElement('div'); fpRow.innerHTML = 'taso α: <b id="dev-fp-val">0.05</b>';
-  const fpSld = document.createElement('input'); fpSld.type='range'; fpSld.min='0'; fpSld.max='100'; fpSld.value='5'; fpSld.style.cssText='width:100%;cursor:pointer;';
+  const fpRow = document.createElement('div'); fpRow.innerHTML = 'taso α: <b id="dev-fp-val">0.20</b>';
+  const fpSld = document.createElement('input'); fpSld.type='range'; fpSld.min='0'; fpSld.max='100'; fpSld.value='20'; fpSld.style.cssText='width:100%;cursor:pointer;';
   const fpValEl = fpRow.querySelector('#dev-fp-val');
   fpSld.oninput = () => { const o = +fpSld.value/100; fpValEl.textContent = o.toFixed(2);
     const fm = scene.getMaterialByName('rtsFloorMat'); if(fm) fm.alpha = o; };
@@ -4537,6 +4550,7 @@ async function run(){
   });
   // Turning dev mode OFF drops any live complex selection and hides every dev label + the dev panel.
   applyDevMode = () => { devPanel.style.display = gDev ? 'flex' : 'none';
+    const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
@@ -4952,6 +4966,10 @@ async function run(){
         + '<div id="center-protein-name" style="font-weight:bold;font-size:17px"></div>'
         + '<div id="center-protein-desc" style="font-size:12px;line-height:1.5;max-width:90%;opacity:.9"></div>';
       center.appendChild(cp); }
+    // zoom readout → top-left corner of the minimap module, beige, shown only in dev mode
+    { const zv = document.getElementById('zoomval');
+      if(zv){ zv.style.cssText = 'position:absolute;left:8px;top:8px;z-index:3;font-family:"Courier New",monospace;font-size:12px;font-weight:bold;color:var(--brown);background:var(--paper);border:2px solid var(--brown);border-radius:8px;padding:1px 8px;display:none;pointer-events:none';
+        left.style.position = 'relative'; left.appendChild(zv); } }
     const brs = document.getElementById('br-stack'); if(brs) brs.style.bottom = 'calc(25vh + 14px)';   // atom-detail panel above the console
     const zt = document.getElementById('zoomtips'); if(zt) zt.style.bottom = 'calc(25vh + 18px)';       // keep zoom buttons reachable
   }
