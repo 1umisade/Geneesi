@@ -4267,18 +4267,20 @@ async function run(){
   /* ── RTS floor ── flatten every model onto ONE plane (perpendicular to the membrane, at the models'
      level) and lay a 90%-transparent white sheet there, so the scene reads as a flat RTS battlefield. */
   for(let mi=0; mi<mols.length; mi++){ gModelOff[mi*3+2] = FLOOR_Z - mInfo[mi].cz; rebuildModelXform(mi); }   // all model centres → Z = FLOOR_Z (declared with the RTS state above)
-  { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200 }, scene);
+  { const floor = BABYLON.MeshBuilder.CreatePlane('rtsFloor', { width:(gMaX-gMiX)*1.7+200, height:(gMaY-gMiY)*1.7+200, sideOrientation:BABYLON.Mesh.DOUBLESIDE }, scene);
     floor.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, FLOOR_Z); floor.isPickable=false; floor.renderingGroupId=0;
     const fmat = new BABYLON.StandardMaterial('rtsFloorMat', scene);
     // glassy sheet - a view-angle (Fresnel) opacity so the pane is near-invisible face-on (colours behind it
-    // pass through undistorted) yet catches a pale-sage sheen toward grazing angles, so it still reads as a surface
+    // pass through undistorted) yet catches a pale-sage sheen toward grazing angles, so it still reads as a surface.
+    // DOUBLESIDE + twoSidedLighting give each face a correct outward normal, so the Fresnel is not inverted when
+    // the camera views the plane's back (which was making the whole sheet opaque).
     fmat.diffuseColor = new BABYLON.Color3(0,0,0);
     fmat.emissiveColor = new BABYLON.Color3(0.82,0.90,0.72);   // pale sage tint (near neutral - a Solukko sage hint)
-    fmat.disableLighting = true; fmat.alpha = 1.0;             // real opacity comes from the Fresnel below
+    fmat.disableLighting = true; fmat.twoSidedLighting = true; fmat.alpha = 1.0;   // real opacity comes from the Fresnel below
     const fop = new BABYLON.FresnelParameters();
-    fop.leftColor = new BABYLON.Color3(0.6,0.6,0.6);           // grazing edges - a soft sheen
+    fop.leftColor = new BABYLON.Color3(0.55,0.55,0.55);        // grazing edges - a soft sheen
     fop.rightColor = new BABYLON.Color3(0,0,0);                // face-on - transparent (no colour distortion)
-    fop.bias = 0.04; fop.power = 2.2;
+    fop.bias = 0.035; fop.power = 2.4;
     fmat.opacityFresnelParameters = fop;
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
@@ -5465,7 +5467,12 @@ async function run(){
   const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','bgRef'], ['cofMask'], 1.0, cam);
   cofsil.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('lineW', gCofLineW);
+    // silhouette thickness tracks zoom → always ~5 proton-diameters on screen (thinner zoomed out, thicker in).
+    // gCofLineW/2.2 keeps the dev slider as a multiplier (1.0 at its default). Clamped so it never vanishes or blooms.
+    const dist = Math.max(1, Math.abs(cam.radius));
+    const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
+    const w = (10.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // 10*NUCLEON_R = 5 proton diameters, in world units
+    eff.setFloat('lineW', Math.max(1.0, Math.min(14.0, w)));
     eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
