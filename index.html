@@ -5142,11 +5142,9 @@ async function run(){
     dock(document.getElementById('rts-selinfo'), center, { position:'static', left:'', bottom:'', transform:'', zIndex:'', maxWidth:'100%', background:'transparent', border:'none', boxShadow:'none' });
     dock(document.getElementById('eltable'),     right,  { margin:'0', background:'transparent', border:'none', boxShadow:'none' });
     // atom-info card — shown in the centre module when a single ATOM is selected
-    { const ca = document.createElement('div'); ca.id = 'center-atom';
-      ca.style.cssText = 'display:none;align-items:center;justify-content:center;gap:16px;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink)';
-      const nc = document.createElement('canvas'); nc.id = 'center-atom-nuc'; nc.width = nc.height = 140; nc.style.cssText = 'width:104px;height:104px;flex:0 0 auto';
-      const tx = document.createElement('div'); tx.id = 'center-atom-text'; tx.style.cssText = 'text-align:left';
-      ca.appendChild(nc); ca.appendChild(tx); center.appendChild(ca); }
+    { const ca = document.createElement('div'); ca.id = 'center-atom';   // full atom info (render - table - 3D nucleus) is built into this by showConfig
+      ca.style.cssText = 'display:none;align-items:stretch;justify-content:center;gap:16px;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink)';
+      center.appendChild(ca); }
     // protein-info card — name + short photosynthesis role + a colour swatch (shown for a selected protein)
     { const cp = document.createElement('div'); cp.id = 'center-protein';
       cp.style.cssText = 'display:none;flex-direction:row;align-items:center;justify-content:space-around;gap:18px;width:100%;height:100%;box-sizing:border-box;padding:4px 10px;font-family:"Courier New",monospace;color:var(--ink)';
@@ -5414,6 +5412,11 @@ async function run(){
       return capturePreview(tmpCanvas).then(() => {
         if(gen !== prevGen) return;
         orbCanvas.getContext('2d').drawImage(tmpCanvas, 0, 0);   // composite the transparent-bg nucleus over the orbital cloud
+        if(!nucCanvas) return;
+        buildNuc(atom, 1);                                       // 3. real-scale nucleus (protons red - neutrons grey) → the small nucleus canvas
+        prevCam.radius = Math.max(0.11, nucClusterR(atom.e) * 3.0);
+        prevRTT.renderList = [prevNuc];
+        return capturePreview(nucCanvas);
       });
     });
   };
@@ -5673,18 +5676,19 @@ async function run(){
 
   const showConfig = atom => {
     const e = atom.e; let Z = info(e).z;
-    econfPanel.innerHTML = '';
+    const ca = document.getElementById('center-atom'); if(!ca) return;
+    ca.innerHTML = '';
     const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
     const bonds = (!atom.spawn && bondCntEA[e]) ? bondCntEA[e][atom.idx] : 0, sn = bonds + lonePairs(e);   // spawned atoms are unbonded
     const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
-    // ── Big orbital render on top (the atom's real lobes — same 'orb' shader as the 3-D scene) ──
+    // ── Orbital render (the atom's real lobes — same 'orb' shader as the 3-D scene) — LEFT region ──
     const orbViz = document.createElement('canvas');
     orbViz.width = orbViz.height = 256;
-    orbViz.style.cssText = 'width:270px;height:270px;display:block;margin:0 auto 2px;';
+    orbViz.style.cssText = 'width:150px;height:150px;display:block;margin:0 auto;';
     // Title: Finnish element name + "atomi" (e.g. "Hiiliatomi"), serif face like the sketch.
     const title = document.createElement('div');
     title.textContent = elemNameFi(e);
-    title.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:32px;font-weight:bold;color:var(--brown);text-align:center;margin:0 0 12px;letter-spacing:.3px;";
+    title.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:19px;font-weight:bold;color:var(--brown);text-align:center;margin:0 0 4px;letter-spacing:.3px;";
 
     // ── Electron-cloud table ── one css-grid so every column shares an edge; per-cell left borders join
     //    into continuous vertical rules. Shells run valence-first (top) → core (bottom); they are set apart
@@ -5739,37 +5743,34 @@ async function run(){
       }
     }
     repaint();
-    // ── ydin (nucleus) footer at the bottom: "ydin" · nucleon render · proton/neutron counts ──
+    // ── 3D nucleus render (protons red - neutrons grey) + proton/neutron/nucleon counts — RIGHT region ──
     const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
-    nucViz.style.cssText = 'width:66px;height:66px;flex:0 0 auto;';
+    nucViz.style.cssText = 'width:92px;height:92px;flex:0 0 auto;';
     const Nn = Math.max(0, info(e).n - Z);
-    // proton count LEFT of the nucleus, neutron count RIGHT of it (flanking the render)
     const protonLbl = document.createElement('div'); protonLbl.textContent = Z + ' protonia';
-    protonLbl.style.cssText = 'font-size:16px;font-weight:bold;color:#c0403a;text-align:right;flex:1 1 0;';
+    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:center;';
     const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + ' neutronia' : '';   // hide neutrons when there are none (H)
-    neutronLbl.style.cssText = 'font-size:16px;font-weight:bold;color:#6a6a5a;text-align:left;flex:1 1 0;';
-    const ydinRow = document.createElement('div');
-    ydinRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;margin-top:4px;';
-    ydinRow.appendChild(protonLbl); ydinRow.appendChild(nucViz); ydinRow.appendChild(neutronLbl);
-    econfPanel.appendChild(title); econfPanel.appendChild(orbViz); econfPanel.appendChild(grid); econfPanel.appendChild(ydinRow);   // name → orbital render → table → proton·nucleus·neutron row
-    econfPanel.style.display = 'block';
-    renderPreviews(atom, orbViz);   // orbitals (+ composited nucleus) → the top canvas
-    draw2DNucleus(nucViz, e);       // flat 2D nucleus → the footer canvas
+    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:center;';
+    const nukLbl = document.createElement('div'); nukLbl.textContent = info(e).n + ' nukleonia';
+    nukLbl.style.cssText = 'font-size:11px;opacity:.72;text-align:center;margin-top:2px;';
+    // Three horizontal regions fitted into the short-and-wide centre console module: render | table | nucleus.
+    const leftCol = document.createElement('div');
+    leftCol.style.cssText = 'flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    leftCol.appendChild(title); leftCol.appendChild(orbViz);
+    const midCol = document.createElement('div');
+    midCol.style.cssText = 'flex:0 1 auto;min-width:0;max-height:100%;overflow-y:auto;overflow-x:hidden;display:flex;align-items:center;';
+    midCol.appendChild(grid);
+    const rightCol = document.createElement('div');
+    rightCol.style.cssText = 'flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    rightCol.appendChild(protonLbl); rightCol.appendChild(nucViz); rightCol.appendChild(neutronLbl); rightCol.appendChild(nukLbl);
+    ca.appendChild(leftCol); ca.appendChild(midCol); ca.appendChild(rightCol);
+    ca.style.display = 'flex';
+    hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1); selPanel.style.display = 'none';   // atom info OWNS the centre module
+    renderPreviews(atom, orbViz, nucViz);   // 3D orbitals (+ composited nucleus) → left canvas, real-scale 3D nucleus → right canvas
   };
 
-  // Atom-info card in the centre console module (element name, 2D nucleus, proton/neutron counts).
-  const showCenterAtom = atom => {
-    const ca = document.getElementById('center-atom'); if(!ca || !atom) return;
-    const e = atom.e, Z = info(e).z, A = info(e).n, N = Math.max(0, A - Z);
-    draw2DNucleus(document.getElementById('center-atom-nuc'), e);
-    document.getElementById('center-atom-text').innerHTML =
-      '<div style="font-weight:bold;font-size:19px;margin-bottom:4px">'+elemNameFi(e)+'</div>'
-      + '<div style="font-size:13px;color:#c0403a;font-weight:bold">'+Z+' protonia</div>'
-      + (N>0 ? '<div style="font-size:13px;color:#6a6a5a;font-weight:bold">'+N+' neutronia</div>' : '')
-      + '<div style="font-size:12px;opacity:.75;margin-top:3px">'+A+' nukleonia</div>';
-    ca.style.display = 'flex'; selPanel.style.display = 'none'; hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1);   // atom card OWNS the centre → hide protein + cofactor + RTS panels
-  };
-  const hideCenterAtom = () => { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; };
+  // The full atom info now lives in the centre console module — built by showConfig, hidden here.
+  const hideCenterAtom = () => { const ca=document.getElementById('center-atom'); if(ca){ ca.style.display='none'; ca.innerHTML=''; } };
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
   const clearAtomSel = () => {
     clearTimeout(flashTimer); flashTimer = null;   // stop a running flash so it can't re-show the outline
@@ -5790,12 +5791,11 @@ async function run(){
     flashOutline();                 // dark-green thick outline flashes 3× to highlight the atom, then vanishes
     setSelNuc(a);                   // show the nucleus on top of the orbitals
     setSelElec(a);                  // electron poke-through, this atom only
-    showConfig(a);                  // electron-configuration panel, bottom-right
+    showConfig(a);                  // full atom info (render - orbital table - 3D nucleus) → the centre console module
     // kill leftover inertia so the focus only moves the target (never drifts the zoom/rotation)
     cam.inertialPanningX = cam.inertialPanningY = 0;
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0;
     focusCameraOn(a.center);   // one-shot swivel to centre the picked atom
-    showCenterAtom(a);         // atom info → the centre console module
   };
   // Double-click an atom → focus it; double-click empty space → swing perpendicular to the spawn plane.
   // Double-click → select the nearest complex for moving (gizmo + live coord label).
