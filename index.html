@@ -747,7 +747,7 @@ void main(void){
 #ifdef DEPTHSHADE
   // Front-to-back darkening, applied to the FINAL colour (after the outline) so the outline darkens WITH
   // the fill and stays visible. dt ramps 0 at the start point to 1 across the spread, farther = darker.
-  float dt = clamp((posV.z - focalD - startOff) / max(spread, 1.0), 0.0, 1.0);
+  float dt = clamp((vWCen.z - focalD - startOff) / max(spread, 1.0), 0.0, 1.0);   // distance from the FIXED shading plane (focalD, world Z), not the camera
   col *= mix(1.0, depthLo, dt * depthK);
 #endif
   float fog = clamp((fogEnd - posV.z) / (fogEnd - fogStart), 0.0, 1.0);
@@ -2387,8 +2387,8 @@ async function run(){
         return;
       }
       if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;   // remember the down point for the tap-vs-drag test
-        if(!spawnEl){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it
-        if(!spawnEl){   // begin an RTS box / click-select (decided on release by the drag distance)
+        if(!spawnEl && !gArmedItem){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it
+        if(!spawnEl && !gArmedItem){   // begin an RTS box / click-select (decided on release by the drag distance)
           rtsDownModel = pickModelAtCursor(); rtsBoxing = true; rtsBoxMoved = false;
           rtsBoxSX = scene.pointerX; rtsBoxSY = scene.pointerY; rtsBoxCX = rtsBoxSX; rtsBoxCY = rtsBoxSY; dragging = true; }
         return;
@@ -2415,6 +2415,10 @@ async function run(){
       if(e.button === 0 && spawnEl){   // armed element + tap on empty space → drop an atom
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
         if(mdx*mdx + mdy*mdy < 9 && !pickAtom()) spawnAtPointer();
+      }
+      if(e.button === 0 && gArmedItem){   // armed spawn-selector item + tap → drop it (H₂O, Fotoni, …)
+        const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
+        if(mdx*mdx + mdy*mdy < 9) dropArmedItem();
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
@@ -2695,8 +2699,17 @@ async function run(){
   let gCofLineW = 2.2;        // cofactor silhouette outline thickness (px). Dev slider.
   let gDepthK = 0.75;         // front-to-back depth-shading amount 0..1 on the molecules. Dev slider.
   let gDepthLo = 0.40;        // darkest floor the depth-shading reaches (lower = more contrast). Dev slider.
-  let gDepthStart = -40.0;    // where the darkening begins (view units, relative to the pivot). Dev slider.
-  let gDepthSpread = 90.0;    // view distance over which it fades to the floor. Dev slider.
+  let gDepthStart = 0.0;      // where the darkening begins, WORLD units from the shading plane. Dev slider.
+  let gDepthSpread = 120.0;   // world distance over which it fades to the floor. Dev slider.
+  let gShadePlane = -60.0;    // FIXED shading reference plane (near-Z face of the scene box) - recomputed from the models below
+  { let mh=1; for(let mi=0;mi<mols.length;mi++){ const md=mInfo[mi]; mh=Math.max(mh, md.cz-md.z0, md.z1-md.cz); }
+    gShadePlane = -mh; gDepthSpread = Math.max(20, 2*mh); }   // near face + full-thickness spread
+  let gArmedItem = null;      // {kind,name} armed in the spawn selector (molecule / protein / photon)
+  let gCollScale = 1.0;       // reactive-site / collision sphere radius multiplier. Dev slider.
+  let gReactSites = null;     // { count, siteWorld(gi,out), radiusOf(gi), typeOf(gi) } → cofactor reactive spheres
+  let gCollViz = null, gCollVizUpdate = null;   // dev wireframe collision spheres + their per-frame updater
+  let gShadePlaneMesh = null;                   // dev-only white plane at the shading reference
+  const gParticles = [];      // game particles: water / photon / products {kind, mesh, x,y,z, vx,vy,vz, life}
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
   let gHoverGroup = -1, gFlashGroup = -1, gFlashT0 = 0, gHlGroup = -1, gHlBright = 1.0;
   const FLASH_DUR = 0.85, FLASH_PULSES = 3;   // flash length (s) + number of bright pulses on select
@@ -3083,7 +3096,7 @@ async function run(){
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
-    eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindCof(eff); });
+    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
     uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread'],
@@ -3095,7 +3108,7 @@ async function run(){
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindCof(eff); });
+    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindCof(eff); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -3114,7 +3127,7 @@ async function run(){
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
-      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', Math.abs(cam.radius)); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); });
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
     etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
     etcOverlay.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
@@ -3146,6 +3159,26 @@ async function run(){
         for(const i of g.atoms){ const dx=gx[i]-g.cx, dy=gy[i]-g.cy, dz=gz[i]-g.cz, d=dx*dx+dy*dy+dz*dz; if(d>r2) r2=d; }
         g.r = Math.sqrt(r2) + 2.0; }
       etcGroupPos = { gx, gy, gz };
+      // ── Reactive-site / collision spheres ── one per cofactor group, at its LIVE world centre (follows a
+      //    moved model). Used for cheap narrow-phase reactions and shown as wireframes in dev mode.
+      const groupMid = new Float32Array(etcGroups.length);
+      { const mids = mdlBuf(etcM); for(let gi=0; gi<etcGroups.length; gi++) groupMid[gi] = mids[etcGroups[gi].atoms[0]] || 0; }
+      const _sw = { x:0, y:0, z:0 };
+      const siteWorld = (gi, out) => { const g=etcGroups[gi], m=gModelXform, b=(groupMid[gi]|0)*16;
+        out.x = m[b]*g.cx + m[b+4]*g.cy + m[b+8]*g.cz + m[b+12];
+        out.y = m[b+1]*g.cx + m[b+5]*g.cy + m[b+9]*g.cz + m[b+13];
+        out.z = m[b+2]*g.cx + m[b+6]*g.cy + m[b+10]*g.cz + m[b+14]; };
+      gReactSites = { count: etcGroups.length, siteWorld, radiusOf: gi => etcGroups[gi].r * gCollScale, typeOf: gi => etcGroups[gi].type };
+      { const cv = BABYLON.MeshBuilder.CreateSphere('collViz', {segments:10, diameter:2}, scene);
+        const cm = new BABYLON.StandardMaterial('collVizMat', scene); cm.wireframe=true; cm.emissiveColor=new BABYLON.Color3(1,0.55,0.2); cm.disableLighting=true; cm.alpha=0.6;
+        cv.material=cm; cv.isPickable=false; cv.renderingGroupId=1; cv.alwaysSelectAsActiveMesh=true; cv.setEnabled(false);
+        const buf = new Float32Array(etcGroups.length*16);
+        gCollViz = cv;
+        gCollVizUpdate = () => { for(let gi=0; gi<etcGroups.length; gi++){ siteWorld(gi, _sw); const r=etcGroups[gi].r*gCollScale, o=gi*16;
+          buf[o]=r; buf[o+5]=r; buf[o+10]=r; buf[o+15]=1; buf[o+12]=_sw.x; buf[o+13]=_sw.y; buf[o+14]=_sw.z; }
+          cv.thinInstanceSetBuffer('matrix', buf, 16, true); };
+        gCollVizUpdate();
+      }
     }
     // ── Cofactor cut-away depth pass ── render every cofactor molecule as a disc into an off-screen
     // FLOAT buffer holding the nearest cofactor's view-space depth per pixel; the protein shader samples it.
@@ -4429,6 +4462,13 @@ async function run(){
     fmat.disableLighting = true; fmat.alpha = 0.20;            // 80% transparent (dev "taso alpha" slider tunes it)
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
+  // Dev-only WHITE plane marking the fixed shading reference (the near-Z face of the scene box). The
+  // depth darkening is measured from here, so seeing it helps tune the start/spread sliders.
+  { const sp = BABYLON.MeshBuilder.CreatePlane('shadePlane', { width:(gMaX-gMiX)*1.4+200, height:(gMaY-gMiY)*1.4+200 }, scene);
+    sp.position.set((gMiX+gMaX)/2, (gMiY+gMaY)/2, gShadePlane); sp.isPickable=false; sp.renderingGroupId=0;
+    const spm = new BABYLON.StandardMaterial('shadePlaneMat', scene); spm.emissiveColor=new BABYLON.Color3(1,1,1);
+    spm.disableLighting=true; spm.alpha=0.30; spm.backFaceCulling=false; spm.disableDepthWrite=true;
+    sp.material=spm; sp.setEnabled(false); gShadePlaneMesh = sp; }
   const undoModel = () => {
     const s = undoStack.pop(); if(!s) return; const mid=s.mid;
     gModelOff[mid*3]=s.off[0]; gModelOff[mid*3+1]=s.off[1]; gModelOff[mid*3+2]=s.off[2];
@@ -4588,8 +4628,13 @@ async function run(){
   const spSld = document.createElement('input'); spSld.type='range'; spSld.min='0'; spSld.max='100'; spSld.value='27'; spSld.style.cssText='width:100%;cursor:pointer;';
   const spValEl = spRow.querySelector('#dev-sp-val');
   spSld.oninput = () => { gDepthSpread = 10 + (+spSld.value)*3; spValEl.textContent = gDepthSpread.toFixed(0); };
+  // Collision / reactive-site sphere size (radius multiplier). Shown as wireframes in dev mode.
+  const csRow = document.createElement('div'); csRow.innerHTML = 'törmäyspallot: <b id="dev-cs-val">1.00</b>';
+  const csSld = document.createElement('input'); csSld.type='range'; csSld.min='0'; csSld.max='100'; csSld.value='25'; csSld.style.cssText='width:100%;cursor:pointer;';   // 25 → 1.0 (range 0…4)
+  const csValEl = csRow.querySelector('#dev-cs-val');
+  csSld.oninput = () => { gCollScale = (+csSld.value/100)*4.0; csValEl.textContent = gCollScale.toFixed(2); if(gCollVizUpdate) gCollVizUpdate(); };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4600,7 +4645,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -4620,6 +4665,8 @@ async function run(){
   // Turning dev mode OFF drops any live complex selection and hides every dev label + the dev panel.
   applyDevMode = () => { devPanel.style.display = gDev ? 'flex' : 'none';
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
+    if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
+    if(gCollViz) gCollViz.setEnabled(gDev);                 // wireframe collision spheres
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
@@ -4977,8 +5024,7 @@ async function run(){
     // item panes: 2-wide grids of named item buttons (wider than the element grid so the names fit)
     const mkPane = () => { const p = document.createElement('div'); p.style.cssText = 'display:none;grid-template-columns:repeat(2,1fr);gap:6px'; return p; };
     const molPane = mkPane(), proPane = mkPane(), kvPane = mkPane();
-    let gArmedItem = null;   // {kind,name} currently armed (UI selection — spawning into the scene is a follow-up)
-    const itemBtns = [];
+    const itemBtns = [];   // gArmedItem is the module-level {kind,name} armed for spawning
     const addItems = (pane, kind, items) => { for(const [name, col] of items){
       const b = document.createElement('button'); b.className = 'elbtn';
       const dot = document.createElement('span'); dot.className = 'eldot'; dot.style.background = col;
@@ -5014,6 +5060,43 @@ async function run(){
     }
     eltable.appendChild(seg); eltable.appendChild(grid); eltable.appendChild(molPane); eltable.appendChild(proPane); eltable.appendChild(kvPane);
     brStack.appendChild(eltable);
+  }
+
+  // ── Game particles (water / photon / reaction products) + the OEC water-splitting reaction ──
+  const spawnParticle = (kind, x,y,z, opt) => { opt = opt||{}; const rad = opt.r || 4;
+    const m = BABYLON.MeshBuilder.CreateSphere('part_'+kind, {segments:8, diameter:2*rad}, scene);
+    m.position.set(x,y,z); m.isPickable=false; m.renderingGroupId=1;
+    const mat = new BABYLON.StandardMaterial('pm', scene); mat.emissiveColor=new BABYLON.Color3(opt.col[0],opt.col[1],opt.col[2]); mat.disableLighting=true; m.material=mat;
+    const p = { kind, mesh:m, mat, x,y,z, vx:opt.vx||0, vy:opt.vy||0, vz:opt.vz||0, life:(opt.life===undefined?Infinity:opt.life), rad };
+    gParticles.push(p); return p; };
+  const COL = { water:[0.30,0.62,0.85], photon:[1.0,0.88,0.35], O:[0.94,0.15,0.15], proton:[1.0,0.45,0.45], electron:[0.30,0.62,1.0] };
+  const rnd = () => Math.random()*2-1;
+  const splitWater = p => { const bx=p.x, by=p.y, bz=p.z, sp=60; p.mesh.dispose(); p.mat.dispose();
+    spawnParticle('O', bx,by,bz, {col:COL.O, r:5, vx:rnd()*sp, vy:rnd()*sp, vz:rnd()*sp, life:2.2});
+    for(let i=0;i<2;i++) spawnParticle('proton', bx,by,bz, {col:COL.proton, r:2.5, vx:rnd()*sp*1.6, vy:rnd()*sp*1.6, vz:rnd()*sp*1.6, life:1.8});
+    for(let i=0;i<2;i++) spawnParticle('electron', bx,by,bz, {col:COL.electron, r:2, vx:rnd()*sp*2.2, vy:rnd()*sp*2.2, vz:rnd()*sp*2.2, life:1.6}); };
+  // drop the armed spawn-selector item at the floor point under the cursor
+  const dropArmedItem = () => { if(!gArmedItem) return;
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    if(Math.abs(ray.direction.z) < 1e-6) return; const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; if(t<0) return;
+    const x=ray.origin.x+ray.direction.x*t, y=ray.origin.y+ray.direction.y*t;
+    if(gArmedItem.name === 'H₂O') spawnParticle('water', x,y,FLOOR_Z, {col:COL.water, r:5});
+    else if(gArmedItem.name === 'Fotoni') spawnParticle('photon', x,y,FLOOR_Z, {col:COL.photon, r:3});
+    else spawnParticle('token', x,y,FLOOR_Z, {col:[0.72,0.72,0.72], r:5}); };   // other molecules/proteins → placeholder token for now
+  // per-frame: move particles, run the OEC reaction, refresh the dev collision spheres
+  { const _c = {x:0,y:0,z:0};
+    scene.onBeforeRenderObservable.add(() => {
+      const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000;
+      for(let i=gParticles.length-1;i>=0;i--){ const p=gParticles[i];
+        p.x+=p.vx*dt; p.y+=p.vy*dt; p.z+=p.vz*dt; p.mesh.position.set(p.x,p.y,p.z);
+        if(p.life!==Infinity){ p.life-=dt; if(p.life<=0){ p.mesh.dispose(); p.mat.dispose(); gParticles.splice(i,1); continue; }
+          p.mat.alpha = Math.min(1, p.life); } }
+      if(gReactSites){ for(let i=gParticles.length-1;i>=0;i--){ const p=gParticles[i]; if(p.kind!=='water') continue;
+        for(let gi=0; gi<gReactSites.count; gi++){ if(gReactSites.typeOf(gi)!==1) continue;   // type 1 = OEC
+          gReactSites.siteWorld(gi, _c); const r=gReactSites.radiusOf(gi)+p.rad, dx=p.x-_c.x, dy=p.y-_c.y, dz=p.z-_c.z;
+          if(dx*dx+dy*dy+dz*dz < r*r){ gParticles.splice(i,1); splitWater(p); break; } } } }
+      if(gDev && gCollVizUpdate) gCollVizUpdate();   // keep the dev spheres on their (moving) cofactors
+    });
   }
 
   // ── SC2-style bottom command console ── one solid bar across the bottom quarter: minimap (left) ·
