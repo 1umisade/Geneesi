@@ -221,7 +221,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
   <button class="zt" id="zoom-out" aria-label="Zoom out">−</button>
   <span class="ztlabel">suurenna</span>
 </div>
-<div id="speedbox" style="position:fixed; left:16px; bottom:14px; z-index:10; font:11px ui-monospace,monospace; color:#6a6a5a; user-select:none;">
+<div id="speedbox" style="position:fixed; left:50%; top:12px; transform:translateX(-50%); text-align:center; z-index:10; font:11px ui-monospace,monospace; color:#6a6a5a; user-select:none;">
   <div style="margin-bottom:4px; letter-spacing:.5px;">speed <span id="speedval">1.0×</span></div>
   <input id="speed" type="range" min="0" max="30" value="10" style="width:130px; cursor:pointer;">
 </div>
@@ -3506,6 +3506,40 @@ async function run(){
     gMiZ=Math.min(gMiZ,b.miZ+mols[mi].oz); gMaZ=Math.max(gMaZ,b.maZ+mols[mi].oz);
   }
   const dimX=gMaX-gMiX, dimY=gMaY-gMiY, dimZ=Math.max(gMaZ-gMiZ,1);
+  /* ── Minimap (bottom-left, StarCraft-style) ── a schematic front view of the whole scene (world X→right,
+     Y→up): each complex a dot in its model colour, the membrane a line at Y=0, and a rectangle for the
+     current view. Click to recentre the camera there (a one-shot setTarget, never per-frame → rotation is safe). */
+  {
+    const mm = document.createElement('div');
+    mm.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:12;padding:5px;background:var(--paper);'
+      + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);user-select:none;';
+    const mc = document.createElement('canvas'); mc.width=224; mc.height=150;
+    mc.style.cssText = 'display:block;width:224px;height:150px;border-radius:8px;cursor:pointer';
+    mm.appendChild(mc); document.body.appendChild(mm);
+    const g2 = mc.getContext('2d'), W=mc.width, HH=mc.height, pad=10;
+    const spanX=Math.max(1,gMaX-gMiX), spanY=Math.max(1,gMaY-gMiY);
+    const sc=Math.min((W-2*pad)/spanX, (HH-2*pad)/spanY), offX=(W-spanX*sc)/2, offY=(HH-spanY*sc)/2;
+    const wx2m = wx => offX + (wx-gMiX)*sc, wy2m = wy => HH - (offY + (wy-gMiY)*sc);   // flip Y (world up → screen up)
+    const m2wx = mx => gMiX + (mx-offX)/sc, m2wy = my => gMiY + (HH-my-offY)/sc;
+    const rgb3 = i => 'rgb('+Math.round(gModelCol[i*3]*255)+','+Math.round(gModelCol[i*3+1]*255)+','+Math.round(gModelCol[i*3+2]*255)+')';
+    let mmT=0;
+    scene.registerAfterRender(() => {
+      const now=performance.now(); if(now-mmT<66) return; mmT=now;   // ~15 fps is plenty
+      g2.fillStyle='#0e2416'; g2.fillRect(0,0,W,HH);
+      if(gMiY<=0 && gMaY>=0){ const my=wy2m(0); g2.strokeStyle='rgba(212,178,90,.55)'; g2.lineWidth=2; g2.beginPath(); g2.moveTo(0,my); g2.lineTo(W,my); g2.stroke(); }
+      for(let mi=0; mi<mols.length; mi++){ const md=mInfo[mi];
+        const wx=md.cx+gModelOff[mi*3], wy=md.cy+gModelOff[mi*3+1];
+        const rr=Math.min(9, Math.max(2.5, 0.5*Math.hypot(md.x1-md.x0, md.y1-md.y0)*sc*0.5));
+        g2.fillStyle=rgb3(mi); g2.beginPath(); g2.arc(wx2m(wx), wy2m(wy), rr, 0, 6.2832); g2.fill(); }
+      const t=cam.getTarget(), tx=wx2m(t.x), ty=wy2m(t.y);
+      const hh=Math.abs(cam.radius)*Math.tan(cam.fov/2), hw=hh*(canvas.clientWidth/Math.max(1,canvas.clientHeight));
+      g2.strokeStyle='rgba(234,243,255,.85)'; g2.lineWidth=1.2; g2.strokeRect(tx-hw*sc, ty-hh*sc, 2*hw*sc, 2*hh*sc);
+      g2.strokeStyle='#eaf3ff'; g2.beginPath(); g2.moveTo(tx-5,ty); g2.lineTo(tx+5,ty); g2.moveTo(tx,ty-5); g2.lineTo(tx,ty+5); g2.stroke();
+    });
+    mc.addEventListener('click', e => { const r=mc.getBoundingClientRect();
+      const wx=m2wx((e.clientX-r.left)*(W/r.width)), wy=m2wy((e.clientY-r.top)*(HH/r.height));
+      scene.stopAnimation(cam); cam.setTarget(new BABYLON.Vector3(wx, wy, cam.getTarget().z)); });   // one-shot recentre
+  }
   // Fixed default view (read off the dev cam-coords panel): straight along +Z toward the membrane.
   cam.setTarget(new BABYLON.Vector3(50, -6, 223));
   cam.setPosition(new BABYLON.Vector3(50, -6, -961));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
