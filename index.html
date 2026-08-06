@@ -157,6 +157,8 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #econf,#eltable{font-family:'Courier New',monospace;background:var(--paper);color:var(--ink);
   border:3px solid var(--brown);border-radius:18px;box-shadow:0 5px 0 var(--brown);user-select:none}
 #eltable{padding:10px 11px;max-width:280px}
+#sc2-center svg{width:100%;height:100%;display:block}   /* fills the module box - viewBox+preserveAspectRatio letterbox the drawing to fit */
+#sc2-center img{max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto}
 #eltable .elhdr{font-size:12px;font-weight:bold;color:var(--brown);letter-spacing:.5px;margin-bottom:8px;
   display:flex;justify-content:space-between;align-items:center;gap:10px}
 #eltable .elclear{font-family:inherit;font-size:11px;font-weight:bold;color:var(--sageink);background:var(--sage);
@@ -2149,7 +2151,6 @@ async function run(){
     return found; };
   const updateSelectionUI = () => {
     if(!gSel.size){ selPanel.style.display='none'; if(updateCofInfo && etcSel<0) updateCofInfo(-1); return; }
-    selPanel.style.display='block';
     let cof = -1;
     if(gSel.size === 1){ const mi=[...gSel][0], md=mInfo[mi];
       selPanel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:3px">'+md.name+'</div>'
@@ -2158,9 +2159,10 @@ async function run(){
     } else { let h='<div style="font-weight:bold;font-size:14px;margin-bottom:5px">Valittu: '+gSel.size+'</div><div style="display:flex;flex-wrap:wrap;gap:5px">';
       for(const mi of gSel) h+='<span title="'+mInfo[mi].name+'" style="width:16px;height:16px;border-radius:5px;border:2px solid var(--brown);background:'+rgbSelCss(mi)+'"></span>';
       selPanel.innerHTML = h+'</div>'; }
-    // selecting a lone cofactor molecule → show its detail panel (structural formula, mass, groups);
-    // don't clobber a cofactor already opened by double-click (etcSel)
+    // A lone cofactor molecule → the centre shows its 2D structural formula panel instead of the name card;
+    // don't clobber a cofactor already opened by double-click (etcSel).
     if(updateCofInfo && (cof>=0 || etcSel<0)) updateCofInfo(cof);
+    selPanel.style.display = cof>=0 ? 'none' : 'block';
   };
   // full-viewport overlay canvas → selection brackets + the drag box
   const selOverlay = document.createElement('canvas');
@@ -2239,20 +2241,24 @@ async function run(){
           oc2.strokeStyle='rgba('+c1+','+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
           oc2.strokeStyle='rgba('+c2+','+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
     if(gDev){ const W=selOverlay.width, H=selOverlay.height, M=EDGE_M;   // dev: show the edge-pan trigger bands (sage)
+      const con=document.getElementById('sc2-console'), bE=H-(con?con.offsetHeight:0);   // bottom band sits just above the console
       oc2.fillStyle='rgba(163,184,129,0.12)';
-      oc2.fillRect(0,0,M,H); oc2.fillRect(W-M,0,M,H); oc2.fillRect(M,0,W-2*M,M); oc2.fillRect(M,H-M,W-2*M,M);
-      oc2.strokeStyle='rgba(74,51,32,0.55)'; oc2.lineWidth=1.5; oc2.setLineDash([7,5]); oc2.strokeRect(M,M,W-2*M,H-2*M); oc2.setLineDash([]); }
+      oc2.fillRect(0,0,M,bE); oc2.fillRect(W-M,0,M,bE); oc2.fillRect(M,0,W-2*M,M); oc2.fillRect(M,bE-M,W-2*M,M);
+      oc2.strokeStyle='rgba(74,51,32,0.55)'; oc2.lineWidth=1.5; oc2.setLineDash([7,5]); oc2.strokeRect(M,M,W-2*M,bE-2*M); oc2.setLineDash([]); }
   });
   // SC2-style screen-edge panning — cursor near a viewport edge scrolls the camera that way (disabled mid-drag and over the docked UI)
   let edgeMX=-1, edgeMY=-1, edgeOnCanvas=false;
   window.addEventListener('pointermove', ev => { edgeMX=ev.clientX; edgeMY=ev.clientY; edgeOnCanvas=(ev.target===canvas); }, {passive:true});
   window.addEventListener('pointerout', ev => { if(!ev.relatedTarget) edgeOnCanvas=false; });
+  let _sc2con = null;
   scene.onBeforeRenderObservable.add(() => {
     if(!edgeOnCanvas || dragging) return;
+    if(!_sc2con) _sc2con = document.getElementById('sc2-console');
     const W=canvas.clientWidth, H=canvas.clientHeight, M=EDGE_M;
+    const bE = H - (_sc2con ? _sc2con.offsetHeight : 0);   // play-area bottom = top of the SC2 console → bottom-edge pan works just above it
     let ex=0, ey=0;
     if(edgeMX < M) ex=-(1-edgeMX/M); else if(edgeMX > W-M) ex=(edgeMX-(W-M))/M;   // left/right edge
-    if(edgeMY < M) ey=(1-edgeMY/M);  else if(edgeMY > H-M) ey=-((edgeMY-(H-M))/M);  // top edge scrolls up, bottom down
+    if(edgeMY < M) ey=(1-edgeMY/M);  else if(edgeMY > bE-M && edgeMY < bE) ey=-((edgeMY-(bE-M))/M);   // top scrolls up, above-console scrolls down
     if(!ex && !ey) return;
     orbitLocked = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
@@ -4857,7 +4863,7 @@ async function run(){
     const sect = (grow, basis) => { const s = document.createElement('div');
       s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:8px 12px;overflow:hidden;'
         + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
-    const left = sect(0,'auto'), center = sect(1,'0'), right = sect(0,'auto');
+    const left = sect(0,'auto'), center = sect(1,'0'), right = sect(0,'auto'); center.id = 'sc2-center';
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
     // dock the existing panels into the modules, stripping their own frames so the module IS the frame
@@ -5154,6 +5160,13 @@ async function run(){
     + 'color:var(--sageink);background:var(--sage);border-radius:999px;padding:3px 11px;box-shadow:0 2px 0 var(--brown)';
   cofInfoPanel.append(cofTitle, cofCanvas, cofFormula, cofAtoms, cofMass, cofGroups, cofLink);
   document.body.appendChild(cofInfoPanel);
+  // Relocate the cofactor detail into the console CENTRE module, stripped to just the title + 2D formula.
+  { const c = document.getElementById('sc2-center');
+    if(c){ cofInfoPanel.style.cssText = 'display:none;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;box-sizing:border-box;font-family:"Courier New",monospace;color:var(--ink);';
+      for(const el of [cofCanvas, cofAtoms, cofMass, cofGroups, cofLink]) el.style.display = 'none';   // hide everything except the 2D formula
+      cofTitle.style.cssText = 'font-weight:bold;font-size:14px;margin:0 0 5px;flex:0 0 auto';
+      cofFormula.style.cssText = 'flex:1 1 auto;min-height:0;width:100%;overflow:hidden;background:transparent;border:none';
+      c.appendChild(cofInfoPanel); } }
 
   // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
   const cofPrevMat = new BABYLON.ShaderMaterial('cofPrevMat', scene, 'imp', {
@@ -5317,26 +5330,14 @@ async function run(){
     if(gi < 0 || !etcGroups[gi]){ cofInfoPanel.style.display='none'; return; }
     const g = etcGroups[gi];
     cofTitle.textContent = ETC_NAMES[g.type] || 'Kofaktori';
-    cofAtoms.textContent = g.n + ' atomia';
-    cofMass.textContent = 'Massa/kpl: ' + (groupMassDa(g) * 1.66053907e-6).toPrecision(3) + ' ag';   // Da → attograms (1 Da = 1.6605e-6 ag)
-    // Structural formula: 2D MOL file (all atoms) → all-atoms sprite → PubChem skeletal PNG → generated 2D layout.
+    // ONLY the 2D structural formula: MOL file (all atoms) → all-atoms sprite → PubChem skeletal PNG → generated 2D layout.
     if(COF_MOL[g.type]) renderMolInto(COF_MOL[g.type], cofFormula);
     else cofFormula.innerHTML = COF_FORMULA_IMG[g.type]
-      ? '<img src="'+COF_FORMULA_IMG[g.type]+'" alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
+      ? '<img src="'+COF_FORMULA_IMG[g.type]+'" alt="rakennekaava" style="max-width:100%;max-height:100%;display:block">'
       : COF_CID[g.type]
-      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500" alt="rakennekaava" style="width:100%;display:block;border-radius:8px;background:#fff">'
+      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+COF_CID[g.type]+'/PNG?image_size=500x500" alt="rakennekaava" style="max-width:100%;max-height:100%;display:block;background:#fff;border-radius:8px">'
       : buildStructuralFormula(g);
-    { const grps = ETC_GROUPS[g.type] || [];   // vertical functional-group list
-      cofGroups.innerHTML = grps.length ? '<b>Funktionaaliset ryhmät:</b><br>' + grps.map(s => '• ' + s).join('<br>') : ''; }
-    cofLink.href = COF_CID[g.type] ? 'https://pubchem.ncbi.nlm.nih.gov/compound/' + COF_CID[g.type]
-      : 'https://pubchem.ncbi.nlm.nih.gov/#query=' + encodeURIComponent(PUBCHEM_Q[g.type] || ETC_NAMES[g.type] || '');
-    cofInfoPanel.style.display='block';
-    const maxR = buildCofPrev(g);                       // 3D image → render the centred cofactor into the panel canvas
-    prevCam.setTarget(BABYLON.Vector3.Zero());
-    prevCam.radius = Math.max(1.0, maxR * 2.8);
-    const saved = prevRTT.renderList;
-    prevRTT.renderList = [cofPrevOrb, cofPrev];   // orbitals (group 0) + the translucent ETC-coloured shell (group 1) over them
-    capturePreview(cofCanvas).then(()=>{ prevRTT.renderList = saved; });
+    cofInfoPanel.style.display='flex';
   };
 
   // A tiny SVG of the orbital's REAL shape for its config-panel button: s = sphere, p (π) = dumbbell,
