@@ -103,6 +103,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #lantern-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #lantern-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #lantern-icon{font-size:15px;line-height:1}
+#membrane-btn{position:absolute;left:16px;top:300px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#membrane-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#membrane-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#membrane-icon{font-size:15px;line-height:1}
 #vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
@@ -201,6 +209,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="etc-btn" title="Korosta elektroninsiirtoketjun kofaktorit (klorofyllit, karotenoidit, kinonit, hemit, feofytiini, Tyr Z, OEC, Fe-S) päälle"><span id="etc-icon">⚡</span><span id="etc-label">ETC-ketju</span></button>
 <button id="dev-btn" title="Dev-tila: mallien siirto/kierto-työkalu + sijaintimerkinnät"><span id="dev-icon">🛠️</span><span id="dev-label">Dev</span></button>
 <button id="lantern-btn" title="Lyhty: pimennä kaikki paitsi kiihdytetty elektroni (valaisee lähiatomit)"><span id="lantern-icon">🏮</span><span id="lantern-label">Lyhty</span></button>
+<button id="membrane-btn" title="Piilota lipidikalvo (parantaa suorituskykyä)"><span id="membrane-icon">🟰</span><span id="membrane-label">Kalvo</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
@@ -2513,6 +2522,13 @@ async function run(){
     if(lb) lb.addEventListener('click', () => { gLantern = !gLantern;
       lb.classList.toggle('on', gLantern);
       const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
+  // Membrane toggle → hide the tiled lipid bilayer for a big performance win (the cull loop + nucleon
+  // pool observer read gMembrane each frame and force every membrane mesh off when it is false).
+  let gMembrane = true;
+  { const mb = document.getElementById('membrane-btn');
+    if(mb) mb.addEventListener('click', () => { gMembrane = !gMembrane;
+      mb.classList.toggle('on', !gMembrane);   // highlight the button when the membrane is HIDDEN
+      const lab=document.getElementById('membrane-label'); if(lab) lab.textContent = gMembrane ? 'Kalvo' : 'Kalvo pois'; }); }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
   // Graphics mode 2 cone half-angle, as tan(angle) off the view axis. Sized from the LIVE viewport:
   // 0.78 × the wider half-FOV → a big reveal that still never fills the frame (the long axis' edges
@@ -3437,7 +3453,7 @@ async function run(){
     const nearTiles=[];
     scene.onBeforeRenderObservable.add(()=>{
       const cp=cam.position; nearTiles.length=0;
-      if(Math.abs(cp.y-bilayerCen.y) < NEAR_R){          // only bother when the camera is at membrane height
+      if(gMembrane && Math.abs(cp.y-bilayerCen.y) < NEAR_R){   // membrane hidden → leave nearTiles empty so every pool nucleus turns off
         const gi0=Math.round((cp.x-bilayerCen.x+halfX)/S), gj0=Math.round((cp.z-bilayerCen.z+halfZ)/S), RAD=3;
         for(let di=-RAD;di<=RAD;di++) for(let dj=-RAD;dj<=RAD;dj++){
           const gi=gi0+di, gj=gj0+dj; if(gi<0||gj<0||gi>=Gx||gj>=Gz) continue;
@@ -3622,6 +3638,12 @@ async function run(){
     gCut[0] = bilayerCen.z;                                          // cut plane (membrane centre z)
     gCut[1] = (cp.z - bilayerCen.z) >= 0 ? 1 : -1;                   // which side is toward the camera
     for(const cell of cellList){
+      if(!cell.macro && !gMembrane){   // membrane hidden (perf toggle) → force every lipid mesh off, skip the rest
+        if(cell.visOn !== false){ cell.visOn = false; for(const m of cell.meshes) m.setEnabled(false); }
+        if(cell.sphOn !== false){ cell.sphOn = false; if(cell.sphere) cell.sphere.setEnabled(false); }
+        if(cell.nucOn !== false){ cell.nucOn = false; if(cell.nuc) cell.nuc.setEnabled(false); }
+        continue;
+      }
       const cR = cell.r;
       let wcx, wcy, wcz;
       if(cell.macro){ const lx=cell.cx-cx0, ly=cell.cy-cy0, lz=cell.cz-cz0;
