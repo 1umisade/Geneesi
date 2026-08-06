@@ -307,7 +307,8 @@ const catOf = res => RES_CAT[res] ?? 6;
 const ETC_RES = { OEX:1, MN:1, CA:1,   PHO:2,   PL9:3, PQN:3, PQ9:3, UQ:3,   HEM:4, HEC:4,
   SF4:5, FES:5, F3S:5, FE:5, FE2:5,   CU:6,
   CLA:7, CHL:7, BCL:7, CL0:7,                                   // chlorophylls (antenna + reaction centre)
-  BCR:8, LUT:8, NEX:8, XAT:8, VIO:8, ZEA:8, LU2:8, A86:8, ECH:8 };   // carotenoids (ECH = echinenone, b6f)
+  BCR:8, LUT:8, NEX:8, XAT:8, VIO:8, ZEA:8, LU2:8, A86:8, ECH:8,   // carotenoids (ECH = echinenone, b6f)
+  NAP:10, NDP:10, NADP:10 };   // 10 = NADP+ / NADPH (FNR)
 const ETC_TYRZ = 9;                                             // assigned geometrically, not by residue name
 // Every cofactor type is one of five bright hues: RED, GREEN, CORAL, BLUE, PINK.
 const _RED=[1.00,0.16,0.16], _GRN=[0.16,0.90,0.36], _COR=[1.00,0.50,0.34], _BLU=[0.28,0.56,1.00], _PNK=[1.00,0.42,0.80];
@@ -320,7 +321,8 @@ const ETC_COL = [ [0,0,0],   // 0 unused
   _BLU,   // 6 Cu (plastocyanin)     — blue
   _GRN,   // 7 chlorophyll           — green
   _COR,   // 8 carotenoid            — coral
-  _PNK ]; // 9 Tyr Z (D1-Tyr161)     — pink
+  _PNK,   // 9 Tyr Z (D1-Tyr161)     — pink
+  _PNK ]; // 10 NADPH (FNR)          — pink
 
 /* ── Parse a multi-molecule mol2 into typed-array records ──────────────── */
 function parseMol2(text){
@@ -4331,7 +4333,7 @@ async function run(){
     m.setColor3('oc', col); m.alpha = 0.999; m.backFaceCulling = true; m.disableDepthWrite = true;   // depth-TEST against the mask, never write
     m.onBindObservable.add(()=>{ const eff=m.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
     return m; };
-  const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z'];
+  const ETC_NAMES = ['','OEC (Mn₄CaO₅)','Feofytiini','Kinoni','Hemi','Fe-S','Cu','Klorofylli','Karotenoidi','Tyr Z','NADPH'];
   // Characteristic functional groups per cofactor type (shown as a vertical list in the info panel).
   const ETC_GROUPS = [ [],
     ['Mn–O–Ca-klusteri','μ-okso-sillat','karboksylaattiligandit'],                       // 1 OEC
@@ -4342,7 +4344,8 @@ async function run(){
     ['Cu-keskus','His/Cys/Met-ligandit'],                                                  // 6 Cu
     ['klorinrengas','Mg-keskus','karbonyyli','metyyliesteri','fytyyliesteri'],             // 7 Klorofylli
     ['konjugoitunut polyeeni','metyylihaarat','β-iononirenkaat'],                          // 8 Karotenoidi
-    ['fenoli (hydroksyyli)','aromaattinen rengas','amiini','karboksyyli'] ];               // 9 Tyr Z
+    ['fenoli (hydroksyyli)','aromaattinen rengas','amiini','karboksyyli'],                 // 9 Tyr Z
+    ['nikotiiniamidi (amidi)','adeniini (aromaattinen, amiini)','riboosit (hydroksyylit)','difosfaatti',"2'-fosfaatti"] ];   // 10 NADPH
   const showEtcSel = gi => {
     etcSel = gi;
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
@@ -4866,7 +4869,7 @@ async function run(){
 
   // ── Selected-cofactor info panel: a 3D image of the molecule + its single-unit mass + a PubChem link ──
   const PUBCHEM_Q = { 1:'oxygen evolving complex', 2:'pheophytin a', 3:'plastoquinone', 4:'heme b',
-    5:'iron-sulfur cluster', 6:'plastocyanin', 7:'chlorophyll a', 8:'beta-carotene', 9:'L-tyrosine' };
+    5:'iron-sulfur cluster', 6:'plastocyanin', 7:'chlorophyll a', 8:'beta-carotene', 9:'L-tyrosine', 10:'NADPH' };
   const ATOMIC_WT = { H:1.008,C:12.011,N:14.007,O:15.999,F:18.998,NA:22.990,MG:24.305,P:30.974,S:32.06,
     CL:35.45,K:39.098,CA:40.078,MN:54.938,FE:55.845,CO:58.933,CU:63.546,ZN:65.38 };
   const groupMassDa = g => { let m=0; for(const i of g.atoms) m += ATOMIC_WT[EL_LIST[etcEl[i]]] || info(etcEl[i]).n; return m; };
