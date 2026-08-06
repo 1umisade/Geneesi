@@ -4289,7 +4289,7 @@ async function run(){
     const fop = new BABYLON.FresnelParameters();
     fop.leftColor = new BABYLON.Color3(0.55,0.55,0.55);        // grazing edges - a soft sheen
     fop.rightColor = new BABYLON.Color3(0,0,0);                // face-on - transparent (no colour distortion)
-    fop.bias = 0.035; fop.power = 2.4;
+    fop.bias = 0.05; fop.power = 2.4;   // face-on opacity (dev "taso α" slider tunes this 0..1)
     fmat.opacityFresnelParameters = fop;
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
     floor.material=fmat; }
@@ -4426,8 +4426,14 @@ async function run(){
   const clSld = document.createElement('input'); clSld.type='range'; clSld.min='0'; clSld.max='100'; clSld.value='37'; clSld.style.cssText='width:100%;cursor:pointer;';   // 37 → 2.2 px (range 0…6)
   const clValEl = clRow.querySelector('#dev-cl-val');
   clSld.oninput = () => { gCofLineW = (+clSld.value/100)*6.0; clValEl.textContent = gCofLineW.toFixed(1); };
+  // RTS FLOOR-plane opacity (face-on) — 0 = clear glass … 1 = solid sheet. Drives the material's Fresnel bias.
+  const fpRow = document.createElement('div'); fpRow.innerHTML = 'taso α: <b id="dev-fp-val">0.05</b>';
+  const fpSld = document.createElement('input'); fpSld.type='range'; fpSld.min='0'; fpSld.max='100'; fpSld.value='5'; fpSld.style.cssText='width:100%;cursor:pointer;';
+  const fpValEl = fpRow.querySelector('#dev-fp-val');
+  fpSld.oninput = () => { const o = +fpSld.value/100; fpValEl.textContent = o.toFixed(2);
+    const fm = scene.getMaterialByName('rtsFloorMat'); if(fm && fm.opacityFresnelParameters) fm.opacityFresnelParameters.bias = o; };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4438,7 +4444,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGPU / WebGL)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
