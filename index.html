@@ -181,9 +181,13 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 .orb-shape{flex:0 0 auto;display:block}
 .orb-cap{font-size:10px;font-weight:bold;opacity:.65}
 .orb-name{font-size:15px;font-weight:bold}
-/* Electron dot that RADIATES expanding wave rings — same idea as the 3-D electrons */
-.orb-e{position:relative;width:7px;height:7px;border-radius:50%;
-  background:radial-gradient(circle at 35% 30%,#dcecff,#4f8dff 72%);box-shadow:0 0 3px rgba(79,141,255,.85)}
+/* Electron dot styled like the electric-blue glints on the 3-D orbital surfaces (bright core → blue glow) */
+.orb-e{position:relative;width:9px;height:9px;border-radius:50%;
+  background:radial-gradient(circle at 38% 32%,#f0f6ff 0%,#a9d0ff 30%,#4f8dff 72%,#2f6fe0 100%);
+  box-shadow:0 0 4px 1px rgba(80,150,255,.9), inset 0 0 2px rgba(255,255,255,.6)}
+/* An electron donated by the OTHER atom through a bond → the same glint, a shade darker */
+.orb-e-shared{background:radial-gradient(circle at 38% 32%,#b9d2f5 0%,#5f83c8 34%,#33538f 74%,#1d3568 100%);
+  box-shadow:0 0 3px 1px rgba(45,85,150,.85), inset 0 0 2px rgba(220,230,255,.4)}
 .orb-e::before,.orb-e::after{content:'';position:absolute;left:50%;top:50%;width:7px;height:7px;
   margin:-3.5px 0 0 -3.5px;border-radius:50%;border:1.5px solid rgba(95,150,255,.85);animation:eripple 1.7s ease-out infinite}
 .orb-e::after{animation-delay:.85s}
@@ -2086,6 +2090,7 @@ async function run(){
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
   // floor, the pivot dollies forward along the view instead of the radius going negative.
   const _zSel = new BABYLON.Vector3();
+  let gZoomVel = 0;   // pending zoom (accumulated from wheel/buttons) → applied smoothly over frames
   const zoomBy = delta => {                 // delta < 0 = closer
     // Ease the zoom down as the camera nears the SELECTED object — an atom, a cofactor, or a whole
     // complex — so you glide in instead of overshooting; it speeds back up once you dolly past. The
@@ -2192,12 +2197,18 @@ async function run(){
   cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
-    zoomBy(Math.sign(e.deltaY) * Math.max(fitRadius * 0.03, Math.abs(cam.radius) * 0.06) * Math.max(0.2, gSpeed));
+    gZoomVel += Math.sign(e.deltaY) * Math.max(fitRadius * 0.03, Math.abs(cam.radius) * 0.06) * Math.max(0.2, gSpeed);
     showTips(); hideTipsSoon();
   }, {passive:false});
-  const btnZoom = dir => { zoomBy(dir * Math.max(fitRadius * 0.04, Math.abs(cam.radius) * 0.06) * Math.max(0.2, gSpeed)); showTips(); hideTipsSoon(); };
+  const btnZoom = dir => { gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08) * Math.max(0.2, gSpeed); showTips(); hideTipsSoon(); };
   document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
   document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
+  // Smooth (inertial) zoom: bleed the accumulated velocity out over several frames, each step routed
+  // through zoomBy so the per-object slow-down keeps easing the arrival. Total travel = the impulse.
+  scene.onBeforeRenderObservable.add(() => {
+    if(Math.abs(gZoomVel) < 1e-4){ gZoomVel = 0; return; }
+    const d = gZoomVel * 0.16; zoomBy(d); gZoomVel -= d;
+  });
   // Ambient fill + a headlight that follows the camera (direction set each frame),
   // so shading stays consistent as the model rotates instead of sweeping around.
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
@@ -5090,7 +5101,10 @@ async function run(){
         const nameC = gcell(0,'font-size:16px;font-weight:bold;'); nameC.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN)+'</span>';
         const shapeC = gcell(1); shapeC.innerHTML = orbShapeSVG(+oid, rgbCss(info(e).c));   // muoto = the orbital's real shape
         const box = document.createElement('span'); box.className = 'orb-box';
-        for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className='orb-e'; box.appendChild(dot); }
+        const isBond = (oid >= 1000 && oid < 2000) || oid === 900;   // σ hybrid or π → one of the two electrons comes from the OTHER atom
+        for(let k=0;k<ne;k++){ const dot=document.createElement('span');
+          dot.className = (isBond && k === ne-1) ? 'orb-e orb-e-shared' : 'orb-e';   // partner atom's electron = darker
+          box.appendChild(dot); }
         const elecC = gcell(2); elecC.appendChild(box);
         const enC = gcell(3,'font-size:14px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;'); enC.textContent = fmtAJ(ev);
         const cells = [nameC, shapeC, elecC, enC];
@@ -5110,17 +5124,18 @@ async function run(){
     // ── ydin (nucleus) footer at the bottom: "ydin" · nucleon render · proton/neutron counts ──
     const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
     nucViz.style.cssText = 'width:66px;height:66px;flex:0 0 auto;';
-    const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'ydin';
-    ydinLbl.style.cssText = 'font-size:17px;font-weight:bold;color:var(--brown);opacity:.75;';
     const Nn = Math.max(0, info(e).n - Z);
-    const counts = document.createElement('div');
-    counts.style.cssText = 'font-size:16px;font-weight:bold;color:var(--ink);line-height:1.55;';
-    counts.innerHTML = '<span style="color:#c0403a;">'+Z+' protonia</span>'
-                     + (Nn>0 ? '<br><span style="color:#6a6a5a;">'+Nn+' neutronia</span>' : '');   // hide neutrons when there are none (H)
+    const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'ydin';
+    ydinLbl.style.cssText = 'font-size:16px;font-weight:bold;color:var(--brown);opacity:.75;text-align:center;margin-top:18px;';
+    // proton count LEFT of the nucleus, neutron count RIGHT of it (flanking the render)
+    const protonLbl = document.createElement('div'); protonLbl.textContent = Z + ' protonia';
+    protonLbl.style.cssText = 'font-size:16px;font-weight:bold;color:#c0403a;text-align:right;flex:1 1 0;';
+    const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + ' neutronia' : '';   // hide neutrons when there are none (H)
+    neutronLbl.style.cssText = 'font-size:16px;font-weight:bold;color:#6a6a5a;text-align:left;flex:1 1 0;';
     const ydinRow = document.createElement('div');
-    ydinRow.style.cssText = 'display:flex;align-items:center;gap:13px;margin-top:18px;';   // gap only, no horizontal rule
-    ydinRow.appendChild(ydinLbl); ydinRow.appendChild(nucViz); ydinRow.appendChild(counts);
-    econfPanel.appendChild(title); econfPanel.appendChild(orbViz); econfPanel.appendChild(grid); econfPanel.appendChild(ydinRow);   // name on top → orbital render → table → ydin footer
+    ydinRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;margin-top:4px;';
+    ydinRow.appendChild(protonLbl); ydinRow.appendChild(nucViz); ydinRow.appendChild(neutronLbl);
+    econfPanel.appendChild(title); econfPanel.appendChild(orbViz); econfPanel.appendChild(grid); econfPanel.appendChild(ydinLbl); econfPanel.appendChild(ydinRow);   // name → orbital render → table → 'ydin' → proton·nucleus·neutron row
     econfPanel.style.display = 'block';
     renderPreviews(atom, orbViz, nucViz);   // orbitals → top canvas, nucleus → ydin canvas (two sequential captures)
   };
