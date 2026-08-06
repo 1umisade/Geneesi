@@ -1874,10 +1874,11 @@ async function run(){
     {match:'q9fgc7', x:-640, y:230,  z:0,    label:'Zeaxanthin epoxidase'},
     {match:'chlorophyll', x:-560, y:150, z:130, label:'Chlorophyll'},   // one CLA plucked from PSII → its own file
     {match:'plastoquinone', x:-495, y:150, z:135, label:'Plastoquinone'},   // one PL9 plucked from cytb6f → its own file, beside the lone chlorophyll
+    {match:'nadph', x:-425, y:150, z:135, label:'NADPH'},   // one NADP+ plucked from FNR → its own file, beside the chlorophyll + quinone (coloured pink)
   ];
   const FILES = ['PSII.mol2','photosystem_I.mol2','cytochrome_b6f.mol2','ATP_synthase.mol2','NDH-1.mol2',
     'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','plastocyanin.mol2','PGR5.mol2',
-    'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2','chlorophyll.mol2','quinone.mol2'];
+    'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2','chlorophyll.mol2','quinone.mol2','nadph.mol2'];
   const barEl = document.getElementById('load-bar');
   setLbl('Fetching thylakoid models…');
   const mols = [];
@@ -2476,6 +2477,8 @@ async function run(){
     for(let i=0;i<MAX_MODELS;i++){ const h=(i/N)%1, s=0.5, l=0.74, a=s*Math.min(l,1-l);
       const f=n=>{ const k=(n+h*12)%12; return l - a*Math.max(-1, Math.min(k-3, 9-k, 1)); };
       gModelCol[i*3]=f(0); gModelCol[i*3+1]=f(8); gModelCol[i*3+2]=f(4); } }
+  { const ni = mols.findIndex(m => m.cfg && m.cfg.match === 'nadph');   // NADPH → pink (override its auto pastel)
+    if(ni >= 0){ gModelCol[ni*3]=0.95; gModelCol[ni*3+1]=0.45; gModelCol[ni*3+2]=0.72; } }
   { const cb = document.getElementById('color-btn');   // colour by element ↔ per-model pastel
     if(cb) cb.addEventListener('click', () => { gColorMode = !gColorMode;
       const lab=document.getElementById('color-label'); if(lab) lab.textContent = gColorMode ? 'Mallit' : 'Alkuaineet'; }); }
@@ -2524,11 +2527,13 @@ async function run(){
       const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
   // Membrane toggle → hide the tiled lipid bilayer for a big performance win (the cull loop + nucleon
   // pool observer read gMembrane each frame and force every membrane mesh off when it is false).
-  let gMembrane = true;
+  let gMembrane = false;   // membrane HIDDEN by default (performance) — turn it on with the Kalvo button
   { const mb = document.getElementById('membrane-btn');
-    if(mb) mb.addEventListener('click', () => { gMembrane = !gMembrane;
-      mb.classList.toggle('on', !gMembrane);   // highlight the button when the membrane is HIDDEN
-      const lab=document.getElementById('membrane-label'); if(lab) lab.textContent = gMembrane ? 'Kalvo' : 'Kalvo pois'; }); }
+    if(mb){ mb.addEventListener('click', () => { gMembrane = !gMembrane;
+        mb.classList.toggle('on', !gMembrane);   // highlight the button when the membrane is HIDDEN
+        const lab=document.getElementById('membrane-label'); if(lab) lab.textContent = gMembrane ? 'Kalvo' : 'Kalvo pois'; });
+      mb.classList.toggle('on', !gMembrane);   // reflect the default-hidden state on the button at startup
+      const lab=document.getElementById('membrane-label'); if(lab) lab.textContent = gMembrane ? 'Kalvo' : 'Kalvo pois'; } }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
   // Graphics mode 2 cone half-angle, as tan(angle) off the view axis. Sized from the LIVE viewport:
   // 0.78 × the wider half-FOV → a big reveal that still never fills the frame (the long axis' edges
