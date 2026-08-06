@@ -4357,6 +4357,8 @@ async function run(){
     ['konjugoitunut polyeeni','metyylihaarat','β-iononirenkaat'],                          // 8 Karotenoidi
     ['fenoli (hydroksyyli)','aromaattinen rengas','amiini','karboksyyli'],                 // 9 Tyr Z
     ['nikotiiniamidi (amidi)','adeniini (aromaattinen, amiini)','riboosit (hydroksyylit)','difosfaatti',"2'-fosfaatti"] ];   // 10 NADPH
+  // Hand-made structural-formula sprites, by cofactor type (fallback = the generated 2D layout).
+  const COF_FORMULA_IMG = { 7: './chlorophyll_A_DetailSprite.png' };   // 7 = chlorophyll
   const showEtcSel = gi => {
     etcSel = gi;
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
@@ -5036,7 +5038,10 @@ async function run(){
     cofTitle.textContent = ETC_NAMES[g.type] || 'Kofaktori';
     cofAtoms.textContent = g.n + ' atomia';
     cofMass.textContent = 'Massa/kpl: ' + (groupMassDa(g) * 1.66053907e-6).toPrecision(3) + ' ag';   // Da → attograms (1 Da = 1.6605e-6 ag)
-    cofFormula.innerHTML = buildStructuralFormula(g);   // 2D structural formula (PCA-projected skeletal diagram)
+    // Structural formula: a hand-made sprite where we have one (chlorophyll), else the generated 2D layout.
+    cofFormula.innerHTML = COF_FORMULA_IMG[g.type]
+      ? '<img src="'+COF_FORMULA_IMG[g.type]+'" alt="rakennekaava" style="width:100%;display:block;border-radius:8px">'
+      : buildStructuralFormula(g);
     { const grps = ETC_GROUPS[g.type] || [];   // vertical functional-group list
       cofGroups.innerHTML = grps.length ? '<b>Funktionaaliset ryhmät:</b><br>' + grps.map(s => '• ' + s).join('<br>') : ''; }
     cofLink.href = 'https://pubchem.ncbi.nlm.nih.gov/#query=' + encodeURIComponent(PUBCHEM_Q[g.type] || ETC_NAMES[g.type] || '');
