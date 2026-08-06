@@ -2772,7 +2772,7 @@ async function run(){
   const cells = new Map();
   const getCell = k => { let c=cells.get(k); if(!c){ c={ sphM:[],sphC:[],sphR:[], nucM:[],nucC:[], orbM:[],orbCol:[],orbCen:[],orbOid:[], boM:[],boT:[],boCen:[],boCol:[],boOid:[], lpM:[],lpT:[],lpCen:[],lpCol:[],lpOid:[] }; cells.set(k,c);} return c; };
   const pushN = (dst, src, off, n) => { for(let i=0;i<n;i++) dst.push(src[off+i]); };
-  const etcM=[], etcC=[], etcR=[], etcT=[], etcS=[], etcEl=[];   // ETC cofactor overlay: matrices, colours, radii, type codes, residue ids, element index (for the info panel's mass + 3D image)
+  const etcM=[], etcC=[], etcR=[], etcT=[], etcS=[], etcEl=[], etcIdx=[];   // ETC cofactor overlay: matrices, colours, radii, type codes, residue ids, element index + per-element atom index (for the info panel's mass + 3D orbital image)
 
   let buildDetail = null;                 // deferred: bins + builds the nucleon/orbital/bond/lone-pair meshes AFTER the first frame
   const macroCellByKey = new Map();       // cell key → its cellList entry, so buildDetail can attach the streamed-in detail meshes
@@ -2785,7 +2785,7 @@ async function run(){
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
       pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
-      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); etcEl.push(e); }   // cofactor → overlay, coloured by type, slightly enlarged to pop (etcEl = element for the info panel)
+      if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); etcEl.push(e); etcIdx.push(a); }   // cofactor → overlay, coloured by type, slightly enlarged to pop (etcEl/etcIdx = element + its orbBuf index for the info panel)
     }
     await yield_();
   }
@@ -4860,7 +4860,7 @@ async function run(){
     return mant.toFixed(2)+' × 10'+String(exp).split('').map(c=>SUP[c]||c).join('')+' g'; };
 
   const cofInfoPanel = document.createElement('div');
-  cofInfoPanel.style.cssText = 'position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:13;display:none;width:198px;'
+  cofInfoPanel.style.cssText = 'position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:13;display:none;width:198px;'
     + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:12px;padding:10px 12px;'
     + 'font-family:"Courier New",monospace;color:var(--ink);box-shadow:0 3px 0 var(--brown)';
   const cofTitle = document.createElement('div'); cofTitle.style.cssText = 'font-weight:bold;font-size:15px;margin-bottom:6px';
@@ -4879,30 +4879,52 @@ async function run(){
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
     uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel'],
     defines:['#define IMPRAD'] });
-  cofPrevMat.setFloat('radius',1.0); cofPrevMat.setFloat('isShell',0); cofPrevMat.setFloat('shellMin',0); cofPrevMat.setFloat('bubbleR',1e9);
+  cofPrevMat.setFloat('radius',1.0); cofPrevMat.setFloat('isShell',1); cofPrevMat.setFloat('shellMin',0.25); cofPrevMat.setFloat('bubbleR',1e9);   // translucent shell → the orbitals show through
   cofPrevMat.setFloat('protonOutline',0); cofPrevMat.setFloat('coneCos',-1.0); cofPrevMat.setFloat('depthBias',0); cofPrevMat.setFloat('selModel',-1);
   cofPrevMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); cofPrevMat.backFaceCulling=false; realAlpha(cofPrevMat);
   cofPrevMat.onBindObservable.add(()=>{ const eff=cofPrevMat.getEffect(); if(!eff)return; eff.setFloat('uT',0.0);
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9); });
   const cofPrev = BABYLON.MeshBuilder.CreatePlane('cofPrev',{size:2},scene);
   cofPrev.material=cofPrevMat; cofPrev.isPickable=false; cofPrev.alwaysSelectAsActiveMesh=true;
-  cofPrev.layerMask=PREV_MASK; cofPrev.renderingGroupId=1; cofPrev.thinInstanceCount=0;
+  cofPrev.layerMask=PREV_MASK; cofPrev.renderingGroupId=1; cofPrev.thinInstanceCount=0;   // renderingGroupId 1 → the shell draws OVER the orbitals (group 0)
+  // The cofactor's core orbital lobes (same 'orb' shader/material as the single-atom preview), shown
+  // THROUGH the translucent vdW shell above. Coloured by ETC type, not element.
+  const cofPrevOrb = BABYLON.MeshBuilder.CreateSphere('cofPrevOrb',{segments:8,diameter:1},scene);
+  cofPrevOrb.material=prevOrbMat; cofPrevOrb.isPickable=false; cofPrevOrb.alwaysSelectAsActiveMesh=true;
+  cofPrevOrb.layerMask=PREV_MASK; cofPrevOrb.thinInstanceCount=0;
 
   const buildCofPrev = g => {
     const n = g.atoms.length, M=new Float32Array(n*16), C=new Float32Array(n*4), R=new Float32Array(n), gp=etcGroupPos;
+    const tc = ETC_COL[g.type] || [0.6,0.6,0.6];   // the cofactor's ETC (type) colour → used for BOTH the shell and the orbitals
+    const oM=[], oC=[], oCen=[], oId=[];            // orbital lobe instances (core shells from orbBuf)
     let maxR = 0;
-    for(let k=0;k<n;k++){ const i=g.atoms[k], o=k*16;
+    for(let k=0;k<n;k++){ const i=g.atoms[k], o=k*16, e=etcEl[i], idx=etcIdx[i];
       M[o]=1;M[o+5]=1;M[o+10]=1;M[o+15]=1;
       const x=gp.gx[i]-g.cx, y=gp.gy[i]-g.cy, z=gp.gz[i]-g.cz;
       M[o+12]=x; M[o+13]=y; M[o+14]=z;
-      const ec=info(etcEl[i]).c, r=info(etcEl[i]).vr*FILL_SCALE;
-      C[k*4]=ec[0];C[k*4+1]=ec[1];C[k*4+2]=ec[2];C[k*4+3]=0; R[k]=r;
+      const r=info(e).vr*FILL_SCALE;
+      C[k*4]=tc[0];C[k*4+1]=tc[1];C[k*4+2]=tc[2];C[k*4+3]=0; R[k]=r;   // ETC colour, not element colour
       const d=Math.hypot(x,y,z)+r; if(d>maxR) maxR=d;
+      const ob=orbBuf[e];                            // this atom's core orbital lobes, world-positioned → re-centre on the cofactor centroid
+      if(ob && idx>=0){ const cnt=orbCount(e), base=idx*cnt*16;
+        for(let j=0;j<cnt;j++){ const s=base+j*16;
+          if(ob[s]*ob[s]+ob[s+1]*ob[s+1]+ob[s+2]*ob[s+2] < 1e-9) continue;   // skip empty (valence → hybridised) slots
+          const mo=oM.length; for(let t=0;t<16;t++) oM.push(ob[s+t]);
+          oM[mo+12]-=g.cx; oM[mo+13]-=g.cy; oM[mo+14]-=g.cz;
+          oC.push(tc[0],tc[1],tc[2]); oCen.push(x,y,z); oId.push(0);
+        } }
     }
     cofPrev.thinInstanceSetBuffer('matrix',M,16,true);
     cofPrev.thinInstanceSetBuffer('instanceColor',C,4,true);
     cofPrev.thinInstanceSetBuffer('instR',R,1,true);
     cofPrev.thinInstanceCount = n;
+    const no = oId.length;
+    if(no > 0){ cofPrevOrb.thinInstanceSetBuffer('matrix', new Float32Array(oM),16,true);
+      cofPrevOrb.thinInstanceSetBuffer('ocol', new Float32Array(oC),3,true);
+      cofPrevOrb.thinInstanceSetBuffer('ocen', new Float32Array(oCen),3,true);
+      cofPrevOrb.thinInstanceSetBuffer('oid', new Float32Array(oId),1,true);
+      cofPrevOrb.thinInstanceCount = no;
+    } else cofPrevOrb.thinInstanceCount = 0;
     return maxR;
   };
 
@@ -4918,7 +4940,7 @@ async function run(){
     prevCam.setTarget(BABYLON.Vector3.Zero());
     prevCam.radius = Math.max(1.0, maxR * 2.8);
     const saved = prevRTT.renderList;
-    prevRTT.renderList = [cofPrev];
+    prevRTT.renderList = [cofPrevOrb, cofPrev];   // orbitals (group 0) + the translucent ETC-coloured shell (group 1) over them
     capturePreview(cofCanvas).then(()=>{ prevRTT.renderList = saved; });
   };
 
