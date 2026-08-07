@@ -2263,19 +2263,40 @@ async function run(){
   const PROTEIN_COF = {
     'Photosystem II':[7,2,3,1,9,8,4], 'Cytochrome b6f':[4,5,7], 'Photosystem I':[7,5,8,3],
     'NDH-1':[5], 'Plastocyanin':[6], 'Ferredoxin':[5] };
-  const COF_CID_IMG = { 7:156620228, 8:5280489, 9:6057, 10:5884 };   // chlorophyll a, β-carotene, L-tyrosine, NADPH — the rest fall back to a colour swatch
-  const SUBSTRATE_CID = { 'Vesi (H₂O)':962, 'CO₂':280, 'ATP':5957, 'NADP⁺':5886, 'NADPH + O₂':5884, 'Askorbaatti':54670067 };   // PubChem CIDs of substrates with a reliable structure image
   const cofColCss = t => { const c = (typeof ETC_COL!=='undefined' && ETC_COL[t]) || [0.7,0.7,0.7]; return 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')'; };
-  const PC_IMG = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/';
-  const pcName = n => PC_IMG+'name/'+encodeURIComponent(n)+'/PNG?image_size=120x120';   // by NAME → no CID guessing
-  const pcCid  = c => PC_IMG+'cid/'+c+'/PNG?image_size=120x120';
-  // A small labelled "chip": PubChem structure image over a colour swatch — if the image 404s (metal
-  // clusters like OEC / Fe-S / Cu have no PubChem structure), the swatch shows through instead.
-  const molChip = (label, imgUrl, swatch) => {
-    return '<div style="display:flex;flex-direction:column;align-items:center;gap:2px;width:60px">'
-      + '<div style="width:44px;height:44px;flex:0 0 auto;border-radius:6px;border:1px solid var(--brown);background:'+(swatch||'#fff')+';overflow:hidden">'
-      + (imgUrl ? '<img src="'+imgUrl+'" alt="" style="width:100%;height:100%;object-fit:contain;background:#fff" onerror="this.style.display=\'none\'">' : '')
-      + '</div><span style="font-size:9px;text-align:center;line-height:1.15">'+label+'</span></div>'; };
+  // Which substrate name maps to which atom source (a spawn-molecule template, a cofactor type, or a model).
+  const SUBSTRATE_SRC = { 'Vesi (H₂O)':{mol:'H₂O'}, 'CO₂':{mol:'CO₂'}, 'ATP':{mol:'ATP'}, 'ADP + Pi':{mol:'ADP'}, 'NADP⁺':{mol:'NADPH'}, 'NADPH + O₂':{mol:'NADPH'},
+    'Plastokinoni':{cof:3}, 'Plastokinoli (PQH₂)':{cof:3}, 'Ferredoksiini':{model:'Ferredoxin'}, 'Plastosyaniini':{model:'Plastocyanin'},
+    'Zeaksantiini':{cof:8}, 'Violaksantiini':{cof:8} };
+  // ── SAME method as the protein image: a 2D atom scatter (dark rim + z-shaded fill), drawn from the
+  //    object's own coordinates. No network / PubChem. ──
+  const drawScatter = (canvas, pts, col) => {
+    const ctx=canvas.getContext('2d'), W=canvas.width, H=canvas.height; ctx.clearRect(0,0,W,H);
+    if(!pts || !pts.length) return;
+    let miX=1e9,maX=-1e9,miY=1e9,maY=-1e9,miZ=1e9,maZ=-1e9;
+    for(const p of pts){ if(p.x<miX)miX=p.x; if(p.x>maX)maX=p.x; if(p.y<miY)miY=p.y; if(p.y>maY)maY=p.y; if(p.z<miZ)miZ=p.z; if(p.z>maZ)maZ=p.z; }
+    const pad=5, s=Math.min((W-2*pad)/Math.max(0.5,maX-miX),(H-2*pad)/Math.max(0.5,maY-miY));
+    const ox=(W-(maX-miX)*s)/2, oy=(H-(maY-miY)*s)/2, dz=Math.max(1,maZ-miZ), r=Math.max(1.4, Math.min(7, s*1.1));
+    const sorted=[...pts].sort((a,b)=>a.z-b.z), px=p=>ox+(p.x-miX)*s, py=p=>H-(oy+(p.y-miY)*s);
+    ctx.fillStyle='rgba(18,14,9,0.9)';
+    for(const p of sorted){ ctx.beginPath(); ctx.arc(px(p),py(p),r+2.0,0,6.2832); ctx.fill(); }        // dark rim
+    for(const p of sorted){ const sh=0.5+0.5*((p.z-miZ)/dz), c=p.c||col;                                // z-shaded fill (per-atom colour if given)
+      ctx.fillStyle='rgb('+Math.round(c[0]*255*sh)+','+Math.round(c[1]*255*sh)+','+Math.round(c[2]*255*sh)+')';
+      ctx.beginPath(); ctx.arc(px(p),py(p),r,0,6.2832); ctx.fill(); }
+  };
+  const cofPts = t => { if(typeof etcGroups==='undefined') return null; const g=etcGroups.find(g=>g.type===t); if(!g||!g.atoms.length) return null;
+    return g.atoms.map(i=>({ x:etcM[i*16+12], y:etcM[i*16+13], z:etcM[i*16+14] })); };   // a cofactor type's atoms (from the scene overlay)
+  const molPts = name => { const b=(typeof MOL_BUILD!=='undefined')&&MOL_BUILD[name]; if(!b) return null;
+    return b().map(a=>{ const el=ELEM[a.sym]||ELEM.FB; return { x:a.x, y:a.y, z:a.z, c:el.c }; }); };   // a spawn-molecule template, coloured by element
+  const modelPts = nm => { let mi=-1; for(let i=0;i<mols.length;i++) if(mInfo[i].name===nm){ mi=i; break; } if(mi<0) return null;
+    const m=mols[mi], st=Math.max(1,Math.floor(m.na/3000)), pts=[]; for(let k=0;k<m.na;k+=st) pts.push({ x:m.x[k], y:m.y[k], z:m.z[k] });
+    return { pts, col:[gModelCol[mi*3],gModelCol[mi*3+1],gModelCol[mi*3+2]] }; };
+  // A labelled chip whose 44×44 canvas is drawn by drawFn (else a plain colour swatch).
+  const scatterChip = (label, drawFn, swatch) => {
+    const wrap=document.createElement('div'); wrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;width:60px';
+    const cv=document.createElement('canvas'); cv.width=cv.height=100; cv.style.cssText='width:44px;height:44px;border-radius:6px;border:1px solid var(--brown);background:'+(swatch||'var(--paper2)');
+    const lab=document.createElement('div'); lab.textContent=label; lab.style.cssText='font-size:9px;text-align:center;line-height:1.15';
+    wrap.appendChild(cv); wrap.appendChild(lab); if(drawFn) drawFn(cv); return wrap; };
   // Gene → a coloured rounded pill; the colour cycles by index so each gene reads distinctly.
   const genePill = (g, i) => { const h=(i*57)%360; return '<span style="display:inline-block;background:hsl('+h+',60%,82%);color:#2a2a2a;border:1.5px solid hsl('+h+',55%,42%);border-radius:999px;padding:1px 9px;margin:2px;font-size:11px;font-weight:bold;font-style:italic">'+g+'</span>'; };
   // A 2D scatter of the model's atoms (projected X-Y, z-shaded in the model colour) → a recognisable
@@ -2306,13 +2327,20 @@ async function run(){
     const nm=document.getElementById('center-protein-name'); if(nm) nm.textContent=md.name;
     const ds=document.getElementById('center-protein-desc'); if(ds) ds.textContent=PROTEIN_DESC[md.name]||'';
     const rowCss = 'display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:3px';
-    const pcq = (typeof PUBCHEM_Q!=='undefined') ? PUBCHEM_Q : {}, etn = (typeof ETC_NAMES!=='undefined') ? ETC_NAMES : {};
-    const cofEl=document.getElementById('center-protein-cof'); if(cofEl){ const cof=PROTEIN_COF[md.name]||[];
-      cofEl.innerHTML = cof.length ? '<b>Kofaktorit:</b><div style="'+rowCss+'">'
-        + cof.map(t => molChip(etn[t] || 'Kofaktori', COF_CID_IMG[t] ? pcCid(COF_CID_IMG[t]) : (pcq[t] ? pcName(pcq[t]) : null), cofColCss(t))).join('') + '</div>' : ''; }
-    const su=document.getElementById('center-protein-subs'); if(su){ const subs=PROTEIN_SUBSTRATE[md.name]||[];
-      su.innerHTML = subs.length ? '<b>Substraatit:</b><div style="'+rowCss+'">'
-        + subs.map(s => molChip(s, SUBSTRATE_CID[s] ? pcCid(SUBSTRATE_CID[s]) : null, null)).join('') + '</div>' : ''; }
+    const etn = (typeof ETC_NAMES!=='undefined') ? ETC_NAMES : {}, ecol = (typeof ETC_COL!=='undefined') ? ETC_COL : {};
+    const cofEl=document.getElementById('center-protein-cof'); if(cofEl){ cofEl.innerHTML=''; const cof=PROTEIN_COF[md.name]||[];
+      if(cof.length){ cofEl.innerHTML='<b>Kofaktorit:</b>'; const row=document.createElement('div'); row.style.cssText=rowCss;
+        for(const t of cof){ const pts=cofPts(t), col=ecol[t]||[0.7,0.7,0.7];
+          row.appendChild(scatterChip(etn[t]||'Kofaktori', pts?(cv=>drawScatter(cv,pts,col)):null, pts?null:cofColCss(t))); }
+        cofEl.appendChild(row); } }
+    const su=document.getElementById('center-protein-subs'); if(su){ su.innerHTML=''; const subs=PROTEIN_SUBSTRATE[md.name]||[];
+      if(subs.length){ su.innerHTML='<b>Substraatit:</b>'; const row=document.createElement('div'); row.style.cssText=rowCss;
+        for(const s of subs){ const src=SUBSTRATE_SRC[s]; let drawFn=null;
+          if(src){ if(src.mol){ const p=molPts(src.mol); if(p) drawFn=cv=>drawScatter(cv,p,[0.72,0.72,0.72]); }
+            else if(src.cof){ const p=cofPts(src.cof); if(p) drawFn=cv=>drawScatter(cv,p,ecol[src.cof]||[0.7,0.7,0.7]); }
+            else if(src.model){ const mp=modelPts(src.model); if(mp) drawFn=cv=>drawScatter(cv,mp.pts,mp.col); } }
+          row.appendChild(scatterChip(s, drawFn, null)); }
+        su.appendChild(row); } }
     const ge=document.getElementById('center-protein-genes'); if(ge){ const genes=PROTEIN_GENES[md.name]||[];
       ge.innerHTML = genes.length ? '<b>Geenit:</b><div style="margin-top:3px">' + genes.map((g,i)=>genePill(g,i)).join('') + '</div>' : ''; }
     { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; }   // protein card OWNS the centre → hide a leftover atom card
