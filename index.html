@@ -5406,8 +5406,9 @@ async function run(){
     let mx=0,my=0,mz=0; for(const a of local){ mx+=a.x; my+=a.y; mz+=a.z; } mx/=local.length; my/=local.length; mz/=local.length;
     const off = local.map(a=>[a.x-mx, a.y-my, a.z-mz]);
     const refs = [];
-    for(let i=0;i<local.length;i++){ const s={sym:local[i].sym, x:x+off[i][0], y:y+off[i][1], z:FLOOR_Z+off[i][2], id:gSpawnId++, mol:true}; spawned.push(s); refs.push(s); }
-    const sp=85; gMolecules.push({ name, refs, off, cx:x, cy:y, vx:rnd()*sp, vy:rnd()*sp, ang:0, av:rnd()*0.7 });
+    const mol = { name, refs, off, cx:x, cy:y, vx:0, vy:0, ang:0, av:0 };   // spawns AT REST — press M (with it selected) to start it moving, S to stop
+    for(let i=0;i<local.length;i++){ const s={sym:local[i].sym, x:x+off[i][0], y:y+off[i][1], z:FLOOR_Z+off[i][2], id:gSpawnId++, mol:true, molRef:mol}; spawned.push(s); refs.push(s); }
+    gMolecules.push(mol);
     rebuildSpawn(); return true;
   };
   const removeMolecule = m => { for(const r of m.refs){ const i=spawned.indexOf(r); if(i>=0) spawned.splice(i,1); } const j=gMolecules.indexOf(m); if(j>=0) gMolecules.splice(j,1); };
@@ -6296,6 +6297,11 @@ void main(void){
     else if(k === 'r' || k === 'R'){ resetView(); }                                     // R → default starting view
     else if(k === 'h' || k === 'H'){ document.documentElement.classList.toggle('ui-hidden'); }   // H → hide/show all UI
     else if(k === 'f' || k === 'F'){ gFocusDim = true; }                                 // F held → spotlight the selection
+    else if(k === 'm' || k === 'M'){   // M → the SELECTED spawned molecule starts drifting (random heading + spin)
+      const m = (selAtom && selAtom.spawn && selAtom.si >= 0 && spawned[selAtom.si]) ? spawned[selAtom.si].molRef : null;
+      if(m){ const sp = 85; m.vx = rnd()*sp; m.vy = rnd()*sp; m.av = rnd()*0.7; }
+    }
+    else if(k === 's' || k === 'S'){ for(const m of gMolecules){ m.vx = 0; m.vy = 0; m.av = 0; } }   // S → every spawned molecule stops
   });
   window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false; });
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
@@ -6306,7 +6312,7 @@ void main(void){
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','zoom'],['Keskinappi + rulla','hidas zoom'],
       ['Nuolinäppäimet','panoroi'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
       ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
-      ['H','piilota käyttöliittymä'],['P','maalausefekti']];
+      ['H','piilota käyttöliittymä'],['P','maalausefekti'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
       + rows.map(([k,v]) => '<span style="color:var(--brown);font-weight:bold">'+k+'</span> — '+v).join('<br>');
     document.body.appendChild(sc); gShortcuts = sc; }
