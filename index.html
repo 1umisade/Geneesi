@@ -649,6 +649,7 @@ uniform float focusMode;   // 0 = grayscale all, 1 = keep colour near focusCente
 uniform vec3 focusCenterV; // point-selection centre (view space)
 uniform float focusR;      // point-selection radius
 uniform float focusSet[24];// per-model keep-colour flags (mode 2)
+uniform float focusGroup;  // cofactor group to keep coloured (mode 3, ETCHL overlay only)
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -715,8 +716,16 @@ void main(void){
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
   if(focusAmt > 0.001){   // F: grayscale this fragment unless it is part of the selection → the coloured region is the EXACT silhouette
-    bool fsel = (focusMode > 1.5) ? (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5)
-              : (focusMode > 0.5) ? (distance(vCenterV, focusCenterV) < focusR) : false;
+    bool fsel;
+    if(focusMode > 2.5){   // mode 3 = a cofactor GROUP: only the overlay atoms tagged with that group keep colour
+#ifdef ETCHL
+      fsel = abs(vGid - focusGroup) < 0.5;
+#else
+      fsel = false;        // the protein underneath greys out
+#endif
+    } else if(focusMode > 1.5){ fsel = (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5); }   // mode 2 = model set
+    else if(focusMode > 0.5){ fsel = distance(vCenterV, focusCenterV) < focusR; }             // mode 1 = point
+    else fsel = false;                                                                        // mode 0 = grey all
     if(!fsel){ float fg = dot(col, vec3(0.299, 0.587, 0.114)); col = mix(col, vec3(fg), focusAmt); } }
 #ifdef ETCHL
   bool hl = abs(vGid - hlGroup) < 0.5;                        // hovered / flashing cofactor group
@@ -2146,12 +2155,13 @@ async function run(){
   let gFocusRadiusObs = null;   // while a focus swivel runs, pins cam.radius so the centering never changes zoom
   let gFocusDim = false;        // F held → grayscale everything except the current selection (its EXACT silhouette stays colour)
   let gFocusDimAmt = 0;         // eased 0→1 so the grayscale fades in/out smoothly
-  let gFocusMode = 0;           // 0 = none (grayscale ALL) · 1 = a point selection (atom/cofactor, tested by view-space centre+radius) · 2 = a model set
+  let gFocusMode = 0;           // 0 = none (grayscale ALL) · 1 = a point (atom, view-space centre+radius) · 2 = a model set · 3 = a cofactor group
+  let gFocusGroup = -1;         // mode 3: the cofactor group index whose overlay atoms keep their colour
   const gDimCenterW = new BABYLON.Vector3();   // point-selection centre, world space
   const gFocusCenterV = new BABYLON.Vector3(); // …the same, transformed to VIEW space each frame (the shaders test against this)
   let gDimRadius = 20;          // point-selection radius (world units)
   const gFocusSet = new Float32Array(24);      // mode 2: 1 = this model index is in the F selection (the shaders keep its atoms coloured)
-  const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); };
+  const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); };
   let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
   const zoomBy = delta => {                 // delta < 0 = closer
@@ -3078,7 +3088,7 @@ async function run(){
       uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelXform','modelCol','colorMode'] : [])
     };
     if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE'].concat(nucleon ? ['#define NUCLEON'] : []);   // follows the PSII gizmo AND its own per-model drag; NUCLEON keeps protons red / neutrons grey (never model-tinted)
-      opts.uniforms = opts.uniforms.concat(['selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet']); }
+      opts.uniforms = opts.uniforms.concat(['selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup']); }
     else opts.uniforms = opts.uniforms.concat(['selModel','selCol']);
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
     mat.setFloat('radius', radius);
@@ -3132,7 +3142,7 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','focusAmt','focusMode','focusCenterV','focusR','focusSet'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
     samplers: ['cofDepth'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define COFHIDE']   // drag offset + per-model move; electrons only up close; COFHIDE → an atom whose vdW is hidden by the cofactor cutaway also drops its orbitals (margin spares the cofactor's own lobes)
   });
@@ -3151,7 +3161,7 @@ async function run(){
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
       defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
@@ -3218,7 +3228,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
@@ -3231,7 +3241,7 @@ async function run(){
     eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindFocus(eff); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
@@ -3249,7 +3259,7 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define DEPTHSHADE','#define ETCTHIN'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
@@ -6200,9 +6210,9 @@ void main(void){
   scene.onBeforeRenderObservable.add(() => {
     gFocusDimAmt += ((gFocusDim ? 1 : 0) - gFocusDimAmt) * 0.16;
     if(gFocusDimAmt < 0.004){ gFocusDimAmt = 0; gFocusMode = 0; return; }
-    gFocusSet.fill(0);
-    if(selAtom && selCenter.x < 1e5){ gFocusMode = 1; gDimCenterW.copyFrom(selCenter); gDimRadius = 4; }
-    else if(etcSel >= 0 && orbitCenter.x < 1e5){ gFocusMode = 1; gDimCenterW.copyFrom(orbitCenter); gDimRadius = Math.max(((etcGroups[etcSel] && etcGroups[etcSel].r) || 8) * 1.4, 8); }
+    gFocusSet.fill(0); gFocusGroup = -1;
+    if(etcSel >= 0){ gFocusMode = 3; gFocusGroup = etcSel; }   // a cofactor → keep EXACTLY that cofactor's overlay atoms (by group), grey the rest
+    else if(selAtom && selCenter.x < 1e5){ gFocusMode = 1; gDimCenterW.copyFrom(selCenter); gDimRadius = 4; }
     else if(gSel.size){ gFocusMode = 2; for(const mi of gSel){ if(mi < gFocusSet.length) gFocusSet[mi] = 1; } }
     else gFocusMode = 0;   // F held with nothing selected → grayscale the whole frame
     if(gFocusMode === 1) BABYLON.Vector3.TransformCoordinatesToRef(gDimCenterW, cam.getViewMatrix(), gFocusCenterV);
