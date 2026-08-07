@@ -651,6 +651,7 @@ uniform float focusR;      // point-selection radius
 uniform float focusSet[24];// per-model keep-colour flags (mode 2)
 uniform float focusGroup;  // cofactor group to keep coloured (mode 3, ETCHL overlay only)
 uniform float focusDark;   // darken the grayscale (non-selection) environment: 0 = plain grey, 1 = to black
+uniform float selSet[24];  // per-model RTS-selection flags → a bright-green outline on top of the black rim
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -767,6 +768,8 @@ void main(void){
   // atoms in front of them) — an outline, not the filled silhouette a highlight layer would give.
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     col = mix(col, selCol, smoothstep(0.55, 1.0, r2) * 0.95);
+  // RTS selection → a BRIGHT-GREEN outline painted over the black ink rim (per atom, so the eye reads the whole complex contour)
+  if(vMid >= 0.0 && selSet[int(vMid + 0.5)] > 0.5) col = mix(col, vec3(0.16, 1.0, 0.30), rim);
 #ifdef OUTLINEONLY
   if(rim < 0.30) discard;                 // keep ONLY the outline ring — the fill is dropped
   gl_FragColor = vec4(vec3(0.06), rim);   // BLACK ink ring (like every other atom's outline), on top of everything
@@ -2151,10 +2154,18 @@ async function run(){
      grabbed depth keeps that point exactly under the cursor. panDepth is the depth of whatever was
      under the cursor when the pan began (a complex if one was hit, else the pivot distance). */
   const worldPerPixelAt = R => 2 * Math.abs(R) * Math.tan(cam.fov / 2) / Math.max(1, canvas.clientHeight);
+  // RTS pan: slide the pivot IN THE FLOOR PLANE (constant Z) whatever the camera tilt. ex = screen-right,
+  // ey = screen-up → screen-up maps to the camera's horizontal FORWARD (into the scene), never a vertical rise.
+  const panFloor = (ex, ey, sp) => {
+    const r = cam.getDirection(BABYLON.Axis.X), f = cam.getDirection(BABYLON.Axis.Z);
+    let fx = f.x, fy = f.y, fl = Math.hypot(fx, fy);
+    if(fl < 1e-3){ const u = cam.getDirection(BABYLON.Axis.Y); fx = u.x; fy = u.y; fl = Math.hypot(fx, fy) || 1; }   // near top-down → use screen-up projected onto the floor
+    fx /= fl; fy /= fl;
+    let rx = r.x, ry = r.y; const rl = Math.hypot(rx, ry) || 1; rx /= rl; ry /= rl;
+    cam.target.x += (rx*ex + fx*ey) * sp; cam.target.y += (ry*ex + fy*ey) * sp; };
   const panBy = (dxPx, dyPx) => { const wpp = worldPerPixelAt(panDepth);
-    orbitLocked = false;   // panning breaks the lock so the follow stops (you deliberately moved away)
-    const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
-    cam.target.addInPlace(right.scale(-dxPx * wpp)).addInPlace(up.scale(dyPx * wpp)); };
+    orbitLocked = false; gCamFollow = false;   // panning breaks the lock so the follow stops (you deliberately moved away)
+    panFloor(-dxPx * wpp, dyPx * wpp, 1); };
   // Zoom that flies THROUGH the model without flipping: once the radius hits a small
   // floor, the pivot dollies forward along the view instead of the radius going negative.
   const _zSel = new BABYLON.Vector3();
@@ -2172,7 +2183,7 @@ async function run(){
   let gFocusDark = 0.0;         // F: how much the grayscale (non-selection) environment darkens (0 = just grey, 1 = to black). Dev slider.
   let gFVigStr = 0.55;          // F: vignette edge darkness (0 = off, 1 = black corners). Dev slider.
   let gFVigReach = 45;          // F: how far the vignette reaches inward from the edges, % of the radius. Dev slider.
-  const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); eff.setFloat('focusDark', gFocusDark); };
+  const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); eff.setFloat('focusDark', gFocusDark); eff.setArray('selSet', gSelSet); };
   let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
   const zoomBy = delta => {                 // delta < 0 = closer
@@ -2212,6 +2223,7 @@ async function run(){
   const FLOOR_Z = 0;                    // the RTS floor plane — all models live at Z = FLOOR_Z and move within it
   const gSel = new Set();               // selected model indices
   const gSelMol = new Set();            // selected SPAWNED molecules (gMolecules entries) → M starts them, S stops them
+  const gSelSet = new Float32Array(24); // per-model 1 = in the RTS selection → the imp shaders draw a bright-green outline on it
   const gMoveTarget = new Map();        // mi → [tx,ty,tz] target gModelOff (glide destination)
   let gPing = null;                     // {x,y,z,t0} → the expanding move-order ping on the floor
   const gFollow = new Map();            // mi → {tmi, ang, ring} → keep chasing molecule tmi at a standoff
@@ -2485,14 +2497,15 @@ async function run(){
     gFollowLast=[ccx,ccy,ccz];
   });
   // draw selection brackets + the drag box each frame
+  scene.onBeforeRenderObservable.add(() => { gSelSet.fill(0); for(const mi of gSel){ if(mi < 24) gSelSet[mi] = 1; } });   // feed the RTS selection to the imp shaders' green-outline test
   scene.registerAfterRender(() => {
     oc2.clearRect(0,0,selOverlay.width, selOverlay.height);
     for(const mi of gSel){ const s=projModel(mi); if(s.z<0||s.z>1) continue; const r=modelScreenR(mi), L=Math.min(r*0.45,14);
       oc2.strokeStyle=rgbSelCss(mi); oc2.lineWidth=2.2;
       for(const [sx,sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){ oc2.beginPath();
         oc2.moveTo(s.x+sx*r, s.y+sy*r-sy*L); oc2.lineTo(s.x+sx*r, s.y+sy*r); oc2.lineTo(s.x+sx*r-sx*L, s.y+sy*r); oc2.stroke(); } }
-    for(const m of gSelMol){ const s=projMol(m); if(s.z<0||s.z>1) continue;   // selected spawned molecules → a sage ring so they read as picked (they are tiny)
-      oc2.strokeStyle='rgba(140,235,160,.95)'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 13, 0, 6.2832); oc2.stroke(); }
+    for(const m of gSelMol){ const s=projMol(m); if(s.z<0||s.z>1) continue;   // selected spawned molecules → a bright-green ring so they read as picked (they are tiny)
+      oc2.strokeStyle='rgba(40,255,80,.95)'; oc2.lineWidth=2.5; oc2.beginPath(); oc2.arc(s.x, s.y, 14, 0, 6.2832); oc2.stroke(); }
     if(rtsBoxing && rtsBoxMoved){ const lx=Math.min(rtsBoxSX,rtsBoxCX), ly=Math.min(rtsBoxSY,rtsBoxCY), w=Math.abs(rtsBoxCX-rtsBoxSX), h=Math.abs(rtsBoxCY-rtsBoxSY);
       oc2.fillStyle='rgba(120,220,140,.12)'; oc2.fillRect(lx,ly,w,h); oc2.strokeStyle='rgba(140,235,160,.95)'; oc2.lineWidth=1.5; oc2.strokeRect(lx,ly,w,h); }
     if(gPing){ const el=(performance.now()-gPing.t0)/620;   // SC2-style move ping — two green rings expanding out of the target
@@ -2529,8 +2542,7 @@ async function run(){
     setPanCursor(true, edgeMX, edgeMY, ex, ey);   // arrow.png points in the pan direction
     orbitLocked = false; gCamFollow = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
-    const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
-    cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
+    panFloor(ex, ey, sp);
   });
   // BOTH-buttons directional (joystick) pan — while held, the camera scrolls toward the mouse's offset
   // from the press point, faster the further you push (same depth-based speed as the edge-pan).
@@ -2544,8 +2556,7 @@ async function run(){
     const ex = Math.max(-1.6, Math.min(1.6, ox/REF)), ey = Math.max(-1.6, Math.min(1.6, -oy/REF));   // screen-down = pan down
     orbitLocked = false; gCamFollow = false;
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
-    const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
-    cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
+    panFloor(ex, ey, sp);
     setPanCursor(true, scene.pointerX, scene.pointerY, ex, ey);   // arrow.png points the pan direction
   });
   // Arrow-key panning (same feel as the edge-pan). Ignored while typing in a dev slider/input.
@@ -2560,8 +2571,7 @@ async function run(){
     if(!ex && !ey) return;
     orbitLocked = false; gCamFollow = false;
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
-    const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
-    cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
+    panFloor(ex, ey, sp);
   });
   scene.onPointerObservable.add(p => {
     const e = p.event;
@@ -3309,7 +3319,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark','selSet'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
@@ -3322,7 +3332,7 @@ async function run(){
     eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindFocus(eff); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark','selSet'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
