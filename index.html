@@ -5627,12 +5627,98 @@ async function run(){
       } else { m.x=nx; m.y=ny; }
       syncMesh(m);
     };
-    // Main tick — no-op while gMB3D is off (existing sim untouched). Sensing + pull/bind/release/excite land next.
+    // §16 per-type override hooks — call m.hooks[name] if present, else the base default (undefined = "no hook").
+    const hook = (m, name, ...a) => (m.hooks && m.hooks[name]) ? m.hooks[name](m, ...a) : undefined;
+    const isMolecule = b => b && b.tags && b.tags.has('MoleculeBody2D') && b.alive;
+    const isAncestor = (m, body) => { let p = body.parentComplex; while(p){ if(p===m) return true; p=p.parentComplex; } return false; };
+    const withinR = (a, b, r) => { const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy <= r*r; };
+    const setCategory = (b, cat) => { b.category = cat; };
+
+    /* ── §9.1 BINDING_conditions(complex, body, slot) → the slot, or null.  With slot=null it is the PULL
+       query ("is there ANY slot on me this body could bind?"). Shared by pulling AND binding. ── */
+    const bindingConditions = (m, body, slot=null) => {
+      if(!m.bindSites || !m.active) return null;                          // BindSites exist - I am active/white
+      if(isAncestor(m, body)) return null;                               // I am not the body's ancestor
+      if(!isMolecule(body)) return null;
+      if(slot === null){                                                 // PULL path — find the first slot that can pull this body
+        for(const s of m.bindSites){
+          if(!withinR(s, body, s.nearbyR)) continue;                     // only the slot whose own Nearby overlaps the body
+          if([...s.pulledBodies].some(b => b && b.alive && b !== body)) continue;   // one body per slot
+          if(bindingConditions(m, body, s)) return s;
+        }
+        return null;
+      }
+      if(hook(m, 'bindingSpecialConditions', body, slot) === false) return null;   // §16 per-type gate (default true)
+      if(body.isSlot) return null;                                       // body is not itself a slot
+      if(!canBind(m.name, body.name)) return null;                       // both listed in possible_interactions
+      if(body.flags.exiting) return null;                                // body not freshly released
+      if(slot.flags.binding_ongoing || body.flags.binding_ongoing) return null;
+      if(slot.name !== body.name) return null;                           // right slot for this type
+      if(slot.visible === false) return null;
+      if(slot.occupied) return null;                                     // slot must be empty (darkened)
+      return slot;
+    };
+    // §8.1 PULLING_conditions — body not already committed, then defer to the pull query.
+    const pullingConditions = (m, body) => (isMolecule(body) && body.hardTarget == null) ? bindingConditions(m, body) : null;
+    // §8.2 try_PULLING — move the body onto the in-transit category, register it on the slot, steer it in.
+    const tryPulling = (m, body) => {
+      const slot = pullingConditions(m, body);
+      if(slot){ setCategory(body, CAT.IN_TRANSIT); slot.pulledBodies.add(body); body.hardTarget = slot; body.flags.repelFrom = null; }
+      else repelling(m, body);
+    };
+    // §8.3 repelling — nudge a latecomer away from a slot of mine it is drifting to that is already full.
+    const repelling = (m, body) => {
+      if(isMolecule(body) && body.softTarget && body.softTarget.boundTo === m && body.softTarget.occupied && m.active)
+        body.flags.repelFrom = m;   // step() nudges it away each frame while still in range (§8.3 while-loop)
+    };
+
+    // Coroutine stubs — filled in later parts (kept as safe no-ops so the §17 cascade never errors).
+    const tryBinding = (m, body, slot) => { /* PART 4: bind glide + inward state copy */ };
+    const tryReleasing = (m) => { /* PART 5: release + electron-acceptor filter */ };
+    const tryExcitationTransferring = (m) => { /* PART 6: excitation hop */ };
+    const whenBodyEntersTouchArea = (m, body) => { /* PART 7: contact specials + generic bind-by-contact */ };
+    const whenBodyExitsTouchArea = (m, body) => { body.flags.exiting = false; const i = m.overlapping.indexOf(body); if(i>=0) m.overlapping.splice(i,1); };
+
+    // §8.1/§17 body enters my (or a slot's) large Nearby_area → pull + the neighbour re-pokes.
+    const whenBodyEntersNearbyArea = (m, body) => {
+      if(!isMolecule(body)) return;
+      tryPulling(m, body); tryExcitationTransferring(m); tryReleasing(body); tryReleasing(m);
+      if(m.isSlot && m.parentComplex) whenBodyEntersNearbyArea(m.parentComplex, body);   // forward to my complex
+    };
+    // §9 body enters a slot's tight Touch_area → attempt the bind.
+    const whenBodyEntersBindSite = (m, body, slot) => tryBinding(m, body, slot);
+
+    // §18/§11 synthesize enter/exit for the nearby (large) + touch (tight) sensors of every molecule + slot,
+    // by diffing this frame's overlap sets against last frame's. Bodies = the free, non-slot molecules.
+    const sense = () => {
+      const bodies = [...all].filter(b => b.alive && !b.isSlot);
+      for(const m of all){ if(!m.alive) continue;
+        const near = new Set();
+        for(const b of bodies){ if(b !== m && withinR(m, b, m.nearbyR)) near.add(b); }
+        for(const b of near) if(!m._nearbySet.has(b)) whenBodyEntersNearbyArea(m, b);
+        m._nearbySet = near;
+        const touch = new Set();
+        for(const b of bodies){ if(b !== m && withinR(m, b, m.touchR)) touch.add(b); }
+        for(const b of touch) if(!m._touchSet.has(b)){ if(m.isSlot && m.parentComplex) whenBodyEntersBindSite(m.parentComplex, b, m); else whenBodyEntersTouchArea(m, b); }
+        for(const b of m._touchSet) if(!touch.has(b)) whenBodyExitsTouchArea(m, b);
+        m._touchSet = touch;
+      }
+    };
+    // Extra per-frame repel nudge (§8.3 while-loop): keep pushing a flagged body away while it stays in range.
+    const repelStep = () => { for(const b of all){ const m = b.flags.repelFrom; if(!m) continue;
+      if(!m.alive || !withinR(m, b, m.nearbyR) || b.hardTarget){ b.flags.repelFrom = null; continue; }
+      const l = Math.hypot(b.x-m.x, b.y-m.y)||1, ax=(b.x-m.x)/l, ay=(b.y-m.y)/l;
+      b.dir = norm(lerp2(b.dir, {x:ax,y:ay}, 0.1)); } };
+
+    // Main tick — no-op while gMB3D is off (existing sim untouched). Move → repel → sense.
     scene.onBeforeRenderObservable.add(() => { if(!gMB3D) return;
       const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000;
       for(const m of all) step(m, dt);
+      repelStep();
+      sense();
     });
-    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step };
+    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step,
+      bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook };
   })();
   window.__MB = MB;   // dev handle while building the port
   // drop the armed spawn-selector item at the floor point under the cursor
