@@ -612,6 +612,7 @@ uniform float fogStart;
 uniform float fogEnd;
 uniform float isShell;   // 1.0 = translucent vdW shell, 0.0 = solid inner atom
 uniform float shellMin;  // alpha the shell fades TO where the atom reveals orbitals (0 = hidden, 0.5 = half-transparent)
+uniform float revealFade;// revealed-shell opacity at the FAR reveal edge (up close it goes full glass) → distance gradient
 uniform float bubbleR;   // reveal-sphere radius around the camera (view-space distance)
 uniform float protonOutline;   // 1.0 for the nucleon mesh → red rim on protons
 uniform float depthBias;   // nuclei: push toward camera (view units) so they clear their OWN orbitals (0 elsewhere)
@@ -686,7 +687,11 @@ void main(void){
   float inCone = (coneCos < -0.5) ? 1.0 : 1.0 - smoothstep(coneCos*0.86, coneCos, perp);   // soft-edged cone rim
   float reveal = (1.0 - edge) * inCone;                       // 1 = orbitals/nuclei show here, 0 = vdW shell
   float rimGlass = mix(shellMin, 0.72, smoothstep(0.34, 1.0, r2));   // revealed shell = a glass bubble, near-clear centre and a visible rim, so the orbitals inside stand out
-  alpha *= (isShell < 0.5) ? reveal : mix(1.0, rimGlass, reveal);   // core fades IN where revealed, shell becomes that glass bubble
+  // Distance gradient - a revealed shell is full glass right up close and fades to (revealFade) opaque at the reveal
+  // edge, so distant atoms stay mostly solid while only the ones you are on top of go clear.
+  float grad = smoothstep(0.0, bubbleR, dist);               // 0 close → 1 at the reveal edge
+  float glassA = mix(rimGlass, max(rimGlass, revealFade), grad);
+  alpha *= (isShell < 0.5) ? reveal : mix(1.0, glassA, reveal);   // core fades IN where revealed, shell becomes the distance-graded glass bubble
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
 #ifdef COFHIDE
   // Line of sight to the ETC cofactors: an atom IN FRONT of a cofactor goes see-through so the cofactor
@@ -2776,6 +2781,7 @@ async function run(){
   let gBubbleR = 1e9;         // reveal only within this camera distance (1e9 = everywhere)
   let gShell   = 0;           // vdW spheres: 1 = translucent where the atom reveals orbitals, 0 = always solid
   let gShellMin = 0.0;        // alpha the vdW shell fades TO where revealed (0 = fully hidden, 0.5 = half-transparent)
+  let gRevealFade = 0.95;     // revealed-shell opacity at the FAR reveal edge → distant atoms stay ~solid, close ones go glass. Dev slider.
   let gEtc = true, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later) — ON by default; the cofactor outline is the overlay's own black rim (ETCDARK), which traces the molecule shape
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
@@ -3126,27 +3132,27 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
   vdwMat.setFloat('protonOutline',0); vdwMat.setFloat('depthBias',0); vdwMat.setFloat('coneCos',-1.0);
   vdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMat.backFaceCulling=false; realAlpha(vdwMat);
   vdwMat.onBindObservable.add(()=>{ const eff=vdwMat.getEffect(); if(!eff)return;
-    eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
+    eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('revealFade', gRevealFade); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
     eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
   vdwMatStatic.setFloat('protonOutline',0); vdwMatStatic.setFloat('depthBias',0); vdwMatStatic.setFloat('coneCos',-1.0);
   vdwMatStatic.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); vdwMatStatic.backFaceCulling=false; realAlpha(vdwMatStatic); vdwMatStatic.setFloat('selModel', -1);
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
-    eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
+    eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('revealFade', gRevealFade); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt); bindCof(eff); });
 
@@ -3157,7 +3163,7 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define DEPTHSHADE','#define ETCTHIN'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
@@ -3165,7 +3171,7 @@ async function run(){
     etcMat.depthFunction = BABYLON.Engine.ALWAYS;   // cofactors ALWAYS draw (never occluded by the protein in front) → visible at every angle, not just when the reveal tunnel happens to clear
     etcMat.onBindObservable.add(()=>{ const eff=etcMat.getEffect(); if(!eff)return;
       eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);   // always keep the vivid per-type colours (ignore the parent pastel mode); boil so the cofactor spheres wobble like the protein
-      eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
+      eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('revealFade', gRevealFade); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
       eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt); });
@@ -3499,7 +3505,7 @@ async function run(){
     // with the orbitals revealed inside when the camera is in range.
     const chlSphMat = new BABYLON.ShaderMaterial('chlSphMat', scene, 'imp', {
       attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel','selCol'] });
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel','selCol'] });
     chlSphMat.setFloat('radius',1.0); chlSphMat.setFloat('protonOutline',0); chlSphMat.setFloat('depthBias',0);
     chlSphMat.setFloat('selModel',-1); chlSphMat.setColor3('selCol', new BABYLON.Color3(0.6,0.72,0.53));
     chlSphMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); chlSphMat.backFaceCulling=false; realAlpha(chlSphMat);
@@ -4708,8 +4714,13 @@ async function run(){
   const csSld = document.createElement('input'); csSld.type='range'; csSld.min='0'; csSld.max='100'; csSld.value='25'; csSld.style.cssText='width:100%;cursor:pointer;';   // 25 → 1.0 (range 0…4)
   const csValEl = csRow.querySelector('#dev-cs-val');
   csSld.oninput = () => { gCollScale = (+csSld.value/100)*4.0; csValEl.textContent = gCollScale.toFixed(2); if(gCollVizUpdate) gCollVizUpdate(); };
+  // Reveal transparency GRADIENT: opacity of a revealed vdW shell at the far reveal edge (0 = stays glass, 1 = solid).
+  const rfRow = document.createElement('div'); rfRow.innerHTML = 'kaukainen vdW-peitto: <b id="dev-rf-val">0.95</b>';
+  const rfSld = document.createElement('input'); rfSld.type='range'; rfSld.min='0'; rfSld.max='100'; rfSld.value='95'; rfSld.style.cssText='width:100%;cursor:pointer;';
+  const rfValEl = rfRow.querySelector('#dev-rf-val');
+  rfSld.oninput = () => { gRevealFade = +rfSld.value/100; rfValEl.textContent = gRevealFade.toFixed(2); };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4720,7 +4731,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -5064,7 +5075,8 @@ async function run(){
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     const ox0=ray.origin.x, oy0=ray.origin.y, oz0=ray.origin.z, dx=ray.direction.x, dy=ray.direction.y, dz=ray.direction.z;
     let best=-1, bestT=Infinity;
-    for(let i=0;i<spawned.length;i++){ const a=spawned[i], el=ELEM[a.sym]||ELEM.FB, r=el.vr*FILL_SCALE*1.1;
+    for(let i=0;i<spawned.length;i++){ const a=spawned[i]; if(a.mol) continue;   // molecule atoms drift on their own → not hand-draggable
+      const el=ELEM[a.sym]||ELEM.FB, r=el.vr*FILL_SCALE*1.1;
       const ox=ox0-a.x, oy=oy0-a.y, oz=oz0-a.z;
       const b=ox*dx+oy*dy+oz*dz, c=ox*ox+oy*oy+oz*oz-r*r, disc=b*b-c;
       if(disc<0) continue; let t=-b-Math.sqrt(disc); if(t<0) t=-b+Math.sqrt(disc);
@@ -5166,18 +5178,66 @@ async function run(){
     gParticles.push(p); return p; };
   const COL = { water:[0.30,0.62,0.85], photon:[1.0,0.88,0.35], O:[0.94,0.15,0.15], proton:[1.0,0.45,0.45], electron:[0.30,0.62,1.0] };
   const rnd = () => Math.random()*2-1;
-  const splitWater = p => { const bx=p.x, by=p.y, bz=p.z, sp=60; p.mesh.dispose(); p.mat.dispose();
+  const splitAt = (bx,by,bz) => { const sp=60;   // OEC products: one O + 2 protons + 2 electrons fly apart
     spawnParticle('O', bx,by,bz, {col:COL.O, r:5, vx:rnd()*sp, vy:rnd()*sp, vz:rnd()*sp, life:2.2});
     for(let i=0;i<2;i++) spawnParticle('proton', bx,by,bz, {col:COL.proton, r:2.5, vx:rnd()*sp*1.6, vy:rnd()*sp*1.6, vz:rnd()*sp*1.6, life:1.8});
     for(let i=0;i<2;i++) spawnParticle('electron', bx,by,bz, {col:COL.electron, r:2, vx:rnd()*sp*2.2, vy:rnd()*sp*2.2, vz:rnd()*sp*2.2, life:1.6}); };
+  const splitWater = p => { p.mesh.dispose(); p.mat.dispose(); splitAt(p.x, p.y, p.z); };
+
+  // ── Real spawned molecules: multi-atom structures (rendered like protein atoms — nuclei + orbitals)
+  //    that drift and bounce around the scene. Built from the same `spawned[]` list + rebuildSpawn(). ──
+  const bondL = (a,b) => 0.52*(reachOf(a)+reachOf(b));
+  const phosphate = (cx,cy,cz) => { const b=bondL('P','O'), n=1.7320508, t=[[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1]];   // PO₄ tetrahedron
+    const a=[{sym:'P',x:cx,y:cy,z:cz}]; for(const d of t) a.push({sym:'O',x:cx+b*d[0]/n,y:cy+b*d[1]/n,z:cz+b*d[2]/n}); return a; };
+  const ringAt = (cx,cy,R,syms) => { const a=[], n=syms.length; for(let i=0;i<n;i++){ const th=i/n*6.2831853; a.push({sym:syms[i],x:cx+R*Math.cos(th),y:cy+R*Math.sin(th),z:0}); } return a; };   // planar ring
+  const MOL_BUILD = {   // each returns local atom positions {sym,x,y,z} (Å) — centred on the centroid at spawn
+    'H₂O': () => { const b=bondL('O','H'), a=0.912; return [{sym:'O',x:0,y:0,z:0},{sym:'H',x:b*Math.sin(a),y:-b*Math.cos(a),z:0},{sym:'H',x:-b*Math.sin(a),y:-b*Math.cos(a),z:0}]; },
+    'CO₂': () => { const b=bondL('C','O'); return [{sym:'C',x:0,y:0,z:0},{sym:'O',x:b,y:0,z:0},{sym:'O',x:-b,y:0,z:0}]; },
+    'Pi':  () => phosphate(0,0,0),
+    'ADP': () => { const g=bondL('P','O')*2.4; return [...phosphate(0,0,0), ...phosphate(g,0,0), ...ringAt(g*2.1,0,bondL('C','C')*1.1,['C','O','C','C','C']), ...ringAt(g*3.25,0,bondL('C','N')*1.15,['N','C','N','C','N','C'])]; },
+    'ATP': () => { const g=bondL('P','O')*2.4; return [...phosphate(0,0,0), ...phosphate(g,0,0), ...phosphate(g*2,0,0), ...ringAt(g*3.05,0,bondL('C','C')*1.1,['C','O','C','C','C']), ...ringAt(g*4.2,0,bondL('C','N')*1.15,['N','C','N','C','N','C'])]; },
+    'NADPH': () => { const g=bondL('P','O')*2.4; return [...phosphate(0,0,0), ...ringAt(g*1.3,0,bondL('C','N')*1.15,['N','C','C','C','C','C']), ...ringAt(g*2.6,0,bondL('C','N')*1.15,['N','C','N','C','N','C']), ...ringAt(g*1.95,g*1.15,bondL('C','C')*1.1,['C','O','C','C','C'])]; },
+  };
+  const gMolecules = [];   // {name, refs:[spawned atom…], off:[[dx,dy,dz]…], cx,cy, vx,vy, ang, av}
+  const spawnMolecule = (name, x, y) => {
+    const build = MOL_BUILD[name]; if(!build) return false;
+    const local = build();
+    let mx=0,my=0,mz=0; for(const a of local){ mx+=a.x; my+=a.y; mz+=a.z; } mx/=local.length; my/=local.length; mz/=local.length;
+    const off = local.map(a=>[a.x-mx, a.y-my, a.z-mz]);
+    const refs = [];
+    for(let i=0;i<local.length;i++){ const s={sym:local[i].sym, x:x+off[i][0], y:y+off[i][1], z:FLOOR_Z+off[i][2], id:gSpawnId++, mol:true}; spawned.push(s); refs.push(s); }
+    const sp=85; gMolecules.push({ name, refs, off, cx:x, cy:y, vx:rnd()*sp, vy:rnd()*sp, ang:0, av:rnd()*0.7 });
+    rebuildSpawn(); return true;
+  };
+  const removeMolecule = m => { for(const r of m.refs){ const i=spawned.indexOf(r); if(i>=0) spawned.splice(i,1); } const j=gMolecules.indexOf(m); if(j>=0) gMolecules.splice(j,1); };
+  // Per-frame: drift + tumble + wall-bounce within the scene bounds; a water molecule splits at an OEC site.
+  { const _oc={x:0,y:0,z:0}; scene.onBeforeRenderObservable.add(() => {
+    if(!gMolecules.length) return;
+    const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000, x0=gMiX, x1=gMaX, y0=gMiY, y1=gMaY;
+    let dirty = false;
+    for(let mi=gMolecules.length-1; mi>=0; mi--){ const m=gMolecules[mi];
+      m.cx += m.vx*dt; m.cy += m.vy*dt; m.ang += m.av*dt;
+      if(m.cx<x0){ m.cx=x0; m.vx=Math.abs(m.vx); } else if(m.cx>x1){ m.cx=x1; m.vx=-Math.abs(m.vx); }
+      if(m.cy<y0){ m.cy=y0; m.vy=Math.abs(m.vy); } else if(m.cy>y1){ m.cy=y1; m.vy=-Math.abs(m.vy); }
+      const c=Math.cos(m.ang), s=Math.sin(m.ang);
+      for(let i=0;i<m.refs.length;i++){ const o=m.off[i], r=m.refs[i]; r.x=m.cx+o[0]*c-o[1]*s; r.y=m.cy+o[0]*s+o[1]*c; r.z=FLOOR_Z+o[2]; }
+      if(m.name==='H₂O' && gReactSites){ let hit=false;
+        for(let gi=0; gi<gReactSites.count; gi++){ if(gReactSites.typeOf(gi)!==1) continue; gReactSites.siteWorld(gi,_oc);
+          const rr=gReactSites.radiusOf(gi)+5, dx=m.cx-_oc.x, dy=m.cy-_oc.y, dz=FLOOR_Z-_oc.z;
+          if(dx*dx+dy*dy+dz*dz < rr*rr){ hit=true; break; } }
+        if(hit){ removeMolecule(m); splitAt(m.cx, m.cy, FLOOR_Z); dirty=true; continue; } }
+      dirty = true;
+    }
+    if(dirty) rebuildSpawn();
+  }); }
   // drop the armed spawn-selector item at the floor point under the cursor
   const dropArmedItem = () => { if(!gArmedItem) return;
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     if(Math.abs(ray.direction.z) < 1e-6) return; const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; if(t<0) return;
     const x=ray.origin.x+ray.direction.x*t, y=ray.origin.y+ray.direction.y*t;
-    if(gArmedItem.name === 'H₂O') spawnParticle('water', x,y,FLOOR_Z, {col:COL.water, r:5});
+    if(MOL_BUILD[gArmedItem.name]) spawnMolecule(gArmedItem.name, x, y);   // real multi-atom molecule → drifts + bounces (H₂O also splits at the OEC)
     else if(gArmedItem.name === 'Fotoni') spawnParticle('photon', x,y,FLOOR_Z, {col:COL.photon, r:3});
-    else spawnParticle('token', x,y,FLOOR_Z, {col:[0.72,0.72,0.72], r:5}); };   // other molecules/proteins → placeholder token for now
+    else spawnParticle('token', x,y,FLOOR_Z, {col:[0.72,0.72,0.72], r:5}); };   // proteins → placeholder token for now
   // per-frame: move particles, run the OEC reaction, refresh the dev collision spheres
   { const _c = {x:0,y:0,z:0};
     scene.onBeforeRenderObservable.add(() => {
@@ -5563,7 +5623,7 @@ async function run(){
   // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
   const cofPrevMat = new BABYLON.ShaderMaterial('cofPrevMat', scene, 'imp', {
     attributes:['position','instanceColor','instR','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','selModel'],
     defines:['#define IMPRAD'] });
   cofPrevMat.setFloat('radius',1.0); cofPrevMat.setFloat('isShell',1); cofPrevMat.setFloat('shellMin',0.12); cofPrevMat.setFloat('bubbleR',1e9);   // faint translucent ETC shell → the element-coloured orbitals + electrons show clearly through
   cofPrevMat.setFloat('protonOutline',0); cofPrevMat.setFloat('coneCos',-1.0); cofPrevMat.setFloat('depthBias',0); cofPrevMat.setFloat('selModel',-1);
