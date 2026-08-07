@@ -5538,16 +5538,18 @@ async function run(){
     const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000, x0=gMiX, x1=gMaX, y0=gMiY, y1=gMaY;
     let dirty = false;
     for(let mi=gMolecules.length-1; mi>=0; mi--){ const m=gMolecules[mi];
-      if(m.mtx !== undefined){   // right-click move order → steer straight to the target, then stop exactly on it
-        const dx=m.mtx-m.cx, dy=m.mty-m.cy, d=Math.hypot(dx,dy), step=85*dt*gSpeed;
-        if(d <= Math.max(step, 0.5)){ m.cx=m.mtx; m.cy=m.mty; m.vx=0; m.vy=0; m.mtx=undefined; }   // arrived → snap + halt
-        else { m.vx=dx/d*85; m.vy=dy/d*85; } }
-      m.cx += m.vx*dt*gSpeed; m.cy += m.vy*dt*gSpeed; m.ang += m.av*dt*gSpeed;   // speed slider scales the drift + tumble
-      if(m.cx<x0){ m.cx=x0; m.vx=Math.abs(m.vx); } else if(m.cx>x1){ m.cx=x1; m.vx=-Math.abs(m.vx); }
-      if(m.cy<y0){ m.cy=y0; m.vy=Math.abs(m.vy); } else if(m.cy>y1){ m.cy=y1; m.vy=-Math.abs(m.vy); }
-      const c=Math.cos(m.ang), s=Math.sin(m.ang);
+      if(!gMB3D){   // when the ported sim (gMB3D) is driving, IT sets cx/cy/ang — skip the legacy drift/move-order/bounce
+        if(m.mtx !== undefined){   // right-click move order → steer straight to the target, then stop exactly on it
+          const dx=m.mtx-m.cx, dy=m.mty-m.cy, d=Math.hypot(dx,dy), step=85*dt*gSpeed;
+          if(d <= Math.max(step, 0.5)){ m.cx=m.mtx; m.cy=m.mty; m.vx=0; m.vy=0; m.mtx=undefined; }   // arrived → snap + halt
+          else { m.vx=dx/d*85; m.vy=dy/d*85; } }
+        m.cx += m.vx*dt*gSpeed; m.cy += m.vy*dt*gSpeed; m.ang += m.av*dt*gSpeed;   // speed slider scales the drift + tumble
+        if(m.cx<x0){ m.cx=x0; m.vx=Math.abs(m.vx); } else if(m.cx>x1){ m.cx=x1; m.vx=-Math.abs(m.vx); }
+        if(m.cy<y0){ m.cy=y0; m.vy=Math.abs(m.vy); } else if(m.cy>y1){ m.cy=y1; m.vy=-Math.abs(m.vy); }
+      }
+      const c=Math.cos(m.ang), s=Math.sin(m.ang);   // apply ref positions from cx/cy/ang (set by drift OR by the ported sim)
       for(let i=0;i<m.refs.length;i++){ const o=m.off[i], r=m.refs[i]; r.x=m.cx+o[0]*c-o[1]*s; r.y=m.cy+o[0]*s+o[1]*c; r.z=FLOOR_Z+o[2]; }
-      if(m.name==='H₂O' && gReactSites){ let hit=false;
+      if(!gMB3D && m.name==='H₂O' && gReactSites){ let hit=false;
         for(let gi=0; gi<gReactSites.count; gi++){ if(gReactSites.typeOf(gi)!==1) continue; gReactSites.siteWorld(gi,_oc);
           const rr=gReactSites.radiusOf(gi)+5, dx=m.cx-_oc.x, dy=m.cy-_oc.y, dz=FLOOR_Z-_oc.z;
           if(dx*dx+dy*dy+dz*dz < rr*rr){ hit=true; break; } }
@@ -5609,7 +5611,8 @@ async function run(){
     // §7 movement + steering + bounce (free, non-slot, speeded molecules).
     const norm = v => { const l=Math.hypot(v.x,v.y)||1; return {x:v.x/l, y:v.y/l}; };
     const lerp2 = (a,b,t) => ({x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t});
-    const syncMesh = m => { if(m.mesh && m.mesh.position){ m.mesh.position.x=m.x; m.mesh.position.y=m.y; m.mesh.position.z=FLOOR_Z; } };
+    const syncMesh = m => { if(m.mesh && m.mesh.position){ m.mesh.position.x=m.x; m.mesh.position.y=m.y; m.mesh.position.z=FLOOR_Z; }
+      if(m._gmol){ m._gmol.cx=m.x; m._gmol.cy=m.y; m._gmol.ang=m.rot; } };   // drive the linked spawned molecule
     const step = (m, dt) => {
       if(m.isSlot || !m.speed) return;
       if(m.hardTarget){ const t=m.hardTarget; m.dir = norm(lerp2(m.dir, norm({x:t.x-m.x, y:t.y-m.y}), 0.5)); }              // §7.1 hard (aggressive)
@@ -5888,6 +5891,42 @@ async function run(){
       const l = Math.hypot(b.x-m.x, b.y-m.y)||1, ax=(b.x-m.x)/l, ay=(b.y-m.y)/l;
       b.dir = norm(lerp2(b.dir, {x:ax,y:ay}, 0.1)); } };
 
+    /* ── §8 (wiring) ENTITY BINDING — hook the engine onto the real scene: build complexes from the ETC
+       cofactor groups and adopt the spawned molecules as free agents. NOTE: the cofactor type → chain-role
+       mapping below is best-effort (a generic "chlorophyll" cofactor can be P680 / P700 / antenna depending
+       on its protein + position); placeInChain / slot layout are the tuning points to refine per cofactor. ── */
+    const COF = {   // etcGroups[].type code → complex spec {name, place, slots, excitable}
+      1:{name:'OEC', place:0, slots:['electron','H2O']},
+      2:{name:'pheophytin', place:3, slots:['electron'], excitable:true},
+      3:{name:'plastoquinone_A', place:4, slots:['electron']},
+      4:{name:'heme', place:6, slots:['electron']},
+      5:{name:'iron_sulfur_cluster_inside_photosystem_I', place:11, slots:['electron']},
+      6:{name:'plastocyanin', place:7, slots:['electron']},
+      7:{name:'chlorophyll_A_PSI', place:9, slots:['electron'], excitable:true},
+      8:{name:'zeaxanthin', place:0, slots:[], excitable:true},
+      9:{name:'tyrosine', place:1, slots:['electron','O2']},
+      10:{name:'NADP', place:13, slots:['electron','proton']},
+    };
+    const MOLNAME = { 'H₂O':'H2O', 'CO₂':'CO2', 'NADPH':'NADP', 'ADP':'ADP', 'Pi':'phosphate', 'ATP':'ATP',
+      'Ferredoksiini':'ferredoxin', 'Plastosyaniini':'plastocyanin', 'Fotoni':'photon', 'O₂':'O2' };
+    let _built = false;
+    const buildFromScene = () => {
+      if(_built) return; _built = true;
+      const sw = {x:0,y:0,z:0};
+      if(typeof etcGroups !== 'undefined') for(let gi=0; gi<etcGroups.length; gi++){   // complexes from cofactor groups
+        const g = etcGroups[gi], spec = COF[g.type]; if(!spec) continue;
+        if(gReactSites) gReactSites.siteWorld(gi, sw); else { sw.x=g.cx; sw.y=g.cy; }
+        const cx = spawnFree(spec.name, sw.x, sw.y, { radius:Math.max(6, (g.r||8)*0.5), nearbyR:120, excitable:!!spec.excitable, placeInChain:spec.place });
+        cx.speed = 0;                                                                    // complexes are static
+        cx.bindSites = spec.slots.map(sn => { const s = make(sn, sw.x, sw.y, { isSlot:true, radius:6, nearbyR:120, touchR:10, parentComplex:cx, boundTo:cx }); return s; });
+        for(const s of cx.bindSites) all.add(s);
+      }
+      if(typeof gMolecules !== 'undefined') for(const mol of gMolecules){                // free agents driving the spawned molecules
+        const nm = MOLNAME[mol.name] || mol.name;
+        const ag = spawnFree(nm, mol.cx, mol.cy, { speed:(moleculeSpec[nm] && moleculeSpec[nm].speed) || 60, radius:6 });
+        ag._gmol = mol;
+      }
+    };
     // One simulation frame: move → repel → sense → advance coroutines. Callable manually (for deterministic
     // tests, independent of the throttled render loop) or driven by the render loop below.
     const tickOnce = (dt) => {
@@ -5899,11 +5938,12 @@ async function run(){
     };
     // Render-loop driver — no-op while gMB3D is off (existing sim untouched).
     scene.onBeforeRenderObservable.add(() => { if(!gMB3D) return;
+      buildFromScene();
       tickOnce(Math.min(50, scene.getEngine().getDeltaTime())/1000);
     });
     return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step, tickOnce, moleculeSpec,
       bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook, tryReleasing, releasingConditions, tryBinding,
-      tryExciting, tryExcitationTransferring, turningExcitationToHeat, delay };
+      tryExciting, tryExcitationTransferring, turningExcitationToHeat, delay, buildFromScene, COF, MOLNAME };
   })();
   window.__MB = MB;   // dev handle while building the port
   window.__setMB3D = v => { gMB3D = !!v; };   // dev: enable/disable the ported sim tick
