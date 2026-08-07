@@ -2169,6 +2169,8 @@ async function run(){
   let gDimRadius = 20;          // point-selection radius (world units)
   const gFocusSet = new Float32Array(24);      // mode 2: 1 = this model index is in the F selection (the shaders keep its atoms coloured)
   let gFocusDark = 0.0;         // F: how much the grayscale (non-selection) environment darkens (0 = just grey, 1 = to black). Dev slider.
+  let gFVigStr = 0.55;          // F: vignette edge darkness (0 = off, 1 = black corners). Dev slider.
+  let gFVigReach = 45;          // F: how far the vignette reaches inward from the edges, % of the radius. Dev slider.
   const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); eff.setFloat('focusDark', gFocusDark); };
   let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
@@ -2401,6 +2403,14 @@ async function run(){
       if(!panCursorOn){ panCursor.style.display = 'block'; document.documentElement.classList.add('panning'); panCursorOn = true; } }
     else if(panCursorOn){ panCursor.style.display = 'none'; document.documentElement.classList.remove('panning'); panCursorOn = false; }
   };
+  // F darkening vignette — a radial screen overlay (clear centre → dark edges) that fades in with F.
+  // Strength = edge darkness, reach = how far it bleeds inward. Its opacity is driven by the F ease.
+  const fVig = document.createElement('div');
+  fVig.style.cssText = 'position:fixed;inset:0;z-index:9;pointer-events:none;opacity:0';
+  document.body.appendChild(fVig);
+  const updateFVig = () => { const inner = Math.max(0, 100 - gFVigReach);   // reach 0 → dark only at the very corners, reach 90 → nearly to the centre
+    fVig.style.background = 'radial-gradient(ellipse at center, rgba(0,0,0,0) '+inner+'%, rgba(0,0,0,'+gFVigStr.toFixed(3)+') 100%)'; };
+  updateFVig();
   const _vpSel = new BABYLON.Viewport(0,0,1,1);
   const projModel = mi => { const md=mInfo[mi]; _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
     return BABYLON.Vector3.Project(new BABYLON.Vector3(md.cx+gModelOff[mi*3], md.cy+gModelOff[mi*3+1], md.cz+gModelOff[mi*3+2]),
@@ -2454,6 +2464,20 @@ async function run(){
       const nx=ox+(tg[0]-ox)*k, ny=oy+(tg[1]-oy)*k, nz=oz+(tg[2]-oz)*k;
       gModelOff[mi*3]=nx; gModelOff[mi*3+1]=ny; gModelOff[mi*3+2]=nz; rebuildModelXform(mi);
       if(!gFollow.has(mi) && (tg[0]-nx)*(tg[0]-nx)+(tg[1]-ny)*(tg[1]-ny)+(tg[2]-nz)*(tg[2]-nz) < 0.01) gMoveTarget.delete(mi); } });   // static orders end on arrival, follows persist
+  // Camera follows the RTS selection as it glides: translate the orbit pivot by the selection's OWN
+  // motion each frame. This never calls setTarget (alpha/beta/radius stay put) so you keep rotating
+  // AND panning freely around it — see the CLAUDE.md camera invariant. Runs after the glide above.
+  let gFollowLast = null, gFollowSig = '';
+  scene.onBeforeRenderObservable.add(() => {
+    if(!gSel.size){ gFollowLast = null; gFollowSig = ''; return; }
+    let cx=0, cy=0, cz=0;
+    for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
+    const n=gSel.size, ccx=cx/n, ccy=cy/n, ccz=cz/n;
+    const sig=[...gSel].sort((a,b)=>a-b).join(',');
+    if(sig !== gFollowSig){ gFollowSig=sig; gFollowLast=[ccx,ccy,ccz]; return; }   // new/changed selection → anchor without a jump
+    if(gFollowLast){ cam.target.x += ccx-gFollowLast[0]; cam.target.y += ccy-gFollowLast[1]; cam.target.z += ccz-gFollowLast[2]; }
+    gFollowLast=[ccx,ccy,ccz];
+  });
   // draw selection brackets + the drag box each frame
   scene.registerAfterRender(() => {
     oc2.clearRect(0,0,selOverlay.width, selOverlay.height);
@@ -4869,8 +4893,18 @@ async function run(){
   const fdSld = document.createElement('input'); fdSld.type='range'; fdSld.min='0'; fdSld.max='100'; fdSld.value='0'; fdSld.style.cssText='width:100%;cursor:pointer;';
   const fdValEl = fdRow.querySelector('#dev-fd-val');
   fdSld.oninput = () => { gFocusDark = +fdSld.value/100; fdValEl.textContent = gFocusDark.toFixed(2); };
+  // F vignette STRENGTH: how dark the screen edges go while F is held (0 = off … 1 = black corners).
+  const fvStrRow = document.createElement('div'); fvStrRow.innerHTML = 'F-vinjetti voimakkuus: <b id="dev-fvs-val">0.55</b>';
+  const fvStrSld = document.createElement('input'); fvStrSld.type='range'; fvStrSld.min='0'; fvStrSld.max='100'; fvStrSld.value='55'; fvStrSld.style.cssText='width:100%;cursor:pointer;';
+  const fvStrVal = fvStrRow.querySelector('#dev-fvs-val');
+  fvStrSld.oninput = () => { gFVigStr = +fvStrSld.value/100; fvStrVal.textContent = gFVigStr.toFixed(2); updateFVig(); };
+  // F vignette REACH: how far the darkening bleeds inward from the edges (% of the radius toward centre).
+  const fvRchRow = document.createElement('div'); fvRchRow.innerHTML = 'F-vinjetti kantama: <b id="dev-fvr-val">45</b>';
+  const fvRchSld = document.createElement('input'); fvRchSld.type='range'; fvRchSld.min='0'; fvRchSld.max='90'; fvRchSld.value='45'; fvRchSld.style.cssText='width:100%;cursor:pointer;';
+  const fvRchVal = fvRchRow.querySelector('#dev-fvr-val');
+  fvRchSld.oninput = () => { gFVigReach = +fvRchSld.value; fvRchVal.textContent = String(gFVigReach); updateFVig(); };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld, fdSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld, fdSld, fvStrSld, fvRchSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4881,7 +4915,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld); devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -6280,6 +6314,7 @@ void main(void){
   // view-space centre+radius; mode 2 = a set of whole models (their atoms keep colour → exact silhouette).
   scene.onBeforeRenderObservable.add(() => {
     gFocusDimAmt += ((gFocusDim ? 1 : 0) - gFocusDimAmt) * 0.16;
+    fVig.style.opacity = gFocusDimAmt.toFixed(3);   // darkening vignette fades in/out with F
     if(gFocusDimAmt < 0.004){ gFocusDimAmt = 0; gFocusMode = 0; return; }
     gFocusSet.fill(0); gFocusGroup = -1;
     if(etcSel >= 0){ gFocusMode = 3; gFocusGroup = etcSel; }   // a cofactor → keep EXACTLY that cofactor's overlay atoms (by group), grey the rest
