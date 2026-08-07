@@ -1912,6 +1912,33 @@ void main(void){
   float line = max(cofLine, protLine);
   gl_FragColor = vec4(mix(scene, vec3(0.03), line), 1.0);   // silhouette = black
 }`;
+/* RTS selection mask: each selected atom rendered as a SOLID white disc (paired with the imp vertex, so it
+   sits exactly on the atoms). The union is the selected complexes' filled coverage → the seloutline pass
+   inks a thick green ring around its OUTER edge = one bold outline tracing the shape. */
+BABYLON.Effect.ShadersStore['selmaskFragmentShader'] = `
+precision highp float;
+varying vec2 vUV;
+void main(void){ if(dot(vUV, vUV) > 1.0) discard; gl_FragColor = vec4(1.0); }`;
+BABYLON.Effect.ShadersStore['seloutlinePixelShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform sampler2D selMask;
+uniform vec2 texel;
+uniform float owidth;
+uniform float selOn;
+void main(void){
+  vec3 scene = texture2D(textureSampler, vUV).rgb;
+  if(selOn < 0.5){ gl_FragColor = vec4(scene, 1.0); return; }
+  float c = texture2D(selMask, vUV).r, mn = c, mx = c;
+  for(int i=0;i<16;i++){ float a = float(i) * 0.3926991;
+    vec2 d = vec2(cos(a), sin(a)) * texel * owidth;
+    float s = texture2D(selMask, vUV + d).r;
+    mn = min(mn, s); mx = max(mx, s);
+  }
+  float line = smoothstep(0.15, 0.6, mx - mn);   // thick band straddling the coverage edge = the selection outline
+  gl_FragColor = vec4(mix(scene, vec3(0.16, 1.0, 0.34), line), 1.0);
+}`;
 
 /* ── Static dark-green background ──────────────────────────────────────────
    A full-screen quad drawn at the far plane (z ≈ 1, LESS depth test) so every
@@ -2507,12 +2534,10 @@ async function run(){
       if(!started){ oc2.moveTo(_rOut.x, _rOut.y); started = true; } else oc2.lineTo(_rOut.x, _rOut.y); }
     oc2.stroke();
   };
-  // draw selection halos + the drag box each frame
+  // draw selection halos + the drag box each frame. Complexes get a thick green SILHOUETTE (the seloutline
+  // post-process); molecules (too tiny for a silhouette) keep a green ground ring here.
   scene.registerAfterRender(() => {
     oc2.clearRect(0,0,selOverlay.width, selOverlay.height);
-    for(const mi of gSel){ const md=mInfo[mi];   // ground ellipse hugging each selected complex's XY footprint (+8% margin)
-      const cx=md.cx+gModelOff[mi*3], cy=md.cy+gModelOff[mi*3+1];
-      drawFloorRing(cx, cy, 0.54*(md.x1-md.x0), 0.54*(md.y1-md.y0), 'rgba(40,255,90,0.95)', 2.6); }
     for(const m of gSelMol){   // ground circle around each selected spawned molecule (hug its atoms + a small margin)
       let R=2; for(const o of m.off) R=Math.max(R, Math.hypot(o[0],o[1])); R+=1.6;
       drawFloorRing(m.cx, m.cy, R, R, 'rgba(40,255,90,0.95)', 2.6); }
@@ -2949,6 +2974,7 @@ async function run(){
   // renders at 25% opacity (keeps its normal colour + outline), so the cofactor shows through.
   let cofDepthRT = null, gCofDisc = null;                     // the depth target + the disc mesh that fills it
   let cofMaskRT = null, gCofMaskMesh = null;                  // cofactor coverage mask (solid) → the cofsil post-process inks its outer edge = the molecule silhouette
+  let gSelMaskRT = null;                                      // RTS-selection coverage mask (solid) → the seloutline post-process inks a thick green ring around it
   const gCofTexel = new BABYLON.Vector2(1/1280, 1/720);       // 1 / render size → maps gl_FragCoord to [0,1] (refreshed per frame)
   const bindCof = eff => { eff.setFloat('cofHideOn', gRevealOn); eff.setFloat('cofAlpha', gCofAlpha); eff.setFloat('cofOutAlpha', gCofOutAlpha); eff.setFloat('cofOutCol', gCofOutCol); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT); eff.setVector2('cofTexel', gCofTexel); };
   let gFocusId = -1;          // -1 = all orbitals opaque; >=0 = a subshell picked in the config panel (others 50% transparent)
@@ -3514,6 +3540,43 @@ async function run(){
     const entry = { cx,cy,cz, mi:modelOf(cx,cy,cz), meshes:[], nuc:null, sphere, macro:true, r:cellHalfDiag, visOn:false, nucOn:false, sphOn:false, k };   // mi → which model transforms this cell (cull must match the shaders)
     cellList.push(entry); macroCellByKey.set(k, entry);
     await yield_();
+  }
+
+  // ── RTS selection silhouette ── the selected complexes' atoms rendered SOLID (white) into an off-screen
+  //    mask via a mirror camera on its own layer (nothing else occludes it); seloutline inks a thick green ring.
+  {
+    const SEL_LAYER = 0x20000000;
+    const selMaskMat = new BABYLON.ShaderMaterial('selMaskMat', scene, {vertex:'imp', fragment:'selmask'}, {
+      attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
+      uniforms:['view','projection','radius','uT','boil','macroXform','macroCenter','modelXform','modelCol','colorMode'],
+      defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE'] });
+    selMaskMat.setFloat('radius',1.0); selMaskMat.setFloat('boil',0.0); selMaskMat.backFaceCulling=false;
+    selMaskMat.onBindObservable.add(()=>{ const eff=selMaskMat.getEffect(); if(!eff)return;
+      eff.setFloat('uT', gWaveT); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
+      eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0); });
+    const selMaskMesh = BABYLON.MeshBuilder.CreatePlane('selMaskMesh', {size:2}, scene);
+    selMaskMesh.material = selMaskMat; selMaskMesh.isPickable = false; selMaskMesh.alwaysSelectAsActiveMesh = true;
+    selMaskMesh.layerMask = SEL_LAYER; selMaskMesh.thinInstanceCount = 0;
+    const eng = scene.getEngine();
+    const selMaskRT = new BABYLON.RenderTargetTexture('selMask', {width:Math.max(2,eng.getRenderWidth()), height:Math.max(2,eng.getRenderHeight())}, scene, false, true,
+      BABYLON.Constants.TEXTURETYPE_UNSIGNED_BYTE, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, true, false);
+    selMaskRT.clearColor = new BABYLON.Color4(0,0,0,1);
+    const smcam = new BABYLON.FreeCamera('selMaskCam', new BABYLON.Vector3(0,0,0), scene); scene.removeCamera(smcam);
+    smcam.layerMask = SEL_LAYER; smcam.getViewMatrix = () => cam.getViewMatrix(); smcam.getProjectionMatrix = () => cam.getProjectionMatrix();
+    selMaskRT.activeCamera = smcam; selMaskRT.renderList = [selMaskMesh]; scene.customRenderTargets.push(selMaskRT);
+    gSelMaskRT = selMaskRT;
+    // Per-atom model id (once) → rebuild the mask mesh from the selected models' atoms on selection change.
+    const atomMid = []; for(let e=0;e<nEl;e++) atomMid[e] = mdlBuf(sphBuf[e]);
+    const rebuildSelMask = () => {
+      let n=0; for(let e=0;e<nEl;e++){ const am=atomMid[e]; for(let a=0;a<atomCount[e];a++) if(gSel.has(am[a])) n++; }
+      if(!n){ selMaskMesh.thinInstanceCount = 0; return; }
+      const M=new Float32Array(n*16), ID=new Float32Array(n), R=new Float32Array(n); let w=0;
+      for(let e=0;e<nEl;e++){ const sb=sphBuf[e], am=atomMid[e], vr=info(e).vr*FILL_SCALE;
+        for(let a=0;a<atomCount[e];a++){ if(gSel.has(am[a])){ const o=a*16; for(let j=0;j<16;j++) M[w*16+j]=sb[o+j]; ID[w]=am[a]; R[w]=vr; w++; } } }
+      selMaskMesh.thinInstanceSetBuffer('matrix', M,16,true); selMaskMesh.thinInstanceSetBuffer('modelId', ID,1,true); selMaskMesh.thinInstanceSetBuffer('instR', R,1,true);
+      selMaskMesh.thinInstanceCount = n;
+    };
+    let selSig=''; scene.onBeforeRenderObservable.add(()=>{ const s=[...gSel].sort((a,b)=>a-b).join(','); if(s!==selSig){ selSig=s; rebuildSelMask(); } });   // rebuild only when the selection changes
   }
 
   // ── Deferred detail build: nucleons, orbitals, bond + lone-pair lobes ─────────────────────────
@@ -6275,6 +6338,14 @@ async function run(){
     eff.setFloat('cofW', Math.max(0.6, Math.min(6.0, cofw)));
     eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
+  };
+  // RTS selection → a thick GREEN outline traced around the selected complexes (from the selMask coverage).
+  const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn'], ['selMask'], 1.0, cam);
+  selOutline.onApply = eff => {
+    eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
+    eff.setFloat('owidth', 3.5);   // outline half-thickness in px (→ ~7 px bold line)
+    eff.setFloat('selOn', gSel.size ? 1.0 : 0.0);
+    if(gSelMaskRT) eff.setTexture('selMask', gSelMaskRT);
   };
   // AO is disabled in the translucent "inside" view — it packs depth into the alpha
   // channel, which the transparent shell now uses for blending (the two can't coexist).
