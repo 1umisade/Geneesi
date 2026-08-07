@@ -6343,7 +6343,13 @@ async function run(){
   const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn'], ['selMask'], 1.0, cam);
   selOutline.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
-    eff.setFloat('owidth', 3.5);   // outline half-thickness in px (→ ~7 px bold line)
+    // Width scales with zoom EXACTLY like the black cofactor/protein outline (a FIXED world size, and the
+    // same gCofLineW dev slider) → it stays proportional to the object AND keeps a constant ratio to the
+    // black outline at every zoom, instead of a constant pixel width that fattens as you zoom out.
+    const dist = Math.max(1, Math.abs(cam.radius));
+    const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
+    const w = (14.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // ~1.4× the black protein outline (10*NUCLEON_R) → clearly bolder
+    eff.setFloat('owidth', Math.max(1.5, Math.min(16.0, w)));
     eff.setFloat('selOn', gSel.size ? 1.0 : 0.0);
     if(gSelMaskRT) eff.setTexture('selMask', gSelMaskRT);
   };
