@@ -2464,6 +2464,16 @@ async function run(){
     for(const m of gMolecules){ const s=projMol(m);   // a box also grabs every spawned molecule whose centre falls inside it
       if(s.z>=0 && s.z<=1 && s.x>=lx && s.x<=hx && s.y>=ly && s.y<=hy) gSelMol.add(m); }
     updateSelectionUI(); };
+  // Right-click move order for selected SPAWNED molecules → steer each to the clicked floor point and STOP
+  // there. (M is the separate command that sends them drifting off independently.)
+  const moveMoleculesTo = (px, py) => {
+    const ray = scene.createPickingRay(px, py, BABYLON.Matrix.Identity(), cam);
+    if(Math.abs(ray.direction.z) < 1e-6) return;
+    const t = (FLOOR_Z - ray.origin.z)/ray.direction.z; if(t < 0) return;
+    const wx = ray.origin.x + ray.direction.x*t, wy = ray.origin.y + ray.direction.y*t;
+    gPing = { x:wx, y:wy, z:FLOOR_Z, t0:performance.now() };
+    for(const m of gSelMol){ m.mtx = wx; m.mty = wy; m.av = 0; }   // steer to the point, no tumble - the physics observer stops it on arrival
+  };
   const moveSelectedTo = (px, py) => { if(!gSel.size) return;
     const tmi = pickModelAtCursor();                                    // right-clicked directly ON a molecule → FOLLOW it
     if(tmi >= 0 && !gSel.has(tmi)){
@@ -2635,6 +2645,7 @@ async function run(){
       if(e.button === 2){   // RIGHT: while a spawn item/element is armed → end spawning; otherwise SC2 move command
         if(spawnEl || gArmedItem){ disarmSpawn(); return; }   // left-click keeps spawning; right-click disarms
         if(gSel.size) moveSelectedTo(scene.pointerX, scene.pointerY);   // sets the glide target + drops the ping
+        if(gSelMol.size) moveMoleculesTo(scene.pointerX, scene.pointerY);   // selected molecules → move to the point and stop
         return;
       }
     }
@@ -5527,6 +5538,10 @@ async function run(){
     const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000, x0=gMiX, x1=gMaX, y0=gMiY, y1=gMaY;
     let dirty = false;
     for(let mi=gMolecules.length-1; mi>=0; mi--){ const m=gMolecules[mi];
+      if(m.mtx !== undefined){   // right-click move order → steer straight to the target, then stop exactly on it
+        const dx=m.mtx-m.cx, dy=m.mty-m.cy, d=Math.hypot(dx,dy), step=85*dt*gSpeed;
+        if(d <= Math.max(step, 0.5)){ m.cx=m.mtx; m.cy=m.mty; m.vx=0; m.vy=0; m.mtx=undefined; }   // arrived → snap + halt
+        else { m.vx=dx/d*85; m.vy=dy/d*85; } }
       m.cx += m.vx*dt*gSpeed; m.cy += m.vy*dt*gSpeed; m.ang += m.av*dt*gSpeed;   // speed slider scales the drift + tumble
       if(m.cx<x0){ m.cx=x0; m.vx=Math.abs(m.vx); } else if(m.cx>x1){ m.cx=x1; m.vx=-Math.abs(m.vx); }
       if(m.cy<y0){ m.cy=y0; m.vy=Math.abs(m.vy); } else if(m.cy>y1){ m.cy=y1; m.vy=-Math.abs(m.vy); }
@@ -6420,11 +6435,11 @@ void main(void){
     else if(k === 'r' || k === 'R'){ resetView(); }                                     // R → default starting view
     else if(k === 'h' || k === 'H'){ document.documentElement.classList.toggle('ui-hidden'); }   // H → hide/show all UI
     else if(k === 'f' || k === 'F'){ gFocusDim = true; }                                 // F held → spotlight the selection
-    else if(k === 'm' || k === 'M'){ const sp = 85;   // M → (re)start each selected molecule along its STORED heading (random the very first time)
-      for(const m of gSelMol){ if(m.svx === undefined){ m.svx = rnd()*sp; m.svy = rnd()*sp; m.sav = rnd()*0.7; }
+    else if(k === 'm' || k === 'M'){ const sp = 85;   // M → cancel any move order and (re)start drifting off along the STORED heading (random the first time)
+      for(const m of gSelMol){ m.mtx = undefined; if(m.svx === undefined){ m.svx = rnd()*sp; m.svy = rnd()*sp; m.sav = rnd()*0.7; }
         m.vx = m.svx; m.vy = m.svy; m.av = m.sav; } }
     else if(k === 's' || k === 'S'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
-        m.vx = 0; m.vy = 0; m.av = 0; } }   // S → stop, but keep the stored heading so M resumes the SAME direction
+        m.mtx = undefined; m.vx = 0; m.vy = 0; m.av = 0; } }   // S → cancel the move order + stop, but keep the stored heading so M resumes the SAME direction
   });
   window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false; });
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
