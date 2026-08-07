@@ -5556,6 +5556,85 @@ async function run(){
     }
     if(dirty) rebuildSpawn();
   }); }
+
+  /* ═══════════════════════════════════════════════════════════════════════════════════════════════
+     MoleculeBody3D — port of ProjectMPB's shared molecule brain (pull / bind / release / excite),
+     faithful to MoleculeBody2D.gd + MoleculeBody2D_Logic_Spec.md. 2.5D on the floor plane (world X,Y at
+     Z=FLOOR_Z). Gated behind gMB3D (OFF by default) while it is built up in the §19 order — when the tick
+     is disabled it does nothing, so the existing sim is untouched.
+       PART 1 (here): data model + group registries + possible_interactions + movement/steering/bounce.
+       NEXT: overlap sensing → pull → bind → release → excitation → cascades → per-type hooks → entity wiring.
+     ═══════════════════════════════════════════════════════════════════════════════════════════════ */
+  let gMB3D = false;                       // master toggle for the ported simulation (dev-only for now)
+  const MB = (() => {
+    // §5 the interaction rulebook — who can bind what (verbatim from possible_interactions).
+    const possibleInteractions = {
+      OEC:['electron','H2O'], P680:['electron'], P700:['electron'], pheophytin:['electron'],
+      plastoquinone_A:['electron'], plastoquinone_B:['electron','proton'],
+      photosystem_II:['plastoquinone_B','VDE'], cytochrome_b6f:['plastoquinone_B','plastocyanin'],
+      heme:['electron'], plastocyanin:['electron'], iron_sulfur_cluster_inside_cytochrome_b6f:['electron'],
+      photosystem_I:['plastocyanin'], chlorophyll_A_PSI:['electron'], phylloquinone:['electron'],
+      iron_sulfur_cluster_inside_photosystem_I:['electron'], RuBisCO:['CO2','NADP','ATP'],
+      ferredoxin:['electron'], FNR:['ferredoxin','NADP','electron'], NADP:['electron','proton'],
+      'ATP-synthase':['ADP','phosphate','proton'], tyrosine:['electron','O2'], 'Fe3+':['electron'],
+      'NDH-1':['ferredoxin','plastoquinone_B'],
+    };
+    const canBind = (complexName, bodyName) => { const l=possibleInteractions[complexName]; return !!l && l.indexOf(bodyName)>=0; };
+    // §4.2 groups/tags — per-object Set<string> plus a global registry Map<tag, Set<mol>>.
+    const groups = new Map(), all = new Set();
+    const inGroup = (m,g) => m.tags.has(g);
+    const addToGroup = (m,g) => { m.tags.add(g); let s=groups.get(g); if(!s){ s=new Set(); groups.set(g,s); } s.add(m); };
+    const removeFromGroup = (m,g) => { m.tags.delete(g); const s=groups.get(g); if(s) s.delete(m); };
+    const nodesInGroup = g => groups.get(g) || new Set();
+    // §4.3 collision categories: FREE (roaming) vs IN_TRANSIT (being pulled / bound), + per-pair ignore sets.
+    const CAT = { FREE:1, IN_TRANSIT:2 };
+    const allowOverlap = (a,b) => { a.ignore.add(b); b.ignore.add(a); };
+    // §2/§3 a molecule agent. `mesh` is the driven entity's visual (assigned by the entity binder later).
+    const make = (name, x, y, cfg={}) => {
+      const m = { name, tags:new Set(), flags:{},
+        x, y, rot:cfg.rot||0, dir:{x:0,y:-1}, speed:cfg.speed ?? 0, category:CAT.FREE,
+        hardTarget:null, softTarget:null, boundTo:cfg.boundTo||null,
+        placeInChain:cfg.placeInChain||0, energyLevel:0,
+        pulledBodies:new Set(), overlapping:[], ignore:new Set(),
+        bindSites:cfg.bindSites||[], parentComplex:cfg.parentComplex||null, isSlot:!!cfg.isSlot,
+        occupied:false, active:true, alive:true, rotDir:1,
+        radius:cfg.radius ?? 8, touchR:cfg.touchR ?? ((cfg.radius ?? 8)+2), nearbyR:cfg.nearbyR ?? 90,
+        mesh:cfg.mesh||null, hooks:cfg.hooks||{}, _touchSet:new Set(), _nearbySet:new Set() };
+      addToGroup(m, name); addToGroup(m, 'MoleculeBody2D');
+      return m;
+    };
+    const spawnFree = (name, x, y, cfg={}) => { const m = make(name, x, y, cfg); all.add(m); if(m.bindSites) for(const s of m.bindSites) all.add(s); return m; };
+    const kill = m => { if(!m.alive) return; m.alive=false; all.delete(m); for(const g of [...m.tags]) removeFromGroup(m,g);
+      for(const o of m.ignore) o.ignore.delete(m); if(m.mesh && m._ownMesh && m.mesh.dispose) m.mesh.dispose(); };
+    // §7 movement + steering + bounce (free, non-slot, speeded molecules).
+    const norm = v => { const l=Math.hypot(v.x,v.y)||1; return {x:v.x/l, y:v.y/l}; };
+    const lerp2 = (a,b,t) => ({x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t});
+    const syncMesh = m => { if(m.mesh && m.mesh.position){ m.mesh.position.x=m.x; m.mesh.position.y=m.y; m.mesh.position.z=FLOOR_Z; } };
+    const step = (m, dt) => {
+      if(m.isSlot || !m.speed) return;
+      if(m.hardTarget){ const t=m.hardTarget; m.dir = norm(lerp2(m.dir, norm({x:t.x-m.x, y:t.y-m.y}), 0.5)); }              // §7.1 hard (aggressive)
+      else if(m.softTarget){ const t=m.softTarget; m.dir = norm(lerp2(m.dir, norm({x:t.x-m.x, y:t.y-m.y}), 0.025)); }      // §7.2 soft (gentle)
+      const vx=m.speed*m.dir.x, vy=m.speed*m.dir.y;                                                                        // §7.3 velocity
+      const nx=m.x+vx*dt, ny=m.y+vy*dt; let hitN=null, hit=null;                                                           // §7.4 swept move vs FREE bodies
+      for(const o of all){ if(o===m || o.isSlot || o.category!==CAT.FREE || m.category!==CAT.FREE) continue;
+        if(m.ignore.has(o) || o.ignore.has(m)) continue;
+        const rr=m.radius+o.radius, dx=nx-o.x, dy=ny-o.y, d2=dx*dx+dy*dy;
+        if(d2 < rr*rr){ const d=Math.sqrt(d2)||1e-4; hitN={x:dx/d,y:dy/d}; hit=o; break; } }
+      if(hit && (hit.speed==null || hit.speed<=m.speed)){                                                                  // §7.5 bounce (only off slower/equal colliders)
+        const dot=m.dir.x*hitN.x+m.dir.y*hitN.y;
+        m.dir = norm({x:m.dir.x-2*dot*hitN.x, y:m.dir.y-2*dot*hitN.y});
+        const vn=norm({x:vx,y:vy}); m.x-=vn.x*2; m.y-=vn.y*2; m.rotDir*=-1;
+      } else { m.x=nx; m.y=ny; }
+      syncMesh(m);
+    };
+    // Main tick — no-op while gMB3D is off (existing sim untouched). Sensing + pull/bind/release/excite land next.
+    scene.onBeforeRenderObservable.add(() => { if(!gMB3D) return;
+      const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000;
+      for(const m of all) step(m, dt);
+    });
+    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step };
+  })();
+  window.__MB = MB;   // dev handle while building the port
   // drop the armed spawn-selector item at the floor point under the cursor
   const dropArmedItem = () => { if(!gArmedItem) return;
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
