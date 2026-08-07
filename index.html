@@ -2210,6 +2210,7 @@ async function run(){
      selection brackets, the drag box, and the move ping. */
   const FLOOR_Z = 0;                    // the RTS floor plane — all models live at Z = FLOOR_Z and move within it
   const gSel = new Set();               // selected model indices
+  const gSelMol = new Set();            // selected SPAWNED molecules (gMolecules entries) → M starts them, S stops them
   const gMoveTarget = new Map();        // mi → [tx,ty,tz] target gModelOff (glide destination)
   let gPing = null;                     // {x,y,z,t0} → the expanding move-order ping on the floor
   const gFollow = new Map();            // mi → {tmi, ang, ring} → keep chasing molecule tmi at a standoff
@@ -2418,10 +2419,14 @@ async function run(){
   const modelScreenR = mi => { const md=mInfo[mi], wr=0.5*Math.hypot(md.x1-md.x0, md.y1-md.y0, md.z1-md.z0);
     const d=Math.max(1, BABYLON.Vector3.Distance(cam.position, new BABYLON.Vector3(md.cx+gModelOff[mi*3], md.cy+gModelOff[mi*3+1], md.cz+gModelOff[mi*3+2])));
     return Math.max(11, Math.min(140, wr * (canvas.clientHeight/(2*Math.tan(cam.fov/2))) / d)); };
-  const selectBox = (x0,y0,x1,y1, add) => { if(!add) gSel.clear();
+  const projMol = m => { _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
+    return BABYLON.Vector3.Project(new BABYLON.Vector3(m.cx, m.cy, FLOOR_Z), BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _vpSel); };
+  const selectBox = (x0,y0,x1,y1, add) => { if(!add){ gSel.clear(); gSelMol.clear(); }
     const lx=Math.min(x0,x1), hx=Math.max(x0,x1), ly=Math.min(y0,y1), hy=Math.max(y0,y1);
     for(let mi=0; mi<mols.length; mi++){ const s=projModel(mi);
       if(s.z>=0 && s.z<=1 && s.x>=lx && s.x<=hx && s.y>=ly && s.y<=hy) gSel.add(mi); }
+    for(const m of gMolecules){ const s=projMol(m);   // a box also grabs every spawned molecule whose centre falls inside it
+      if(s.z>=0 && s.z<=1 && s.x>=lx && s.x<=hx && s.y>=ly && s.y<=hy) gSelMol.add(m); }
     updateSelectionUI(); };
   const moveSelectedTo = (px, py) => { if(!gSel.size) return;
     const tmi = pickModelAtCursor();                                    // right-clicked directly ON a molecule → FOLLOW it
@@ -2485,6 +2490,8 @@ async function run(){
       oc2.strokeStyle=rgbSelCss(mi); oc2.lineWidth=2.2;
       for(const [sx,sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){ oc2.beginPath();
         oc2.moveTo(s.x+sx*r, s.y+sy*r-sy*L); oc2.lineTo(s.x+sx*r, s.y+sy*r); oc2.lineTo(s.x+sx*r-sx*L, s.y+sy*r); oc2.stroke(); } }
+    for(const m of gSelMol){ const s=projMol(m); if(s.z<0||s.z>1) continue;   // selected spawned molecules → a sage ring so they read as picked (they are tiny)
+      oc2.strokeStyle='rgba(140,235,160,.95)'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 13, 0, 6.2832); oc2.stroke(); }
     if(rtsBoxing && rtsBoxMoved){ const lx=Math.min(rtsBoxSX,rtsBoxCX), ly=Math.min(rtsBoxSY,rtsBoxCY), w=Math.abs(rtsBoxCX-rtsBoxSX), h=Math.abs(rtsBoxCY-rtsBoxSY);
       oc2.fillStyle='rgba(120,220,140,.12)'; oc2.fillRect(lx,ly,w,h); oc2.strokeStyle='rgba(140,235,160,.95)'; oc2.lineWidth=1.5; oc2.strokeRect(lx,ly,w,h); }
     if(gPing){ const el=(performance.now()-gPing.t0)/620;   // SC2-style move ping — two green rings expanding out of the target
@@ -2594,11 +2601,13 @@ async function run(){
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = []; return; }   // finished moving a spawned atom
       if(e.button === 0 && rtsBoxing){ rtsBoxing = false;
         if(rtsBoxMoved){ selectBox(rtsBoxSX, rtsBoxSY, rtsBoxCX, rtsBoxCY, e.shiftKey); }   // a drag → box-select the group
-        else if(rtsDownModel >= 0){   // a click on a molecule → select it (Shift adds / toggles)
-          if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
-          else { gSel.clear(); gSel.add(rtsDownModel); }
-          updateSelectionUI();
-        } else { gSel.clear(); updateSelectionUI(); }                              // click on empty → deselect (move order is on RIGHT-click)
+        else { const mol = pickMolecule();   // a TAP on a spawned molecule selects it (then M starts it, S stops it)
+          if(mol){ selectMolecule(mol, e.shiftKey); }
+          else if(rtsDownModel >= 0){   // a click on a protein complex → select it (Shift adds / toggles)
+            if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
+            else { gSel.clear(); gSelMol.clear(); gSel.add(rtsDownModel); }
+            updateSelectionUI();
+          } else { gSel.clear(); gSelMol.clear(); updateSelectionUI(); } }             // click on empty → deselect (move order is on RIGHT-click)
         return;
       }
       if(e.button === 0 && spawnEl){   // armed element + tap → drop an atom (anywhere; right-click disarms, double-click still selects)
@@ -5283,6 +5292,24 @@ async function run(){
       if(t>0 && t<bestT){ bestT=t; best=i; } }
     return best;
   };
+  // Pick the spawned MOLECULE under the cursor → its gMolecules entry (or null). Tests every molecule
+  // atom's vdW sphere with a generous radius so the (tiny) molecules are easy to click.
+  const pickMolecule = () => {
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
+    const ox0=ray.origin.x, oy0=ray.origin.y, oz0=ray.origin.z, dx=ray.direction.x, dy=ray.direction.y, dz=ray.direction.z;
+    let best=null, bestT=Infinity;
+    for(let i=0;i<spawned.length;i++){ const a=spawned[i]; if(!a.molRef) continue;
+      const el=ELEM[a.sym]||ELEM.FB, r=el.vr*FILL_SCALE*1.8;
+      const ox=ox0-a.x, oy=oy0-a.y, oz=oz0-a.z;
+      const b=ox*dx+oy*dy+oz*dz, c=ox*ox+oy*oy+oz*oz-r*r, disc=b*b-c;
+      if(disc<0) continue; let t=-b-Math.sqrt(disc); if(t<0) t=-b+Math.sqrt(disc);
+      if(t>0 && t<bestT){ bestT=t; best=a.molRef; } }
+    return best;
+  };
+  // Add / toggle a spawned molecule into the selection (plain tap replaces, Shift-tap toggles).
+  const selectMolecule = (mol, add) => { if(!add){ gSel.clear(); gSelMol.clear(); }   // a fresh molecule pick drops the protein selection too
+    if(gSelMol.has(mol)) gSelMol.delete(mol); else gSelMol.add(mol);
+    updateSelectionUI(); };
   let dragAtom = -1;   // index of the spawned atom being left-dragged (or -1)
   // Move a dragged spawned atom to where the cursor ray meets the z-plane.
   const dragSpawnedTo = i => {
@@ -5411,7 +5438,7 @@ async function run(){
     gMolecules.push(mol);
     rebuildSpawn(); return true;
   };
-  const removeMolecule = m => { for(const r of m.refs){ const i=spawned.indexOf(r); if(i>=0) spawned.splice(i,1); } const j=gMolecules.indexOf(m); if(j>=0) gMolecules.splice(j,1); };
+  const removeMolecule = m => { gSelMol.delete(m); for(const r of m.refs){ const i=spawned.indexOf(r); if(i>=0) spawned.splice(i,1); } const j=gMolecules.indexOf(m); if(j>=0) gMolecules.splice(j,1); };
   // Per-frame: drift + tumble + wall-bounce within the scene bounds; a water molecule splits at an OEC site.
   { const _oc={x:0,y:0,z:0}; scene.onBeforeRenderObservable.add(() => {
     if(!gMolecules.length) return;
@@ -6297,11 +6324,9 @@ void main(void){
     else if(k === 'r' || k === 'R'){ resetView(); }                                     // R → default starting view
     else if(k === 'h' || k === 'H'){ document.documentElement.classList.toggle('ui-hidden'); }   // H → hide/show all UI
     else if(k === 'f' || k === 'F'){ gFocusDim = true; }                                 // F held → spotlight the selection
-    else if(k === 'm' || k === 'M'){   // M → the SELECTED spawned molecule starts drifting (random heading + spin)
-      const m = (selAtom && selAtom.spawn && selAtom.si >= 0 && spawned[selAtom.si]) ? spawned[selAtom.si].molRef : null;
-      if(m){ const sp = 85; m.vx = rnd()*sp; m.vy = rnd()*sp; m.av = rnd()*0.7; }
-    }
-    else if(k === 's' || k === 'S'){ for(const m of gMolecules){ m.vx = 0; m.vy = 0; m.av = 0; } }   // S → every spawned molecule stops
+    else if(k === 'm' || k === 'M'){ const sp = 85;   // M → every SELECTED molecule starts drifting (random heading + spin)
+      for(const m of gSelMol){ m.vx = rnd()*sp; m.vy = rnd()*sp; m.av = rnd()*0.7; } }
+    else if(k === 's' || k === 'S'){ for(const m of gSelMol){ m.vx = 0; m.vy = 0; m.av = 0; } }   // S → all selected molecules stop
   });
   window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false; });
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
