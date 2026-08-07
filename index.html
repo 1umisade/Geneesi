@@ -2135,6 +2135,7 @@ async function run(){
   const hideTipsSoon = () => { if(!tips) return; clearTimeout(hideTimer); hideTimer = setTimeout(() => tips.classList.remove('show'), 2000); };
   let dragging = false;   // suppress hover-picking while rotating (keeps the drag smooth)
   let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
+  let gCamFollow = false;  // true only after a DOUBLE-CLICK centres the camera on the RTS selection → the follow tracks it (a plain single-click / box select does NOT follow); cleared by any new click or pan
   let dnX = 0, dnY = 0;   // drag-start pointer pos (for the tap-vs-drag test)
   let panning = false, panDepth = 1, modelDrag = -1, modelDragDepth = 1, rotating = false;   // pan state · which molecule a left-drag is moving (+its depth) · middle-drag rotate
   let joyPan = false, joyOX = 0, joyOY = 0;   // BOTH-buttons directional pan · press-point (screen px) the joystick offset is measured from
@@ -2474,7 +2475,7 @@ async function run(){
   // AND panning freely around it — see the CLAUDE.md camera invariant. Runs after the glide above.
   let gFollowLast = null, gFollowSig = '';
   scene.onBeforeRenderObservable.add(() => {
-    if(!gSel.size){ gFollowLast = null; gFollowSig = ''; return; }
+    if(!gCamFollow || !gSel.size){ gFollowLast = null; gFollowSig = ''; return; }   // follow ONLY a double-click-centred selection
     let cx=0, cy=0, cz=0;
     for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
     const n=gSel.size, ccx=cx/n, ccy=cy/n, ccz=cz/n;
@@ -2526,7 +2527,7 @@ async function run(){
     }
     if(!ex && !ey){ setPanCursor(false); return; }
     setPanCursor(true, edgeMX, edgeMY, ex, ey);   // arrow.png points in the pan direction
-    orbitLocked = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
+    orbitLocked = false; gCamFollow = false;   // edge-scrolling breaks any follow-lock, same as a manual pan
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
     const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
@@ -2541,7 +2542,7 @@ async function run(){
     oy = Math.abs(oy) > DZ ? oy - Math.sign(oy)*DZ : 0;
     if(!ox && !oy){ setPanCursor(false); return; }
     const ex = Math.max(-1.6, Math.min(1.6, ox/REF)), ey = Math.max(-1.6, Math.min(1.6, -oy/REF));   // screen-down = pan down
-    orbitLocked = false;
+    orbitLocked = false; gCamFollow = false;
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
     const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
@@ -2557,7 +2558,7 @@ async function run(){
     if(arrowKeys.ArrowLeft) ex-=1; if(arrowKeys.ArrowRight) ex+=1;
     if(arrowKeys.ArrowUp) ey+=1; if(arrowKeys.ArrowDown) ey-=1;
     if(!ex && !ey) return;
-    orbitLocked = false;
+    orbitLocked = false; gCamFollow = false;
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
     const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
@@ -2579,7 +2580,7 @@ async function run(){
         setCursor(GRABBING_CUR);
         return;
       }
-      if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY;   // remember the down point for the tap-vs-drag test
+      if(e.button === 0){ dnX = scene.pointerX; dnY = scene.pointerY; gCamFollow = false;   // a new click drops the follow (only a double-click re-arms it, below)
         if(!spawnEl && !gArmedItem){ const pi = pickSpawned(); if(pi >= 0){ dragAtom = pi; cam.detachControl(); dragging = false; return; } }   // grab a spawned atom → drag it
         if(!spawnEl && !gArmedItem){   // begin an RTS box / click-select (decided on release by the drag distance)
           rtsDownModel = pickModelAtCursor(); rtsBoxing = true; rtsBoxMoved = false;
@@ -2655,10 +2656,10 @@ async function run(){
     const mag = slow ? Math.max(fitRadius * 0.004, Math.abs(cam.radius) * 0.008)
                      : Math.max(fitRadius * 0.03,  Math.abs(cam.radius) * 0.06);
     gZoomEase = slow ? 0.05 : 0.16;   // slow mode bleeds out over many more frames
-    gZoomVel += Math.sign(e.deltaY) * mag * Math.max(0.2, gSpeed);
+    gZoomVel += Math.sign(e.deltaY) * mag;   // zoom speed is independent of the speed slider
     showTips(); hideTipsSoon();
   }, {passive:false});
-  const btnZoom = dir => { gZoomP = null; gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08) * Math.max(0.2, gSpeed); showTips(); hideTipsSoon(); };
+  const btnZoom = dir => { gZoomP = null; gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08); showTips(); hideTipsSoon(); };
   document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
   document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
   // Smooth (inertial) zoom: bleed the accumulated velocity out over several frames, each step routed
@@ -4093,12 +4094,10 @@ async function run(){
   };
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
-  // Speed slider (bottom-left) → scales the wiggle AND all camera movement (rotate/pan/zoom).
-  { const baseAng = cam.angularSensibilityX, basePan = cam.panningSensibility;
-    const sEl = document.getElementById('speed'), sVal = document.getElementById('speedval');
-    const apply = () => { gSpeed = (+sEl.value)/10; sVal.textContent = gSpeed.toFixed(1)+'×';
-      const cs = Math.max(0.2, gSpeed);
-      cam.angularSensibilityX = cam.angularSensibilityY = baseAng/cs; };   // speed slider scales ROTATION only — panning stays constant (its speed is depth-based in panBy)
+  // Speed slider (bottom-left) → drives ONLY molecule movement + boil/wiggle speed (both via gSpeed).
+  // Camera rotate / pan / zoom stay constant (independent of the slider).
+  { const sEl = document.getElementById('speed'), sVal = document.getElementById('speedval');
+    const apply = () => { gSpeed = (+sEl.value)/10; sVal.textContent = gSpeed.toFixed(1)+'×'; };
     sEl.addEventListener('input', apply); apply();
   }
 
@@ -6174,9 +6173,9 @@ async function run(){
     if(a && BABYLON.Vector3.Distance(cam.position, a.world || a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15, to where they RENDER) — farther, fall through
     const gi = pickEtcGroup();
     if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
-    if(gSel.size){   // nothing pickable under the cursor → centre the camera on the RTS selection (keeps rotation free)
+    if(gSel.size){   // double-click centres the camera on the RTS selection AND arms the follow (keeps rotation free)
       let cx=0,cy=0,cz=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
-      const n=gSel.size; focusCameraOn(new BABYLON.Vector3(cx/n, cy/n, cz/n)); return;
+      const n=gSel.size; focusCameraOn(new BABYLON.Vector3(cx/n, cy/n, cz/n)); gCamFollow = true; return;
     }
     // Whole-complex selection (→ move/rotate gizmo) is a DEV-mode tool only.
     if(gDev){ const mid = pickModelAtCursor();
@@ -6324,9 +6323,11 @@ void main(void){
     else if(k === 'r' || k === 'R'){ resetView(); }                                     // R → default starting view
     else if(k === 'h' || k === 'H'){ document.documentElement.classList.toggle('ui-hidden'); }   // H → hide/show all UI
     else if(k === 'f' || k === 'F'){ gFocusDim = true; }                                 // F held → spotlight the selection
-    else if(k === 'm' || k === 'M'){ const sp = 85;   // M → every SELECTED molecule starts drifting (random heading + spin)
-      for(const m of gSelMol){ m.vx = rnd()*sp; m.vy = rnd()*sp; m.av = rnd()*0.7; } }
-    else if(k === 's' || k === 'S'){ for(const m of gSelMol){ m.vx = 0; m.vy = 0; m.av = 0; } }   // S → all selected molecules stop
+    else if(k === 'm' || k === 'M'){ const sp = 85;   // M → (re)start each selected molecule along its STORED heading (random the very first time)
+      for(const m of gSelMol){ if(m.svx === undefined){ m.svx = rnd()*sp; m.svy = rnd()*sp; m.sav = rnd()*0.7; }
+        m.vx = m.svx; m.vy = m.svy; m.av = m.sav; } }
+    else if(k === 's' || k === 'S'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
+        m.vx = 0; m.vy = 0; m.av = 0; } }   // S → stop, but keep the stored heading so M resumes the SAME direction
   });
   window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false; });
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
