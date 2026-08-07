@@ -643,6 +643,9 @@ uniform float hlBright;    // its brightness multiplier (1.0 = normal, 1.25 = ho
 #endif
 uniform float selModel;    // index of the SELECTED complex (−1 = none) → its atoms get a sage rim
 uniform vec3 selCol;       // that rim's colour (sage)
+uniform vec3 dimCenterV;   // F-spotlight: view-space centre of the current selection
+uniform float dimR;        // spotlight radius (world units) → beyond it, fragments darken
+uniform float dimAmt;      // 0 = off, up to 1 = full darken of everything outside the spotlight
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -704,6 +707,8 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
+  if(dimAmt > 0.001){ float dd = distance(vCenterV, dimCenterV);   // F-spotlight - darken everything outside the selection
+    col *= 1.0 - dimAmt * 0.82 * smoothstep(dimR, dimR * 2.4, dd); }
 #ifdef ETCHL
   bool hl = abs(vGid - hlGroup) < 0.5;                        // hovered / flashing cofactor group
   if(hl) col *= hlBright;                                     // → brighter FILL (the dark outline is applied AFTER, so it stays dark)
@@ -1035,6 +1040,9 @@ varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 uniform float selModel;   // index of the SELECTED complex (-1 = none)
 uniform vec3 selCol;      // sage rim colour
+uniform vec3 dimCenterV;  // F-spotlight - view-space centre of the current selection
+uniform float dimR;       // spotlight radius (world units)
+uniform float dimAmt;     // 0 = off - up to 1 = full darken outside the spotlight
 varying float vMid;       // this instance's model index
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
@@ -1114,6 +1122,8 @@ void main(void){
 #else
   if(drawElec > 0.5) electrons(c, nElec, efac);
 #endif
+  if(dimAmt > 0.001){ float dd = distance(vViewPos, dimCenterV);   // F-spotlight - darken lobes outside the selection
+    c *= 1.0 - dimAmt * 0.82 * smoothstep(dimR, dimR * 2.4, dd); }
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), alpha);   // alpha carries the reveal and cross-cut fades
 }`;
@@ -1282,6 +1292,9 @@ varying float vMemAnc;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 uniform float selModel;   // index of the SELECTED complex (-1 = none)
 uniform vec3 selCol;      // sage rim colour
+uniform vec3 dimCenterV;  // F-spotlight - view-space centre of the current selection
+uniform float dimR;       // spotlight radius (world units)
+uniform float dimAmt;     // 0 = off - up to 1 = full darken outside the spotlight
 varying float vMid;       // this instance's model index
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
@@ -1368,6 +1381,8 @@ void main(void){
 #else
   if(drawElec > 0.5) electrons(c, ne, efac);
 #endif
+  if(dimAmt > 0.001){ float dd = distance(vViewPos, dimCenterV);   // F-spotlight - darken bonding lobes outside the selection
+    c *= 1.0 - dimAmt * 0.82 * smoothstep(dimR, dimR * 2.4, dd); }
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), alpha);   // alpha carries the reveal and cross-cut fades
 }`;
@@ -2111,6 +2126,9 @@ async function run(){
   let gFocusRadiusObs = null;   // while a focus swivel runs, pins cam.radius so the centering never changes zoom
   let gFocusDim = false;        // F held → darken everything except the current selection
   let gFocusDimAmt = 0;         // eased 0→1 so the darken fades in/out smoothly
+  const gDimCenterV = new BABYLON.Vector3();   // selection centre in VIEW space (recomputed each frame) → the darken shaders read it
+  const gDimCenterW = new BABYLON.Vector3();   // …and in world space (before the view transform)
+  let gDimRadius = 20;          // spotlight radius (world units) around the selection
   let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
   const zoomBy = delta => {                 // delta < 0 = closer
@@ -3021,7 +3039,7 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','dimCenterV','dimR','dimAmt'],
     samplers: ['cofDepth'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close (COFHIDE reveal-discard removed: it also ate the cofactors' OWN front orbital lobes, and the cofactor spheres are always visible now anyway)
   });
@@ -3035,11 +3053,12 @@ async function run(){
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
     eff.setFloat('cofHideOn', gRevealOn); eff.setVector2('cofTexel', gCofTexel); if(cofDepthRT) eff.setTexture('cofDepth', cofDepthRT);   // drop orbitals in front of a revealed cofactor
+    eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt);   // F-spotlight darken
   });
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','dimCenterV','dimR','dimAmt'],
       defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
@@ -3050,6 +3069,7 @@ async function run(){
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+      eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt);   // F-spotlight darken
     });
     return realAlpha(mat);
   };
@@ -3106,7 +3126,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
@@ -3116,10 +3136,10 @@ async function run(){
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → vdW goes 50% transparent where its atom reveals orbitals
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); eff.setFloat('boil', gBoil);
-    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindCof(eff); });
+    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
@@ -3128,7 +3148,7 @@ async function run(){
   vdwMatStatic.onBindObservable.add(()=>{ const eff=vdwMatStatic.getEffect(); if(!eff)return;
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
-    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindCof(eff); });
+    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt); bindCof(eff); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -3137,7 +3157,7 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','dimCenterV','dimR','dimAmt'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define DEPTHSHADE','#define ETCTHIN'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
@@ -3148,7 +3168,7 @@ async function run(){
       eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('bubbleR', gBubbleR); eff.setFloat('coneCos', gConeCos);   // mode 1 → cofactor spheres go glass so their orbitals (rendered by the cells beneath) show through
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',1e8); eff.setFloat('fogEnd',1e9);   // no fog fade → cofactors stay bright wherever they are
       eff.setFloat('hlGroup', gHlGroup); eff.setFloat('hlBright', gHlBright);   // brighten the hovered / flashing cofactor group
-      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); });
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter); eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); eff.setVector3('dimCenterV', gDimCenterV); eff.setFloat('dimR', gDimRadius); eff.setFloat('dimAmt', gFocusDimAmt); });
     etcOverlay = BABYLON.MeshBuilder.CreatePlane('etcOverlay',{size:2},scene);
     etcOverlay.material=etcMat; etcOverlay.isPickable=false; etcOverlay.alwaysSelectAsActiveMesh=true;
     etcOverlay.thinInstanceSetBuffer('matrix', new Float32Array(etcM),16,true);
@@ -6025,6 +6045,21 @@ void main(void){
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
       + rows.map(([k,v]) => '<span style="color:var(--brown);font-weight:bold">'+k+'</span> — '+v).join('<br>');
     document.body.appendChild(sc); gShortcuts = sc; }
+  // F-spotlight: ease the darken and recompute the selection centre (view space) each frame.
+  scene.onBeforeRenderObservable.add(() => {
+    gFocusDimAmt += ((gFocusDim ? 1 : 0) - gFocusDimAmt) * 0.16;
+    if(gFocusDimAmt < 0.004){ gFocusDimAmt = 0; return; }
+    let have = true;   // spotlight target: selected atom → cofactor → RTS complex(es)
+    if(selAtom && selCenter.x < 1e5){ gDimCenterW.copyFrom(selCenter); gDimRadius = 7; }
+    else if(etcSel >= 0 && orbitCenter.x < 1e5){ gDimCenterW.copyFrom(orbitCenter); gDimRadius = Math.max(((etcGroups[etcSel] && etcGroups[etcSel].r) || 8) * 1.8, 10); }
+    else if(gSel.size){ let cx=0,cy=0,cz=0,mr=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
+      const n=gSel.size; gDimCenterW.set(cx/n, cy/n, cz/n);
+      for(const mi of gSel){ mr=Math.max(mr, 0.5*Math.hypot(mInfo[mi].x1-mInfo[mi].x0, mInfo[mi].y1-mInfo[mi].y0, mInfo[mi].z1-mInfo[mi].z0)); }
+      gDimRadius = Math.max(mr, 24); }
+    else have = false;
+    if(!have){ gFocusDimAmt = 0; return; }   // nothing selected → nothing to spotlight
+    BABYLON.Vector3.TransformCoordinatesToRef(gDimCenterW, cam.getViewMatrix(), gDimCenterV);
+  });
   /* ── WebXR / VR ─────────────────────────────────────────────────────────
      Enter VR with our palette VR button. Quest-3 control scheme (free flight,
      no floor anchor — reference space is 'local'):
