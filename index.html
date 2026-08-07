@@ -650,6 +650,7 @@ uniform vec3 focusCenterV; // point-selection centre (view space)
 uniform float focusR;      // point-selection radius
 uniform float focusSet[24];// per-model keep-colour flags (mode 2)
 uniform float focusGroup;  // cofactor group to keep coloured (mode 3, ETCHL overlay only)
+uniform float focusDark;   // darken the grayscale (non-selection) environment: 0 = plain grey, 1 = to black
 varying vec2 vUV;
 varying vec3 vCenterV;
 varying vec3 vColor;
@@ -726,7 +727,7 @@ void main(void){
     } else if(focusMode > 1.5){ fsel = (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5); }   // mode 2 = model set
     else if(focusMode > 0.5){ fsel = distance(vCenterV, focusCenterV) < focusR; }             // mode 1 = point
     else fsel = false;                                                                        // mode 0 = grey all
-    if(!fsel){ float fg = dot(col, vec3(0.299, 0.587, 0.114)); col = mix(col, vec3(fg), focusAmt); } }
+    if(!fsel){ float fg = dot(col, vec3(0.299, 0.587, 0.114)); col = mix(col, vec3(fg) * (1.0 - focusDark), focusAmt); } }
 #ifdef ETCHL
   bool hl = abs(vGid - hlGroup) < 0.5;                        // hovered / flashing cofactor group
   if(hl) col *= hlBright;                                     // → brighter FILL (the dark outline is applied AFTER, so it stays dark)
@@ -1063,6 +1064,7 @@ uniform float focusMode;  // 0 = grayscale all, 1 = keep near focusCenterV, 2 = 
 uniform vec3 focusCenterV;
 uniform float focusR;
 uniform float focusSet[24];
+uniform float focusDark;  // darken the grayscale (non-selection) environment
 varying float vMid;       // this instance's model index
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
@@ -1145,7 +1147,7 @@ void main(void){
   if(focusAmt > 0.001){   // F: grayscale unless this lobe belongs to the selection → exact silhouette
     bool fsel = (focusMode > 1.5) ? (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5)
               : (focusMode > 0.5) ? (distance(vViewPos, focusCenterV) < focusR) : false;
-    if(!fsel){ float fg = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(fg), focusAmt); } }
+    if(!fsel){ float fg = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(fg) * (1.0 - focusDark), focusAmt); } }
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), alpha);   // alpha carries the reveal and cross-cut fades
 }`;
@@ -1319,6 +1321,7 @@ uniform float focusMode;  // 0 = grayscale all, 1 = keep near focusCenterV, 2 = 
 uniform vec3 focusCenterV;
 uniform float focusR;
 uniform float focusSet[24];
+uniform float focusDark;  // darken the grayscale (non-selection) environment
 varying float vMid;       // this instance's model index
 // Electron glow: a small breathing point of light that slowly orbits its camera-facing spot,
 // with flickering electric filaments crackling around it. nElec = 1 or 2.
@@ -1408,7 +1411,7 @@ void main(void){
   if(focusAmt > 0.001){   // F: grayscale unless this lobe belongs to the selection → exact silhouette
     bool fsel = (focusMode > 1.5) ? (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5)
               : (focusMode > 0.5) ? (distance(vViewPos, focusCenterV) < focusR) : false;
-    if(!fsel){ float fg = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(fg), focusAmt); } }
+    if(!fsel){ float fg = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(fg) * (1.0 - focusDark), focusAmt); } }
   float fog = clamp((fogEnd - vViewPos.z) / (fogEnd - fogStart), 0.0, 1.0);
   gl_FragColor = vec4(mix(fogColor, c, fog), alpha);   // alpha carries the reveal and cross-cut fades
 }`;
@@ -1919,8 +1922,9 @@ BABYLON.Effect.ShadersStore['bgFragmentShader'] = `
 precision highp float;
 uniform vec3 cBg;   // flat background colour
 uniform float focusAmt;   // F: fade the background to grayscale too
+uniform float focusDark;  // …and darken it with the environment
 void main(void){ vec3 c = cBg;
-  if(focusAmt > 0.001){ float g = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(g), focusAmt); }
+  if(focusAmt > 0.001){ float g = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(g) * (1.0 - focusDark), focusAmt); }
   gl_FragColor = vec4(c, 1.0); }`;
 
 /* Global brightness post-process (dev "lighting" slider). Multiplies the finished frame — the atom
@@ -2105,9 +2109,9 @@ async function run(){
   // Wobbly light-green gradient background: a full-screen quad at the far plane (depth-written at
   // z≈1, LESS test) so every atom draws over it no matter the render order. Drifts slowly via uT.
   const BG_GREEN = new BABYLON.Color3(0.055, 0.135, 0.082);   // static dark green
-  const bgMat = new BABYLON.ShaderMaterial('bgMat', scene, 'bg', { attributes:['position'], uniforms:['cBg','focusAmt'] });
+  const bgMat = new BABYLON.ShaderMaterial('bgMat', scene, 'bg', { attributes:['position'], uniforms:['cBg','focusAmt','focusDark'] });
   bgMat.backFaceCulling = false;
-  bgMat.onBindObservable.add(()=>{ const eff=bgMat.getEffect(); if(!eff) return; eff.setColor3('cBg', BG_GREEN); eff.setFloat('focusAmt', gFocusDimAmt); });
+  bgMat.onBindObservable.add(()=>{ const eff=bgMat.getEffect(); if(!eff) return; eff.setColor3('cBg', BG_GREEN); eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusDark', gFocusDark); });
   const bgQuad = BABYLON.MeshBuilder.CreatePlane('bgQuad', {size:2}, scene);
   bgQuad.material = bgMat; bgQuad.isPickable = false; bgQuad.alwaysSelectAsActiveMesh = true;
   bgQuad.renderingGroupId = 0; bgQuad.infiniteDistance = true;   // stays behind everything
@@ -2161,7 +2165,8 @@ async function run(){
   const gFocusCenterV = new BABYLON.Vector3(); // …the same, transformed to VIEW space each frame (the shaders test against this)
   let gDimRadius = 20;          // point-selection radius (world units)
   const gFocusSet = new Float32Array(24);      // mode 2: 1 = this model index is in the F selection (the shaders keep its atoms coloured)
-  const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); };
+  let gFocusDark = 0.0;         // F: how much the grayscale (non-selection) environment darkens (0 = just grey, 1 = to black). Dev slider.
+  const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); eff.setFloat('focusDark', gFocusDark); };
   let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
   const zoomBy = delta => {                 // delta < 0 = closer
@@ -2545,9 +2550,9 @@ async function run(){
         } else { gSel.clear(); updateSelectionUI(); }                              // click on empty → deselect (move order is on RIGHT-click)
         return;
       }
-      if(e.button === 0 && spawnEl){   // armed element + tap on empty space → drop an atom
+      if(e.button === 0 && spawnEl){   // armed element + tap → drop an atom (anywhere; right-click disarms, double-click still selects)
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
-        if(mdx*mdx + mdy*mdy < 9 && !pickAtom()) spawnAtPointer();
+        if(mdx*mdx + mdy*mdy < 9) spawnAtPointer();
       }
       if(e.button === 0 && gArmedItem){   // armed spawn-selector item + tap → drop it (H₂O, Fotoni, …)
         const mdx = scene.pointerX - dnX, mdy = scene.pointerY - dnY;
@@ -3088,7 +3093,7 @@ async function run(){
       uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos'].concat(movable ? ['macroXform','macroCenter','modelXform','modelCol','colorMode'] : [])
     };
     if(movable){ opts.defines = ['#define MACROMOVE','#define MODELMOVE'].concat(nucleon ? ['#define NUCLEON'] : []);   // follows the PSII gizmo AND its own per-model drag; NUCLEON keeps protons red / neutrons grey (never model-tinted)
-      opts.uniforms = opts.uniforms.concat(['selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup']); }
+      opts.uniforms = opts.uniforms.concat(['selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark']); }
     else opts.uniforms = opts.uniforms.concat(['selModel','selCol']);
     const mat = new BABYLON.ShaderMaterial(name, scene, 'imp', opts);
     mat.setFloat('radius', radius);
@@ -3142,7 +3147,7 @@ async function run(){
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR); });   // mode 2 → nuclei only inside the close cone (outside atoms show none)
   const orbMatG = new BABYLON.ShaderMaterial('orbG', scene, 'orb', {
     attributes: ['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
-    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
+    uniforms: ['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
     samplers: ['cofDepth'],
     defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE','#define COFHIDE']   // drag offset + per-model move; electrons only up close; COFHIDE → an atom whose vdW is hidden by the cofactor cutaway also drops its orbitals (margin spares the cofactor's own lobes)
   });
@@ -3161,7 +3166,7 @@ async function run(){
   const bondMatG = (nm) => {   // element colour per instance (bcol); always opaque
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'bond', {
       attributes: ['position','normal','taper','ocen','bcol','oid','modelId','world0','world1','world2','world3'],
-      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
+      uniforms: ['view','projection','bubbleR','opacity','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','elecR','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
       defines: ['#define MACROMOVE','#define ELECGATE','#define MODELMOVE']   // drag offset + per-model move; electrons only up close
     });
     mat.setFloat('bubbleR', 1e9); mat.setFloat('nElec', 2); mat.setFloat('coneCos', -1.0); mat.setFloat('drawElec', 1); mat.backFaceCulling = true;   // always fully revealed; electrons inline
@@ -3228,7 +3233,7 @@ async function run(){
   // sphere per atom, per-instance radius via IMPRAD. Movable (per-model drag + PSII gizmo).
   const vdwMat = new BABYLON.ShaderMaterial('vdwLOD', scene, 'imp', {
     attributes:['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define COFHIDE','#define DEPTHSHADE'] });
   vdwMat.setFloat('radius',1.0); vdwMat.setFloat('isShell',0); vdwMat.setFloat('shellMin',0); vdwMat.setFloat('bubbleR',1e9);
@@ -3241,7 +3246,7 @@ async function run(){
     eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindFocus(eff); bindCof(eff); });
   const vdwMatStatic = new BABYLON.ShaderMaterial('vdwLODs', scene, 'imp', {
     attributes:['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','memCut','selModel','cofHideOn','cofTexel','cofAlpha','cofOutAlpha','cofOutCol','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
     samplers:['cofDepth'],
     defines:['#define IMPRAD','#define MEMFADE','#define COFHIDE','#define DEPTHSHADE'] });   // MEMFADE = membrane cross-cut fade
   vdwMatStatic.setFloat('radius',1.0); vdwMatStatic.setFloat('isShell',0); vdwMatStatic.setFloat('shellMin',0); vdwMatStatic.setFloat('bubbleR',1e9);
@@ -3259,7 +3264,7 @@ async function run(){
   if(etcM.length){
     const etcMat = new BABYLON.ShaderMaterial('etcTop', scene, 'imp', {
       attributes:['position','instanceColor','instR','modelId','groupId','world0','world1','world2','world3'],
-      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup'],
+      uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos','macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','hlGroup','hlBright','focalD','depthK','depthLo','startOff','spread','focusAmt','focusMode','focusCenterV','focusR','focusSet','focusGroup','focusDark'],
       defines:['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define ETCHL','#define DEPTHSHADE','#define ETCTHIN'] });
     etcMat.setFloat('radius',1.0); etcMat.setFloat('selModel', -1); etcMat.setFloat('isShell',0); etcMat.setFloat('shellMin',0); etcMat.setFloat('bubbleR',1e9);
     etcMat.setFloat('protonOutline',0); etcMat.setFloat('depthBias',0); etcMat.setFloat('coneCos',-1.0);
@@ -3314,7 +3319,10 @@ async function run(){
       gReactSites = { count: etcGroups.length, siteWorld, radiusOf: gi => etcGroups[gi].r * gCollScale, typeOf: gi => etcGroups[gi].type };
       { const cv = BABYLON.MeshBuilder.CreateSphere('collViz', {segments:10, diameter:2}, scene);
         const cm = new BABYLON.StandardMaterial('collVizMat', scene); cm.wireframe=true; cm.emissiveColor=new BABYLON.Color3(1,0.55,0.2); cm.disableLighting=true; cm.alpha=0.6;
-        cv.material=cm; cv.isPickable=false; cv.renderingGroupId=1; cv.alwaysSelectAsActiveMesh=true; cv.setEnabled(false);
+        cv.material=cm; cv.isPickable=false; cv.renderingGroupId=3; cv.alwaysSelectAsActiveMesh=true; cv.setEnabled(false);   // group 3 + depth-ALWAYS → always drawn on top
+        cm.disableDepthWrite=true;
+        cv.onBeforeRenderObservable.add(()=>engine.setDepthFunction(BABYLON.Constants.ALWAYS));
+        cv.onAfterRenderObservable.add(()=>engine.setDepthFunction(BABYLON.Constants.LEQUAL));
         const buf = new Float32Array(etcGroups.length*16);
         gCollViz = cv;
         gCollVizUpdate = () => { for(let gi=0; gi<etcGroups.length; gi++){ siteWorld(gi, _sw); const r=etcGroups[gi].r*gCollScale, o=gi*16;
@@ -4814,8 +4822,13 @@ async function run(){
   const rfSld = document.createElement('input'); rfSld.type='range'; rfSld.min='0'; rfSld.max='100'; rfSld.value='95'; rfSld.style.cssText='width:100%;cursor:pointer;';
   const rfValEl = rfRow.querySelector('#dev-rf-val');
   rfSld.oninput = () => { gRevealFade = +rfSld.value/100; rfValEl.textContent = gRevealFade.toFixed(2); };
+  // F-focus: how dark the grayscale (non-selection) environment goes — 0 = plain grey … 1 = to black.
+  const fdRow = document.createElement('div'); fdRow.innerHTML = 'F-taustan tummuus: <b id="dev-fd-val">0.00</b>';
+  const fdSld = document.createElement('input'); fdSld.type='range'; fdSld.min='0'; fdSld.max='100'; fdSld.value='0'; fdSld.style.cssText='width:100%;cursor:pointer;';
+  const fdValEl = fdRow.querySelector('#dev-fd-val');
+  fdSld.oninput = () => { gFocusDark = +fdSld.value/100; fdValEl.textContent = gFocusDark.toFixed(2); };
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
-  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld];
+  const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld, fdSld];
   const devDefaults = devSliders.map(s => s.value);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
@@ -4826,7 +4839,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
