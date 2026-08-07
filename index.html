@@ -2215,6 +2215,31 @@ async function run(){
     'STN7':['ATP','LHCII'],
     'PPH1':['Fosfo-LHCII'],
     'Zeaxanthin epoxidase':['Zeaksantiini','NADPH + O₂'] };
+  // Genes that encode each protein (chloroplast + nuclear subunits) — shown in the info panel.
+  const PROTEIN_GENES = {
+    'Photosystem II':['psbA','psbB','psbC','psbD','psbE','psbF','psbI','psbK','psbL','psbO','psbP','psbQ'],
+    'Cytochrome b6f':['petA','petB','petC','petD','petG','petL','petN'],
+    'Photosystem I':['psaA','psaB','psaC','psaD','psaE','psaF','psaI','psaJ','psaK','psaL'],
+    'NDH-1':['ndhA','ndhB','ndhC','ndhD','ndhE','ndhF','ndhG','ndhH','ndhI','ndhJ','ndhK'],
+    'ATP synthase':['atpA','atpB','atpC','atpD','atpE','atpF','atpG','atpH','atpI'],
+    'Plastocyanin':['petE'], 'Violaxanthin de-epoxidase':['VDE1'],
+    'Ferredoxin':['petF','FdC1'], 'FNR':['petH','FNR1','FNR2'],
+    'RuBisCO':['rbcL','rbcS'], 'PGR5':['PGR5'], 'PGRL1':['PGRL1A','PGRL1B'],
+    'STN7':['STN7'], 'PPH1':['PPH1','TAP38'], 'Zeaxanthin epoxidase':['ZEP','ABA1'] };
+  // The protein's bound cofactors, as ETC type indices (→ ETC_NAMES / ETC_COL).
+  const PROTEIN_COF = {
+    'Photosystem II':[7,2,3,1,9,8,4], 'Cytochrome b6f':[4,5,7], 'Photosystem I':[7,5,8,3],
+    'NDH-1':[5], 'Plastocyanin':[6], 'Ferredoxin':[5] };
+  const COF_CID_IMG = { 7:156620228, 8:5280489, 9:6057, 10:5884 };   // chlorophyll a, β-carotene, L-tyrosine, NADPH — the rest fall back to a colour swatch
+  const SUBSTRATE_CID = { 'Vesi (H₂O)':962, 'CO₂':280, 'ATP':5957, 'NADP⁺':5886, 'NADPH + O₂':5884, 'Askorbaatti':54670067 };   // PubChem CIDs of substrates with a reliable structure image
+  const cofColCss = t => { const c = (typeof ETC_COL!=='undefined' && ETC_COL[t]) || [0.7,0.7,0.7]; return 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')'; };
+  // A small labelled "chip": PubChem structure image when a CID is known, else a colour swatch.
+  const molChip = (label, cid, swatch) => {
+    const inner = cid
+      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+cid+'/PNG?image_size=120x120" alt="" style="width:100%;height:100%;object-fit:contain;background:#fff;border-radius:6px;border:1px solid var(--brown)" onerror="this.style.visibility=\'hidden\'">'
+      : '<span style="display:block;width:100%;height:100%;border-radius:6px;border:1px solid var(--brown);background:'+(swatch||'var(--paper2)')+'"></span>';
+    return '<div style="display:flex;flex-direction:column;align-items:center;gap:2px;width:60px"><div style="width:44px;height:44px;flex:0 0 auto">'+inner+'</div>'
+      + '<span style="font-size:9px;text-align:center;line-height:1.15">'+label+'</span></div>'; };
   // A 2D scatter of the model's atoms (projected X-Y, z-shaded in the model colour) → a recognisable
   // image of the protein's shape, drawn straight from its atom coordinates.
   const drawProteinImage = (canvas, mi) => {
@@ -2242,8 +2267,15 @@ async function run(){
     const img=document.getElementById('center-protein-img'); if(img) drawProteinImage(img, mi);
     const nm=document.getElementById('center-protein-name'); if(nm) nm.textContent=md.name;
     const ds=document.getElementById('center-protein-desc'); if(ds) ds.textContent=PROTEIN_DESC[md.name]||'';
+    const rowCss = 'display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:3px';
+    const cofEl=document.getElementById('center-protein-cof'); if(cofEl){ const cof=PROTEIN_COF[md.name]||[];
+      cofEl.innerHTML = cof.length ? '<b>Kofaktorit:</b><div style="'+rowCss+'">'
+        + cof.map(t => molChip((typeof ETC_NAMES!=='undefined' && ETC_NAMES[t]) || 'Kofaktori', COF_CID_IMG[t], cofColCss(t))).join('') + '</div>' : ''; }
     const su=document.getElementById('center-protein-subs'); if(su){ const subs=PROTEIN_SUBSTRATE[md.name]||[];
-      su.innerHTML = subs.length ? '<b>Substraatit:</b><br>'+subs.map(s=>'• '+s).join('<br>') : ''; }
+      su.innerHTML = subs.length ? '<b>Substraatit:</b><div style="'+rowCss+'">'
+        + subs.map(s => molChip(s, SUBSTRATE_CID[s], null)).join('') + '</div>' : ''; }
+    const ge=document.getElementById('center-protein-genes'); if(ge){ const genes=PROTEIN_GENES[md.name]||[];
+      ge.innerHTML = genes.length ? '<b>Geenit:</b> ' + genes.map(g=>'<span style="font-style:italic">'+g+'</span>').join(', ') : ''; }
     { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; }   // protein card OWNS the centre → hide a leftover atom card
     cp.style.display='flex'; };
   const hideCenterProtein = () => { const cp=document.getElementById('center-protein'); if(cp) cp.style.display='none'; };
@@ -5278,7 +5310,9 @@ async function run(){
       cp.innerHTML = '<canvas id="center-protein-img" width="230" height="170" style="width:100%;max-width:220px;height:auto;flex:0 0 auto"></canvas>'
         + '<div id="center-protein-name" style="font-weight:bold;font-size:15px;text-align:center"></div>'
         + '<div id="center-protein-desc" style="font-size:12.5px;line-height:1.5;text-align:center;width:100%"></div>'
-        + '<div id="center-protein-subs" style="font-size:12px;line-height:1.6;text-align:left;width:100%"></div>';
+        + '<div id="center-protein-cof" style="font-size:12px;width:100%"></div>'
+        + '<div id="center-protein-subs" style="font-size:12px;width:100%"></div>'
+        + '<div id="center-protein-genes" style="font-size:12px;line-height:1.6;width:100%"></div>';
       gInfoRight.appendChild(cp); }
     // zoom readout → top-left corner of the minimap module, beige, shown only in dev mode
     { const zv = document.getElementById('zoomval');
