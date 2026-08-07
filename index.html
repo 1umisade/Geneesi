@@ -2109,6 +2109,9 @@ async function run(){
   let gZoomVel = 0;   // pending zoom (accumulated from wheel/buttons) → applied smoothly over frames
   let gZoomEase = 0.16;   // per-frame bleed of gZoomVel (small → slower, smoother arrival). Middle-held wheel drops it.
   let gFocusRadiusObs = null;   // while a focus swivel runs, pins cam.radius so the centering never changes zoom
+  let gFocusDim = false;        // F held → darken everything except the current selection
+  let gFocusDimAmt = 0;         // eased 0→1 so the darken fades in/out smoothly
+  let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
   const zoomBy = delta => {                 // delta < 0 = closer
     // Ease the zoom down as the camera nears the SELECTED object — an atom, a cofactor, or a whole
@@ -3862,8 +3865,12 @@ async function run(){
       cam.setTarget(new BABYLON.Vector3(wx, wy, t.z)); cam.setPosition(np); });   // one-shot recentre, rotation + zoom unchanged
   }
   // Fixed default view: straight along +Z at the flattened RTS floor plane (models are all at Z=0).
-  cam.setTarget(new BABYLON.Vector3(50, -6, 0));
-  cam.setPosition(new BABYLON.Vector3(50, -6, -1184));   // → alpha/beta/radius recomputed to look from here at the target (radius ≈ 1184)
+  const CAM_DEF_TGT = new BABYLON.Vector3(50, -6, 0), CAM_DEF_POS = new BABYLON.Vector3(50, -6, -1184);
+  const resetView = () => { scene.stopAnimation(cam);   // R → restore the default starting view
+    if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }
+    cam.setTarget(CAM_DEF_TGT.clone()); cam.setPosition(CAM_DEF_POS.clone());
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0; cam.inertialPanningX = cam.inertialPanningY = 0; gZoomVel = 0; };
+  resetView();
   cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
   // Centre a freshly-selected object: a SHORT one-shot target animation (smooth swivel). This would
@@ -4713,6 +4720,7 @@ async function run(){
   // Turning dev mode OFF drops any live complex selection and hides every dev label + the dev panel.
   applyDevMode = () => { devPanel.style.display = gDev ? 'flex' : 'none';
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
+    if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
     if(gCollViz) gCollViz.setEnabled(gDev);                 // wireframe collision spheres
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
@@ -5992,12 +6000,31 @@ void main(void){
       eff.setFloat('aspect', w / h);
     };
   }
+  { const st = document.createElement('style'); st.textContent = 'html.ui-hidden body > *:not(#c){display:none!important}'; document.head.appendChild(st); }
   window.addEventListener('keydown', e => {
-    if(e.key === 'p' || e.key === 'P'){
+    if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;   // don't hijack typing in dev inputs
+    const k = e.key;
+    if(k === 'p' || k === 'P'){
       painterlyOn = !painterlyOn;
       if(painterlyOn) cam.attachPostProcess(painterly); else cam.detachPostProcess(painterly);
     }
+    else if(k === 'r' || k === 'R'){ resetView(); }                                     // R → default starting view
+    else if(k === 'h' || k === 'H'){ document.documentElement.classList.toggle('ui-hidden'); }   // H → hide/show all UI
+    else if(k === 'f' || k === 'F'){ gFocusDim = true; }                                 // F held → spotlight the selection
   });
+  window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false; });
+  // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
+  { const sc = document.createElement('div'); sc.id = 'shortcuts';
+    sc.style.cssText = 'position:fixed;left:16px;bottom:calc(25vh + 22px);z-index:14;display:none;'
+      + 'font-family:"Courier New",monospace;font-size:11.5px;line-height:1.75;color:var(--ink);background:var(--paper);'
+      + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 13px;pointer-events:none;';
+    const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','zoom'],['Keskinappi + rulla','hidas zoom'],
+      ['Nuolinäppäimet','panoroi'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
+      ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
+      ['H','piilota käyttöliittymä'],['P','maalausefekti']];
+    sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
+      + rows.map(([k,v]) => '<span style="color:var(--brown);font-weight:bold">'+k+'</span> — '+v).join('<br>');
+    document.body.appendChild(sc); gShortcuts = sc; }
   /* ── WebXR / VR ─────────────────────────────────────────────────────────
      Enter VR with our palette VR button. Quest-3 control scheme (free flight,
      no floor anchor — reference space is 'local'):
