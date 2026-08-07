@@ -5597,7 +5597,7 @@ async function run(){
         placeInChain:cfg.placeInChain||0, energyLevel:0,
         pulledBodies:new Set(), overlapping:[], ignore:new Set(),
         bindSites:cfg.bindSites||[], parentComplex:cfg.parentComplex||null, isSlot:!!cfg.isSlot,
-        occupied:false, active:true, alive:true, rotDir:1,
+        occupied:false, active:true, alive:true, rotDir:1, excited:false, visible:cfg.visible ?? true,
         radius:cfg.radius ?? 8, touchR:cfg.touchR ?? ((cfg.radius ?? 8)+2), nearbyR:cfg.nearbyR ?? 90,
         mesh:cfg.mesh||null, hooks:cfg.hooks||{}, _touchSet:new Set(), _nearbySet:new Set() };
       addToGroup(m, name); addToGroup(m, 'MoleculeBody2D');
@@ -5720,7 +5720,54 @@ async function run(){
       hook(m, 'checkSoftTarget'); hook(m, 'bindingSpecialActions', slot);    // ACTIONS 14-15
       cascadeAfterBind(m, slot);                                             // ACTIONS 16-19
     };
-    const tryReleasing = (m) => { /* PART 5: release + electron-acceptor filter */ };
+    /* ── §10 RELEASE — emit a bound molecule back into the world as a fresh free agent. ── */
+    const moleculeSpec = {};                                               // per-type {speed,radius,placeInChain,...} — populated in Part 8; defaults below
+    const specOf = name => moleculeSpec[name] || {};
+    const rnd01 = () => Math.random();
+    const hookAsync = async (m, name, ...a) => (m.hooks && m.hooks[name]) ? await m.hooks[name](m, ...a) : undefined;
+    const pointDirectionToTarget = b => { const t = b.hardTarget || b.softTarget; if(t) b.dir = norm({x:t.x-b.x, y:t.y-b.y}); };
+    const cloneSlots = (srcSlots, parent) => (srcSlots || []).map(s => {    // deep-copy a slot subtree (state carried outward)
+      const c = make(s.name, s.x, s.y, { isSlot:true, radius:s.radius, nearbyR:s.nearbyR, touchR:s.touchR, parentComplex:parent, visible:s.visible });
+      c.occupied = s.occupied; c.excited = s.excited; c.energyLevel = s.energyLevel; if(inGroup(s,'followed')) addToGroup(c,'followed');
+      c.bindSites = cloneSlots(s.bindSites, c); return c; });
+    const releasingConditions = (m, slot) => {                             // §10.1 → true (general) / an acceptor slot (electron) / null
+      if(!slot || !slot.occupied) return null;                             // slot must be occupied (white)
+      if(slot.name.indexOf('electron') < 0) return true;                   // general case → releasable
+      let cand = [...nodesInGroup('electron')].filter(b => b && b.alive && b.isSlot && withinR(m, b, m.nearbyR));  // 3B/3C electron slots in my nearby
+      cand = cand.filter(b => b.boundTo && isWhite(b.boundTo));            // 3D acceptor's complex is white
+      cand = cand.filter(b => !b.occupied);                               // 3E acceptor slot darkened/empty
+      cand = cand.filter(b => ![...b.pulledBodies].some(x => x && x.alive));  // 3F not already targeted
+      cand = cand.filter(b => b.boundTo.placeInChain === m.placeInChain + 1); // 3G next link in the chain
+      cand = cand.filter(b => !(m.name === 'plastocyanin' && b.boundTo.name === 'plastocyanin'));  // 3H no PC→PC
+      return cand.length ? cand[Math.floor(rnd01() * cand.length)] : null;
+    };
+    const releaseBody = (m, slot, acceptor) => {                           // §10.2 ACTIONS 1-18
+      m.excited = false; slot.pulledBodies.clear();
+      const sp = specOf(slot.name);
+      const body = make(slot.name, slot.x, slot.y, { speed: sp.speed ?? 60, radius: sp.radius ?? 8, placeInChain: sp.placeInChain ?? 0, rot: slot.rot });
+      body.category = CAT.IN_TRANSIT; body.flags.exiting = true; body.boundTo = null;
+      body.bindSites = cloneSlots(slot.bindSites, body); for(const s of body.bindSites) all.add(s);   // copy state outward
+      if(inGroup(body,'electron')){ body.energyLevel = slot.energyLevel; body.excited = slot.excited; }
+      if(inGroup(slot,'followed')){ addToGroup(body,'followed'); removeFromGroup(slot,'followed'); }
+      slot.occupied = false; slot.excited = false;                        // darken the (now empty) slot + its sub-slots
+      for(const s of (slot.bindSites || [])){ s.occupied = false; s.excited = false; }
+      all.add(body); syncMesh(body);
+      if(inGroup(body,'electron') && acceptor){ body.hardTarget = acceptor; acceptor.pulledBodies.add(body); }   // electron → fly to acceptor
+      for(const b of [...m._nearbySet]) if(isMolecule(b)){ tryReleasing(b); tryPulling(m, b); }   // cascade
+      hook(body,'checkSoftTarget'); hook(m,'releasingSpecialActions', body); pointDirectionToTarget(body);
+      return body;
+    };
+    const tryReleasing = async (m) => {                                   // §10.2 scan my slots, release each that qualifies
+      if(!m.bindSites) return;
+      for(const slot of [...m.bindSites]){
+        if(slot.flags.releasing_ongoing) continue;                        // re-entrancy guard
+        slot.flags.releasing_ongoing = true;
+        const cond = releasingConditions(m, slot);
+        const special = await hookAsync(m, 'releasingSpecialConditions', slot.name);   // may await (e.g. RC stays excited 1s)
+        slot.flags.releasing_ongoing = false;
+        if(cond != null && special !== false) releaseBody(m, slot, cond === true ? null : cond);
+      }
+    };
     const tryExcitationTransferring = (m) => { /* PART 6: excitation hop */ };
     const whenBodyEntersTouchArea = (m, body) => { /* PART 7: contact specials + generic bind-by-contact */ };
     const whenBodyExitsTouchArea = (m, body) => { body.flags.exiting = false; const i = m.overlapping.indexOf(body); if(i>=0) m.overlapping.splice(i,1); };
@@ -5768,8 +5815,8 @@ async function run(){
     scene.onBeforeRenderObservable.add(() => { if(!gMB3D) return;
       tickOnce(Math.min(50, scene.getEngine().getDeltaTime())/1000);
     });
-    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step, tickOnce,
-      bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook };
+    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step, tickOnce, moleculeSpec,
+      bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook, tryReleasing, releasingConditions, tryBinding };
   })();
   window.__MB = MB;   // dev handle while building the port
   window.__setMB3D = v => { gMB3D = !!v; };   // dev: enable/disable the ported sim tick
