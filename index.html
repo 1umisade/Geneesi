@@ -2233,13 +2233,18 @@ async function run(){
   const COF_CID_IMG = { 7:156620228, 8:5280489, 9:6057, 10:5884 };   // chlorophyll a, β-carotene, L-tyrosine, NADPH — the rest fall back to a colour swatch
   const SUBSTRATE_CID = { 'Vesi (H₂O)':962, 'CO₂':280, 'ATP':5957, 'NADP⁺':5886, 'NADPH + O₂':5884, 'Askorbaatti':54670067 };   // PubChem CIDs of substrates with a reliable structure image
   const cofColCss = t => { const c = (typeof ETC_COL!=='undefined' && ETC_COL[t]) || [0.7,0.7,0.7]; return 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')'; };
-  // A small labelled "chip": PubChem structure image when a CID is known, else a colour swatch.
-  const molChip = (label, cid, swatch) => {
-    const inner = cid
-      ? '<img src="https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/'+cid+'/PNG?image_size=120x120" alt="" style="width:100%;height:100%;object-fit:contain;background:#fff;border-radius:6px;border:1px solid var(--brown)" onerror="this.style.visibility=\'hidden\'">'
-      : '<span style="display:block;width:100%;height:100%;border-radius:6px;border:1px solid var(--brown);background:'+(swatch||'var(--paper2)')+'"></span>';
-    return '<div style="display:flex;flex-direction:column;align-items:center;gap:2px;width:60px"><div style="width:44px;height:44px;flex:0 0 auto">'+inner+'</div>'
-      + '<span style="font-size:9px;text-align:center;line-height:1.15">'+label+'</span></div>'; };
+  const PC_IMG = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/';
+  const pcName = n => PC_IMG+'name/'+encodeURIComponent(n)+'/PNG?image_size=120x120';   // by NAME → no CID guessing
+  const pcCid  = c => PC_IMG+'cid/'+c+'/PNG?image_size=120x120';
+  // A small labelled "chip": PubChem structure image over a colour swatch — if the image 404s (metal
+  // clusters like OEC / Fe-S / Cu have no PubChem structure), the swatch shows through instead.
+  const molChip = (label, imgUrl, swatch) => {
+    return '<div style="display:flex;flex-direction:column;align-items:center;gap:2px;width:60px">'
+      + '<div style="width:44px;height:44px;flex:0 0 auto;border-radius:6px;border:1px solid var(--brown);background:'+(swatch||'#fff')+';overflow:hidden">'
+      + (imgUrl ? '<img src="'+imgUrl+'" alt="" style="width:100%;height:100%;object-fit:contain;background:#fff" onerror="this.style.display=\'none\'">' : '')
+      + '</div><span style="font-size:9px;text-align:center;line-height:1.15">'+label+'</span></div>'; };
+  // Gene → a coloured rounded pill; the colour cycles by index so each gene reads distinctly.
+  const genePill = (g, i) => { const h=(i*57)%360; return '<span style="display:inline-block;background:hsl('+h+',60%,82%);color:#2a2a2a;border:1.5px solid hsl('+h+',55%,42%);border-radius:999px;padding:1px 9px;margin:2px;font-size:11px;font-weight:bold;font-style:italic">'+g+'</span>'; };
   // A 2D scatter of the model's atoms (projected X-Y, z-shaded in the model colour) → a recognisable
   // image of the protein's shape, drawn straight from its atom coordinates.
   const drawProteinImage = (canvas, mi) => {
@@ -2268,14 +2273,15 @@ async function run(){
     const nm=document.getElementById('center-protein-name'); if(nm) nm.textContent=md.name;
     const ds=document.getElementById('center-protein-desc'); if(ds) ds.textContent=PROTEIN_DESC[md.name]||'';
     const rowCss = 'display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:3px';
+    const pcq = (typeof PUBCHEM_Q!=='undefined') ? PUBCHEM_Q : {}, etn = (typeof ETC_NAMES!=='undefined') ? ETC_NAMES : {};
     const cofEl=document.getElementById('center-protein-cof'); if(cofEl){ const cof=PROTEIN_COF[md.name]||[];
       cofEl.innerHTML = cof.length ? '<b>Kofaktorit:</b><div style="'+rowCss+'">'
-        + cof.map(t => molChip((typeof ETC_NAMES!=='undefined' && ETC_NAMES[t]) || 'Kofaktori', COF_CID_IMG[t], cofColCss(t))).join('') + '</div>' : ''; }
+        + cof.map(t => molChip(etn[t] || 'Kofaktori', COF_CID_IMG[t] ? pcCid(COF_CID_IMG[t]) : (pcq[t] ? pcName(pcq[t]) : null), cofColCss(t))).join('') + '</div>' : ''; }
     const su=document.getElementById('center-protein-subs'); if(su){ const subs=PROTEIN_SUBSTRATE[md.name]||[];
       su.innerHTML = subs.length ? '<b>Substraatit:</b><div style="'+rowCss+'">'
-        + subs.map(s => molChip(s, SUBSTRATE_CID[s], null)).join('') + '</div>' : ''; }
+        + subs.map(s => molChip(s, SUBSTRATE_CID[s] ? pcCid(SUBSTRATE_CID[s]) : null, null)).join('') + '</div>' : ''; }
     const ge=document.getElementById('center-protein-genes'); if(ge){ const genes=PROTEIN_GENES[md.name]||[];
-      ge.innerHTML = genes.length ? '<b>Geenit:</b> ' + genes.map(g=>'<span style="font-style:italic">'+g+'</span>').join(', ') : ''; }
+      ge.innerHTML = genes.length ? '<b>Geenit:</b><div style="margin-top:3px">' + genes.map((g,i)=>genePill(g,i)).join('') + '</div>' : ''; }
     { const ca=document.getElementById('center-atom'); if(ca) ca.style.display='none'; }   // protein card OWNS the centre → hide a leftover atom card
     cp.style.display='flex'; };
   const hideCenterProtein = () => { const cp=document.getElementById('center-protein'); if(cp) cp.style.display='none'; };
@@ -2761,10 +2767,11 @@ async function run(){
   let gDepthLo = 0.40;        // darkest floor the depth-shading reaches (lower = more contrast). Dev slider.
   let gDepthStart = 0.0;      // where the darkening begins, WORLD units from the shading plane. Dev slider.
   let gDepthSpread = 120.0;   // world distance over which it fades to the floor. Dev slider.
-  let gShadePlane = -60.0;    // FIXED shading reference = the near-Z FACE of the scene's bounding box (flattened world Z). Recomputed below.
+  let gShadePlane = 60.0;     // FIXED shading reference = the FAR-Z WALL of the scene box (behind the molecules, so the white dev plane never tints them). Recomputed below.
   let gSceneZmin = -60, gSceneZmax = 60;
   { let zmin=1e9, zmax=-1e9; for(let mi=0;mi<mols.length;mi++){ const md=mInfo[mi]; zmin=Math.min(zmin, md.z0-md.cz); zmax=Math.max(zmax, md.z1-md.cz); }
-    gSceneZmin=zmin; gSceneZmax=zmax; gShadePlane=zmin; gDepthStart=0; gDepthSpread=Math.max(20, zmax-zmin); }   // exact near face + full-thickness spread
+    gSceneZmin=zmin; gSceneZmax=zmax; gDepthSpread=Math.max(20, zmax-zmin);
+    gShadePlane=zmax; gDepthStart=-gDepthSpread; }   // plane on the FAR wall; startOff = -spread keeps the front-to-back gradient (near-camera bright → far dark)
   let gArmedItem = null;      // {kind,name} armed in the spawn selector (molecule / protein / photon)
   let disarmSpawn = () => {}; // clears the armed item/element + un-highlights its button (right-click ends spawning)
   let gCollScale = 1.0;       // reactive-site / collision sphere radius multiplier. Dev slider.
@@ -3943,10 +3950,9 @@ async function run(){
   /* ── Container box enclosing every model, with water molecules flying inside and
      bouncing off the walls (kinematic — constant velocity, reflect at the faces). */
   {
-    let x0=gMiX,x1=gMaX,y0=gMiY,y1=gMaY,z0=gMiZ,z1=gMaZ;
+    let x0=gMiX,x1=gMaX,y0=gMiY,y1=gMaY,z0=gSceneZmin,z1=gSceneZmax;   // Z from the FLATTENED bounds (gMiZ/gMaZ are the huge pre-flatten range) → box hugs the molecule sheet
     if(lipid){ x0=Math.min(x0,bilayerCen.x-bilayerHalf); x1=Math.max(x1,bilayerCen.x+bilayerHalf);
-      z0=Math.min(z0,bilayerCen.z-bilayerHalf); z1=Math.max(z1,bilayerCen.z+bilayerHalf);
-      y0=Math.min(y0,bilayerCen.y-30); y1=Math.max(y1,bilayerCen.y+30); }
+      y0=Math.min(y0,bilayerCen.y-30); y1=Math.max(y1,bilayerCen.y+30); }   // box Z keeps hugging the molecule sheet — do NOT stretch it over the bilayer's huge pre-flatten Z span
     const pad=25; x0-=pad;x1+=pad;y0-=pad;y1+=pad;z0-=pad;z1+=pad;
     const bw=x1-x0, bh=y1-y0, bd=z1-z0;
     // clean 12-edge wireframe box (no face diagonals)
@@ -6116,11 +6122,10 @@ void main(void){
   if(amt > 0.003){
     float lit = 0.0;
     if(hasFocus > 0.5){ vec2 d = vUV - focusUV; d.x *= aspect; float dist = length(d);
-      lit = (focusR*focusR) / (focusR*focusR + dist*dist); lit = pow(lit, 1.4); }
+      lit = 1.0 - smoothstep(focusR, focusR * 1.8, dist); }   // 1 = keep colour on the selection, 0 = grayscale
     float g = dot(c, vec3(0.299, 0.587, 0.114));
-    vec3 lc = mix(vec3(g), c, lit);        // outside the spotlight → grayscale, inside → full colour
-    lc *= (0.05 + 0.95 * lit);             // …and the lantern's darkening
-    c = mix(c, lc, amt);
+    vec3 target = mix(vec3(g), c, lit);    // outside the selection → grayscale, inside → full colour. NO darkening.
+    c = mix(c, target, amt);
   }
   gl_FragColor = vec4(c, 1.0);
 }`;
