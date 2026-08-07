@@ -5818,8 +5818,39 @@ async function run(){
       for(const s of (m.bindSites||[])) if(inGroup(s,'electron')) s.energyLevel = 0;
       for(const b of [...m._nearbySet]) if(isMolecule(b)){ tryExcitationTransferring(b); turningExcitationToHeat(b); }
     };
-    const whenBodyEntersTouchArea = (m, body) => { /* PART 7: contact specials + generic bind-by-contact */ };
-    const whenBodyExitsTouchArea = (m, body) => { body.flags.exiting = false; const i = m.overlapping.indexOf(body); if(i>=0) m.overlapping.splice(i,1); };
+    /* ── §11 tight-contact events (touch area). ── */
+    const allowOverlapDescendants = (m, body) => { allowOverlap(m, body); for(const s of (body.bindSites||[])) allowOverlapDescendants(m, s); };
+    const whenBodyEntersTouchArea = (m, body) => {
+      hook(m, 'whenBodyEntersTouchAreaLocal', body);
+      if(inGroup(m,'photon') && inGroup(body,'boundary')){ kill(m); return; }               // a photon dies at the world edge
+      if(!isMolecule(body)) return;
+      if(inGroup(body,'photon')) tryExciting(m);                                             // a photon excites me
+      if(inGroup(m,'O') && inGroup(body,'O') && body!==m && !m.flags.combining && !body.flags.combining){   // O + O → O2
+        m.flags.combining = true; body.flags.combining = true;
+        const o2 = make('O2', (m.x+body.x)/2, (m.y+body.y)/2, { speed: specOf('O2').speed ?? 60, radius: specOf('O2').radius ?? 8 });
+        all.add(o2); syncMesh(o2); kill(body); kill(m); return; }
+      if(!isAncestor(m, body) && !isAncestor(body, m) && body!==m) body.overlapping.push(m); // overlap bookkeeping
+      if(inGroup(m,'plastoquinone_B') && inGroup(body,'membrane')) allowOverlap(m, body);    // PQ_B passes through the membrane
+      if(inGroup(m,'plastoquinone_B') && inGroup(body,'plastoquinone_B')) allowOverlap(m, body);
+      if(inGroup(m,'photosystem_I')) return;                                                 // early-out complexes: slot-sensor driven only
+      if(inGroup(m,'ATP-synthase')) return;
+      if(inGroup(m,'NDH-1') && inGroup(body,'ferredoxin')) return;
+      if(inGroup(m,'cytochrome_b6f') && inGroup(body,'plastocyanin')) return;
+      if(m.boundTo != null && isWhite(m) && body.hardTarget === m) body.hardTarget = null;   // a body that has arrived releases its stale target
+      if(isAncestor(m, body) || body.isSlot || inGroup(body,'boundary') || body===m) return; // generic bind-by-contact safety
+      if(!canBind(m.name, body.name) || !m.bindSites) return;
+      const slot = m.bindSites.find(s => s.name.indexOf(body.name) === 0 && !s.occupied);    // a darkened slot whose name begins with the body's type
+      if(!slot) return;
+      setCategory(body, CAT.IN_TRANSIT); allowOverlapDescendants(m, body);                   // (the slot's own sensor then drives try_BINDING)
+    };
+    const whenBodyExitsTouchArea = (m, body) => {                                            // §11.2
+      body.flags.exiting = false;                                                            // a released body can be re-bound once it has left
+      const i = m.overlapping.indexOf(body); if(i>=0) m.overlapping.splice(i,1);
+      if(!isMolecule(body) || inGroup(body,'boundary')) return;
+      if(body.overlapping.some(o => o !== m)) return;                                        // still touching another molecule
+      if(inGroup(body,'photon') || body.hardTarget != null) return;
+      setCategory(body, CAT.FREE);                                                           // back to the roaming category
+    };
 
     // §8.1/§17 body enters my (or a slot's) large Nearby_area → pull + the neighbour re-pokes.
     const whenBodyEntersNearbyArea = (m, body) => {
