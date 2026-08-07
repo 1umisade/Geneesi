@@ -1443,6 +1443,7 @@ varying float vSeed;
 varying float vSel;
 varying float vOid;
 varying float vCang;
+varying float vMid;      // spawn orbitals are not model-tagged (always -1) but the shared orb fragment reads vMid
 #ifdef MEMFADE
 varying vec3 vMemW; uniform vec3 memCut;
 #endif
@@ -1466,6 +1467,7 @@ void main(void){
   vCol = ocol;   // orbitals ALWAYS keep their element colour — per-model pastel applies to the vdW spheres only
   vSel = step(distance(ocen, selCenter), 0.6);
   vOid = oid;
+  vMid = -1.0;
   vec3 ocv = (view * vec4(ocen, 1.0)).xyz; vCang = (ocv.z > 0.0) ? length(ocv.xy)/ocv.z : 1e9;
   gl_Position = projection * vp;
 }`;
@@ -3136,6 +3138,20 @@ async function run(){
   const spawnNucMat = impostorMat('spawnNuc', NUCLEON_R, 0.0, 0.0, false);   // spawned-atom nuclei — never move with PSII
   spawnNucMat.setFloat('depthBias', 2.0); spawnNucMat.disableDepthWrite = true; spawnNucMat.setFloat('bubbleR', 1e9); spawnNucMat.setFloat('coneCos', -1.0);
   spawnNucMat.onBindObservable.add(() => { const eff=spawnNucMat.getEffect(); if(eff) eff.setVector3('selCenter', selCenter); });
+  // Spawned-atom vdW shell — a visible sphere per atom so a spawned atom reads as a ball at RTS zoom, going
+  // glass up close (within ~130 A) to reveal its own orbitals. Non-movable, per-instance radius via IMPRAD.
+  const spawnVdwMat = new BABYLON.ShaderMaterial('spawnVdw', scene, 'imp', {
+    attributes:['position','instanceColor','world0','world1','world2','world3','instR'],
+    uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos'],
+    defines:['#define IMPRAD'] });
+  spawnVdwMat.setFloat('radius',1.0); spawnVdwMat.setFloat('isShell',1); spawnVdwMat.setFloat('shellMin',0.12);
+  spawnVdwMat.setFloat('revealFade',0.95); spawnVdwMat.setFloat('bubbleR',130); spawnVdwMat.setFloat('protonOutline',0);
+  spawnVdwMat.setFloat('depthBias',0); spawnVdwMat.setFloat('boil',0); spawnVdwMat.setFloat('coneCos',-1.0);
+  spawnVdwMat.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); spawnVdwMat.backFaceCulling=false;
+  spawnVdwMat.onBindObservable.add(() => { const eff=spawnVdwMat.getEffect(); if(!eff) return;
+    eff.setFloat('uT', gWaveT); eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
+    eff.setFloat('revealFade', gRevealFade); eff.setVector3('selCenter', selCenter); });
+  realAlpha(spawnVdwMat);
   // Every atom's nucleus is visible: bias it toward the camera so it shows on top of its OWN
   // orbitals, drawn after them (group 1) without writing depth so it can't punch through atoms
   // that are genuinely in front. selCenter bound live → the focused atom's static nucleus is
@@ -5124,6 +5140,9 @@ async function run(){
   const bondSpawnMat = bondMatG('bondSpawn'); bondSpawnMat.setFloat('bubbleR', 1e9); bondSpawnMat.setFloat('coneCos', -1.0); bondSpawnMat.setFloat('nElec', 1);
   const spawnBondMesh = BABYLON.MeshBuilder.CreateSphere('spwBond', {segments:6, diameter:1}, scene);
   spawnBondMesh.material = bondSpawnMat; spawnBondMesh.isPickable = false; spawnBondMesh.alwaysSelectAsActiveMesh = true; spawnBondMesh.thinInstanceCount = 0;
+  // One vdW-shell impostor (billboard quad) for ALL spawned atoms, mixed radii via IMPRAD.
+  const spawnVdwMesh = BABYLON.MeshBuilder.CreatePlane('spwVdw', {size:2}, scene);
+  spawnVdwMesh.material = spawnVdwMat; spawnVdwMesh.isPickable = false; spawnVdwMesh.alwaysSelectAsActiveMesh = true; spawnVdwMesh.thinInstanceCount = 0;
   const spawnMeshFor = sym => {
     let rec = spawnMeshes.get(sym); if(rec) return rec;
     const nuc = BABYLON.MeshBuilder.CreatePlane('spwN_'+sym,{size:2},scene);
@@ -5176,6 +5195,19 @@ async function run(){
       rec.orb.thinInstanceSetBuffer('matrix', oMb,16,true); rec.orb.thinInstanceSetBuffer('ocol', oCol,3,true); rec.orb.thinInstanceSetBuffer('ocen', oCen,3,true); rec.orb.thinInstanceSetBuffer('oid', oId,1,true); rec.orb.thinInstanceSetBuffer('seed', oSeed,1,true);
     }
     spawnBondMesh.thinInstanceCount = 0;   // no stretched bonding lobes — a bond is shown by the two atoms' own orbitals overlapping
+    // vdW shells over EVERY spawned atom (one mesh, mixed radii). Makes a spawned atom a visible ball at any zoom.
+    const nV = spawned.length;
+    if(nV === 0){ spawnVdwMesh.thinInstanceCount = 0; }
+    else {
+      const vMb=new Float32Array(nV*16), vCb=new Float32Array(nV*4), vR=new Float32Array(nV);
+      for(let i=0;i<nV;i++){ const a=spawned[i], el=ELEM[a.sym]||ELEM.FB, o=i*16;
+        vMb[o]=1;vMb[o+5]=1;vMb[o+10]=1;vMb[o+15]=1; vMb[o+12]=a.x; vMb[o+13]=a.y; vMb[o+14]=a.z;
+        vCb[i*4]=el.c[0]; vCb[i*4+1]=el.c[1]; vCb[i*4+2]=el.c[2]; vCb[i*4+3]=1;
+        vR[i]=el.vr*FILL_SCALE; }
+      spawnVdwMesh.thinInstanceSetBuffer('matrix', vMb,16,true);
+      spawnVdwMesh.thinInstanceSetBuffer('instanceColor', vCb,4,true);
+      spawnVdwMesh.thinInstanceSetBuffer('instR', vR,1,true);
+    }
   };
   const spawnAtom = (sym, x, y, z) => { spawned.push({sym,x,y,z,id:gSpawnId++}); rebuildSpawn(); };
   const clearSpawned = () => { spawned.length = 0; rebuildSpawn(); };
