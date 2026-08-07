@@ -5633,11 +5633,18 @@ async function run(){
     const isAncestor = (m, body) => { let p = body.parentComplex; while(p){ if(p===m) return true; p=p.parentComplex; } return false; };
     const withinR = (a, b, r) => { const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy <= r*r; };
     const setCategory = (b, cat) => { b.category = cat; };
+    const isWhite = m => m.isSlot ? m.occupied : m.active;          // §4.1 white = occupied (slot) / active (complex)
+    const alive = m => m && m.alive;
+    const lerpAngle = (a, b, t) => { let d = (b - a) % (2*Math.PI); if(d < -Math.PI) d += 2*Math.PI; else if(d > Math.PI) d -= 2*Math.PI; return a + d*t; };
+    const angDiff = (a, b) => { let d = (b - a) % (2*Math.PI); if(d < -Math.PI) d += 2*Math.PI; else if(d > Math.PI) d -= 2*Math.PI; return d; };
+    const shockWave = m => {};                                      // §14 cosmetic — stub for now
+    const _frameResolvers = [];                                     // §18 nextFrame() — resolves on the next tick
+    const nextFrame = () => new Promise(r => _frameResolvers.push(r));
 
     /* ── §9.1 BINDING_conditions(complex, body, slot) → the slot, or null.  With slot=null it is the PULL
        query ("is there ANY slot on me this body could bind?"). Shared by pulling AND binding. ── */
     const bindingConditions = (m, body, slot=null) => {
-      if(!m.bindSites || !m.active) return null;                          // BindSites exist - I am active/white
+      if(!m.bindSites || !isWhite(m)) return null;                        // BindSites exist - I am active/white
       if(isAncestor(m, body)) return null;                               // I am not the body's ancestor
       if(!isMolecule(body)) return null;
       if(slot === null){                                                 // PULL path — find the first slot that can pull this body
@@ -5672,8 +5679,47 @@ async function run(){
         body.flags.repelFrom = m;   // step() nudges it away each frame while still in range (§8.3 while-loop)
     };
 
-    // Coroutine stubs — filled in later parts (kept as safe no-ops so the §17 cascade never errors).
-    const tryBinding = (m, body, slot) => { /* PART 4: bind glide + inward state copy */ };
+    /* ── §9.2 try_BINDING(complex, body, slot) — the glide-in animation + consume. ── */
+    const consumeIntoSlot = (body, slot) => {                               // §9.2 ACTIONS 6-10 "pass along attributes"
+      const dest = new Map((slot.bindSites || []).map(s => [s.name, s]));   // name-matched sub-slots
+      for(const item of (body.bindSites || [])){ const d = dest.get(item.name); if(!d) continue;
+        d.occupied = item.occupied; d.excited = item.excited;
+        if(inGroup(item, 'electron')) d.energyLevel = item.energyLevel;
+        if(inGroup(item, 'followed')){ removeFromGroup(item, 'followed'); addToGroup(d, 'followed'); } }
+      if(inGroup(body, 'electron')){ slot.energyLevel = body.energyLevel * 0.9; slot.excited = body.excited; shockWave(slot); }   // electron energy drops a tenth
+      if(inGroup(body, 'followed')){ addToGroup(slot, 'followed'); removeFromGroup(body, 'followed'); }
+      kill(body); slot.occupied = true; syncMesh(slot);                     // delete body, slot now white/occupied
+    };
+    let _cascadeDepth = 0;
+    const cascadeAfterBind = (m, slot) => {                                 // §9.2 ACTIONS 16-19 / §17 re-pokes
+      if(_cascadeDepth > 6) return;                                         // anti-freeze: don't let re-pokes recurse synchronously forever
+      _cascadeDepth++;
+      for(const b of [...slot._touchSet]) if(isMolecule(b)) whenBodyEntersTouchArea(b, b);
+      for(const b of [...slot._nearbySet]) if(isMolecule(b)) whenBodyEntersNearbyArea(slot, b);
+      for(const b of [...m._touchSet]) if(isMolecule(b) && b.bindSites){ const s2 = b.bindSites.find(x => x.name === m.name); if(s2 && withinR(s2, m, s2.touchR)) tryBinding(b, m, s2); }
+      for(const b of [...m._nearbySet]) if(isMolecule(b)){ tryReleasing(b); tryExcitationTransferring(b); }
+      _cascadeDepth--;
+    };
+    const tryBinding = async (m, body, slot) => {
+      if(!bindingConditions(m, body, slot)) return;
+      slot.flags.binding_ongoing = true; body.flags.binding_ongoing = true;   // guards
+      body.collisionOff = true; body.speed_saved = body.speed; body.speed = 0; // disable body physics/collision
+      let rate = 0, guard = 0;
+      while(alive(body) && !slot.occupied && guard++ < 3000){                 // glide loop (§9.2 ACTION 5) — guard = anti-freeze cap
+        const d = Math.max(Math.hypot(body.x - slot.x, body.y - slot.y), 1);
+        rate = rate + (0.5 - rate) * (0.1 / d);
+        body.x += (slot.x - body.x) * rate; body.y += (slot.y - body.y) * rate;
+        body.rot = lerpAngle(body.rot, slot.rot, rate); syncMesh(body);
+        if(Math.hypot(body.x - slot.x, body.y - slot.y) < 1 && Math.abs(angDiff(body.rot, slot.rot)) < 0.1) consumeIntoSlot(body, slot);
+        await nextFrame();
+      }
+      slot.boundTo = m;                                                      // ACTION 12
+      for(const o of [...slot.pulledBodies]) if(o && o.alive && o.hardTarget === slot) o.hardTarget = null;   // ACTION 12b free the slot
+      slot.pulledBodies.clear();
+      slot.flags.binding_ongoing = false;                                    // ACTION 13
+      hook(m, 'checkSoftTarget'); hook(m, 'bindingSpecialActions', slot);    // ACTIONS 14-15
+      cascadeAfterBind(m, slot);                                             // ACTIONS 16-19
+    };
     const tryReleasing = (m) => { /* PART 5: release + electron-acceptor filter */ };
     const tryExcitationTransferring = (m) => { /* PART 6: excitation hop */ };
     const whenBodyEntersTouchArea = (m, body) => { /* PART 7: contact specials + generic bind-by-contact */ };
@@ -5710,17 +5756,23 @@ async function run(){
       const l = Math.hypot(b.x-m.x, b.y-m.y)||1, ax=(b.x-m.x)/l, ay=(b.y-m.y)/l;
       b.dir = norm(lerp2(b.dir, {x:ax,y:ay}, 0.1)); } };
 
-    // Main tick — no-op while gMB3D is off (existing sim untouched). Move → repel → sense.
-    scene.onBeforeRenderObservable.add(() => { if(!gMB3D) return;
-      const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    // One simulation frame: move → repel → sense → advance coroutines. Callable manually (for deterministic
+    // tests, independent of the throttled render loop) or driven by the render loop below.
+    const tickOnce = (dt) => {
       for(const m of all) step(m, dt);
       repelStep();
       sense();
+      const rs = _frameResolvers.splice(0); for(const r of rs) r();   // advance any bind/release/excite coroutines one frame
+    };
+    // Render-loop driver — no-op while gMB3D is off (existing sim untouched).
+    scene.onBeforeRenderObservable.add(() => { if(!gMB3D) return;
+      tickOnce(Math.min(50, scene.getEngine().getDeltaTime())/1000);
     });
-    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step,
+    return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step, tickOnce,
       bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook };
   })();
   window.__MB = MB;   // dev handle while building the port
+  window.__setMB3D = v => { gMB3D = !!v; };   // dev: enable/disable the ported sim tick
   // drop the armed spawn-selector item at the floor point under the cursor
   const dropArmedItem = () => { if(!gArmedItem) return;
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
