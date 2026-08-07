@@ -5417,7 +5417,7 @@ async function run(){
     const dt = Math.min(50, scene.getEngine().getDeltaTime())/1000, x0=gMiX, x1=gMaX, y0=gMiY, y1=gMaY;
     let dirty = false;
     for(let mi=gMolecules.length-1; mi>=0; mi--){ const m=gMolecules[mi];
-      m.cx += m.vx*dt; m.cy += m.vy*dt; m.ang += m.av*dt;
+      m.cx += m.vx*dt*gSpeed; m.cy += m.vy*dt*gSpeed; m.ang += m.av*dt*gSpeed;   // speed slider scales the drift + tumble
       if(m.cx<x0){ m.cx=x0; m.vx=Math.abs(m.vx); } else if(m.cx>x1){ m.cx=x1; m.vx=-Math.abs(m.vx); }
       if(m.cy<y0){ m.cy=y0; m.vy=Math.abs(m.vy); } else if(m.cy>y1){ m.cy=y1; m.vy=-Math.abs(m.vy); }
       const c=Math.cos(m.ang), s=Math.sin(m.ang);
