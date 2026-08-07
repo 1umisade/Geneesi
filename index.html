@@ -2300,7 +2300,8 @@ async function run(){
       ctx.beginPath(); ctx.arc(px(p),py(p),r,0,6.2832); ctx.fill(); }
   };
   const cofPts = t => { if(typeof etcGroups==='undefined') return null; const g=etcGroups.find(g=>g.type===t); if(!g||!g.atoms.length) return null;
-    return g.atoms.map(i=>({ x:etcM[i*16+12], y:etcM[i*16+13], z:etcM[i*16+14] })); };   // a cofactor type's atoms (from the scene overlay)
+    const tc=(typeof ETC_COL!=='undefined' && ETC_COL[t]) || [0.6,0.6,0.6];   // C/H backbone keeps the cofactor identity colour; heteroatoms (Fe/S/Mg/N/O…) get their element colour so a metal cluster reads right
+    return g.atoms.map(i=>{ const sym=EL_LIST[etcEl[i]]; return { x:etcM[i*16+12], y:etcM[i*16+13], z:etcM[i*16+14], c:(sym==='C'||sym==='H')?tc:info(etcEl[i]).c }; }); };
   const molPts = name => { const b=(typeof MOL_BUILD!=='undefined')&&MOL_BUILD[name]; if(!b) return null;
     return b().map(a=>{ const el=ELEM[a.sym]||ELEM.FB; return { x:a.x, y:a.y, z:a.z, c:el.c }; }); };   // a spawn-molecule template, coloured by element
   const modelPts = nm => { let mi=-1; for(let i=0;i<mols.length;i++) if(mInfo[i].name===nm){ mi=i; break; } if(mi<0) return null;
