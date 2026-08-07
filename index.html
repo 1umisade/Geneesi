@@ -5597,7 +5597,7 @@ async function run(){
         placeInChain:cfg.placeInChain||0, energyLevel:0,
         pulledBodies:new Set(), overlapping:[], ignore:new Set(),
         bindSites:cfg.bindSites||[], parentComplex:cfg.parentComplex||null, isSlot:!!cfg.isSlot,
-        occupied:false, active:true, alive:true, rotDir:1, excited:false, visible:cfg.visible ?? true,
+        occupied:false, active:true, alive:true, rotDir:1, excited:false, excitable:!!cfg.excitable, damaged:false, visible:cfg.visible ?? true,
         radius:cfg.radius ?? 8, touchR:cfg.touchR ?? ((cfg.radius ?? 8)+2), nearbyR:cfg.nearbyR ?? 90,
         mesh:cfg.mesh||null, hooks:cfg.hooks||{}, _touchSet:new Set(), _nearbySet:new Set() };
       addToGroup(m, name); addToGroup(m, 'MoleculeBody2D');
@@ -5640,6 +5640,9 @@ async function run(){
     const shockWave = m => {};                                      // §14 cosmetic — stub for now
     const _frameResolvers = [];                                     // §18 nextFrame() — resolves on the next tick
     const nextFrame = () => new Promise(r => _frameResolvers.push(r));
+    const _delays = [];                                             // §18 delay(ms) — frame-based so it scales with the sim tick (not wall-clock)
+    const delay = ms => new Promise(r => _delays.push({ frames: Math.max(1, Math.round(ms/16.6667)), resolve:r }));
+    const advanceDelays = () => { for(let i=_delays.length-1;i>=0;i--) if(--_delays[i].frames <= 0){ const d=_delays.splice(i,1)[0]; d.resolve(); } };
 
     /* ── §9.1 BINDING_conditions(complex, body, slot) → the slot, or null.  With slot=null it is the PULL
        query ("is there ANY slot on me this body could bind?"). Shared by pulling AND binding. ── */
@@ -5768,7 +5771,53 @@ async function run(){
         if(cond != null && special !== false) releaseBody(m, slot, cond === true ? null : cond);
       }
     };
-    const tryExcitationTransferring = (m) => { /* PART 6: excitation hop */ };
+    /* ── §12 EXCITATION — energy propagation, independent of binding. ── */
+    const tryExciting = async (m) => {                                     // §12.1 become excited
+      if(!m.excitable || m.damaged || m.flags.transfering_excitation || m.flags.shaking) return;
+      for(const b of [...m._touchSet]){ if(b.alive && inGroup(b,'photon')){   // consume a touching photon
+        if(inGroup(b,'followed')){ removeFromGroup(b,'followed'); addToGroup(m,'followed'); }
+        m.energyLevel = b.energyLevel;
+        for(const s of (m.bindSites||[])) if(inGroup(s,'electron')) s.energyLevel = m.energyLevel;
+        kill(b); break; } }
+      m.excited = true;                                                    // reveal the glow
+      tryExcitationTransferring(m);                                        // try to pass it on
+      turningExcitationToHeat(m);                                          // start the 5s use-it-or-lose-it timer
+      hook(m,'excitingSpecialActions');
+      return true;
+    };
+    const tryExcitationTransferring = async (m) => {                       // §12.2 pass energy to the next pigment
+      if(inGroup(m,'electron') || inGroup(m,'O2') || !m.excitable || !m.excited) return;
+      if(m.flags.transfering_excitation || m.damaged || m.flags.shaking) return;
+      let cand = [...m._nearbySet].filter(b => b && b.alive && b.excitable && !b.flags.shaking);   // 6C/6D excitable, 6E not shaking
+      cand = cand.filter(b => b.placeInChain === m.placeInChain + 1 || (inGroup(b,'O2') && !b.isSlot) || inGroup(b,'zeaxanthin'));   // 6F chain order
+      cand = cand.filter(b => !inGroup(b,'violaxanthin') && !b.excited && !b.damaged);             // 6F/6G/6H
+      cand = cand.filter(b => !(inGroup(b,'P700') || inGroup(b,'P680')) || (b.bindSites && b.bindSites.some(s => s.name === 'electron' && s.occupied)));   // 6I RC holds an electron
+      cand = cand.filter(b => !b.flags.transfering_excitation);            // 6J
+      if(!cand.length) return;
+      const zx = cand.filter(b => inGroup(b,'zeaxanthin'));                // prefer zeaxanthin
+      const acc = zx.length ? zx[Math.floor(rnd01()*zx.length)] : cand[Math.floor(rnd01()*cand.length)];
+      m.flags.transfering_excitation = true;
+      await delay(800);                                                    // the visible 0.8s hop
+      if(acc.alive){ const ok = await tryExciting(acc);
+        if(ok){ acc.energyLevel = m.energyLevel;
+          for(const s of (acc.bindSites||[])) if(inGroup(s,'electron')) s.energyLevel = acc.energyLevel;
+          m.excited = false;
+          if(inGroup(m,'followed')){ removeFromGroup(m,'followed'); addToGroup(acc,'followed'); }   // transfer follow FIRST
+          tryReleasing(acc);                                              // …then RC ejects its electron
+          hook(acc,'checkSoftTarget'); m.flags.transfering_excitation = false;
+          for(const b of [...m._nearbySet]) if(isMolecule(b)){ tryExcitationTransferring(b); turningExcitationToHeat(b); }
+          return; } }
+      m.flags.transfering_excitation = false;
+    };
+    const turningExcitationToHeat = async (m) => {                         // §12.3 use-it-or-lose-it: dissipate after 5s
+      if(inGroup(m,'electron')) return;
+      const token = (m._heatToken = (m._heatToken||0) + 1);               // newest countdown wins (replaces any previous)
+      await delay(5000);
+      if(m._heatToken !== token || !m.excited || m.damaged) return;
+      m.excited = false; m.energyLevel = 0;                               // heat-shake (cosmetic later), then de-excite + lose energy
+      for(const s of (m.bindSites||[])) if(inGroup(s,'electron')) s.energyLevel = 0;
+      for(const b of [...m._nearbySet]) if(isMolecule(b)){ tryExcitationTransferring(b); turningExcitationToHeat(b); }
+    };
     const whenBodyEntersTouchArea = (m, body) => { /* PART 7: contact specials + generic bind-by-contact */ };
     const whenBodyExitsTouchArea = (m, body) => { body.flags.exiting = false; const i = m.overlapping.indexOf(body); if(i>=0) m.overlapping.splice(i,1); };
 
@@ -5786,15 +5835,20 @@ async function run(){
     const sense = () => {
       const bodies = [...all].filter(b => b.alive && !b.isSlot);
       for(const m of all){ if(!m.alive) continue;
+        // compute the new overlap sets, DIFF against last frame, update the sets, THEN fire events — so the
+        // handlers (excitation acceptor search etc.) read the up-to-date _nearbySet, not the stale one.
         const near = new Set();
         for(const b of bodies){ if(b !== m && withinR(m, b, m.nearbyR)) near.add(b); }
-        for(const b of near) if(!m._nearbySet.has(b)) whenBodyEntersNearbyArea(m, b);
+        const enteredNear = [...near].filter(b => !m._nearbySet.has(b));
         m._nearbySet = near;
+        for(const b of enteredNear) whenBodyEntersNearbyArea(m, b);
         const touch = new Set();
         for(const b of bodies){ if(b !== m && withinR(m, b, m.touchR)) touch.add(b); }
-        for(const b of touch) if(!m._touchSet.has(b)){ if(m.isSlot && m.parentComplex) whenBodyEntersBindSite(m.parentComplex, b, m); else whenBodyEntersTouchArea(m, b); }
-        for(const b of m._touchSet) if(!touch.has(b)) whenBodyExitsTouchArea(m, b);
+        const enteredTouch = [...touch].filter(b => !m._touchSet.has(b));
+        const exitedTouch = [...m._touchSet].filter(b => !touch.has(b));
         m._touchSet = touch;
+        for(const b of enteredTouch){ if(m.isSlot && m.parentComplex) whenBodyEntersBindSite(m.parentComplex, b, m); else whenBodyEntersTouchArea(m, b); }
+        for(const b of exitedTouch) whenBodyExitsTouchArea(m, b);
       }
     };
     // Extra per-frame repel nudge (§8.3 while-loop): keep pushing a flagged body away while it stays in range.
@@ -5809,6 +5863,7 @@ async function run(){
       for(const m of all) step(m, dt);
       repelStep();
       sense();
+      advanceDelays();
       const rs = _frameResolvers.splice(0); for(const r of rs) r();   // advance any bind/release/excite coroutines one frame
     };
     // Render-loop driver — no-op while gMB3D is off (existing sim untouched).
@@ -5816,7 +5871,8 @@ async function run(){
       tickOnce(Math.min(50, scene.getEngine().getDeltaTime())/1000);
     });
     return { possibleInteractions, canBind, CAT, groups, all, make, spawnFree, kill, addToGroup, removeFromGroup, inGroup, nodesInGroup, allowOverlap, step, tickOnce, moleculeSpec,
-      bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook, tryReleasing, releasingConditions, tryBinding };
+      bindingConditions, pullingConditions, tryPulling, whenBodyEntersNearbyArea, sense, hook, tryReleasing, releasingConditions, tryBinding,
+      tryExciting, tryExcitationTransferring, turningExcitationToHeat, delay };
   })();
   window.__MB = MB;   // dev handle while building the port
   window.__setMB3D = v => { gMB3D = !!v; };   // dev: enable/disable the ported sim tick
