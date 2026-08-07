@@ -2137,6 +2137,7 @@ async function run(){
   let orbitLocked = false; // true after a double-click → rotation orbits the selected atom (until you pan)
   let dnX = 0, dnY = 0;   // drag-start pointer pos (for the tap-vs-drag test)
   let panning = false, panDepth = 1, modelDrag = -1, modelDragDepth = 1, rotating = false;   // pan state · which molecule a left-drag is moving (+its depth) · middle-drag rotate
+  let joyPan = false, joyOX = 0, joyOY = 0;   // BOTH-buttons directional pan · press-point (screen px) the joystick offset is measured from
   // Custom cursors (the grab PNG). setCursor writes the style ONLY when it actually changes — re-assigning a
   // url() cursor every mousemove makes the browser re-fetch the image and FLICKER, so we guard every write.
   const GRAB_CUR = "url('./cursor_grab.png') 20 24, grab";        // open hand → hovering something draggable/clickable
@@ -2499,6 +2500,22 @@ async function run(){
     const right=cam.getDirection(BABYLON.Axis.X), up=cam.getDirection(BABYLON.Axis.Y);
     cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
   });
+  // BOTH-buttons directional (joystick) pan — while held, the camera scrolls toward the mouse's offset
+  // from the press point, faster the further you push (same depth-based speed as the edge-pan).
+  scene.onBeforeRenderObservable.add(() => {
+    if(!joyPan) return;
+    const DZ = 8, REF = 200;   // px deadzone around the press point - px offset that reaches full-speed pan
+    let ox = scene.pointerX - joyOX, oy = scene.pointerY - joyOY;
+    ox = Math.abs(ox) > DZ ? ox - Math.sign(ox)*DZ : 0;
+    oy = Math.abs(oy) > DZ ? oy - Math.sign(oy)*DZ : 0;
+    if(!ox && !oy){ setPanCursor(false); return; }
+    const ex = Math.max(-1.6, Math.min(1.6, ox/REF)), ey = Math.max(-1.6, Math.min(1.6, -oy/REF));   // screen-down = pan down
+    orbitLocked = false;
+    const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    const right = cam.getDirection(BABYLON.Axis.X), up = cam.getDirection(BABYLON.Axis.Y);
+    cam.target.addInPlace(right.scale(ex*sp)).addInPlace(up.scale(ey*sp));
+    setPanCursor(true, scene.pointerX, scene.pointerY, ex, ey);   // arrow.png points the pan direction
+  });
   // Arrow-key panning (same feel as the edge-pan). Ignored while typing in a dev slider/input.
   const arrowKeys = Object.create(null);
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
@@ -2520,6 +2537,11 @@ async function run(){
       showTips();
       scene.stopAnimation(cam);   // any interaction cancels the one-shot focus swivel → it never fights a drag
       if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }   // stop pinning radius the moment the user grabs the camera
+      if((e.buttons & 3) === 3 && dragAtom < 0){   // BOTH mouse buttons held → directional (joystick) pan, anchored here
+        joyPan = true; joyOX = scene.pointerX; joyOY = scene.pointerY;
+        rtsBoxing = false; rotating = false; dragging = true;   // cancel a left-started box - suppress edge-pan while joystick-panning
+        return;
+      }
       if(e.button === 1){   // MIDDLE = rotate the camera. Driven manually (inertial offsets) so it works in
         rotating = true; dragging = true;                          // every browser, independent of Babylon's button filtering.
         cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
@@ -2541,6 +2563,8 @@ async function run(){
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERUP){ hideTipsSoon(); dragging = false;
       setCursor('');   // revert to the default cursor after a drag (the next hover re-applies the grab hand)
+      if(joyPan){ if((e.buttons & 3) !== 3){ joyPan = false; setPanCursor(false); }   // a button released → end joystick pan
+        return; }                                                                       // swallow the release (no select / move / spawn)
       if(e.button === 1){ rotating = false; return; }   // middle-drag rotate ends (inertia carries on)
       if(e.button === 2){ return; }   // right-button up → nothing (the move order already fired on press)
       if(dragAtom >= 0){ dragAtom = -1; cam.attachControl(canvas, true); cam.inputs.attached.pointers.buttons = []; return; }   // finished moving a spawned atom
@@ -2563,6 +2587,7 @@ async function run(){
       }
     }
     else if(p.type === BABYLON.PointerEventTypes.POINTERMOVE){
+      if(joyPan) return;   // both-buttons joystick pan → the frame observer applies it (offset from the press point)
       if(rotating){   // MIDDLE-drag → orbit. Mirror Babylon's own inertial rotation, but on our button.
         cam.inertialAlphaOffset -= (e.movementX || 0) / cam.angularSensibilityX;
         cam.inertialBetaOffset  -= (e.movementY || 0) / cam.angularSensibilityY;
