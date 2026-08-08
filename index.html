@@ -2147,8 +2147,12 @@ async function run(){
   const cam = new BABYLON.ArcRotateCamera('cam', -Math.PI/2, Math.PI/2.3, 100,
     BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas, true);
+  // RTS camera: the up-axis is the FLOOR NORMAL (Z), not world-Y. That makes alpha (horizontal rotate) a
+  // yaw around Z, so the camera orbits in a circle PARALLEL to the XY floor — SC2-style. beta is the tilt
+  // away from straight-down. (The XY sheet is the ground here, its normal is +Z.)
+  cam.upVector = new BABYLON.Vector3(0, 0, 1);
   cam.fov = 0.8; cam.minZ = 0.15; cam.inertia = 0.85; cam.panningSensibility = 20;   // minZ up from 0.02 → far better depth precision (kills z-fighting stripes)
-  cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // full 360° vertical rotation
+  cam.lowerBetaLimit = 0.08; cam.upperBetaLimit = 1.45;   // clamp the tilt between near-top-down and near-edge-on, so you never rotate under the floor
   // We drive ALL camera motion ourselves (see the pointer handler): MIDDLE-drag rotates, LEFT-drag moves
   // the molecule under the cursor (or pans empty background), RIGHT-drag pans, wheel zooms. Babylon's own
   // pointer rotation is disabled (empty button list) so it never fights our handlers.
@@ -4164,13 +4168,17 @@ async function run(){
       const t=cam.getTarget(), np=cam.position.add(new BABYLON.Vector3(wx-t.x, wy-t.y, 0));
       cam.setTarget(new BABYLON.Vector3(wx, wy, t.z)); cam.setPosition(np); });   // one-shot recentre, rotation + zoom unchanged
   }
-  // Fixed default view: straight along +Z at the flattened RTS floor plane (models are all at Z=0).
-  const CAM_DEF_TGT = new BABYLON.Vector3(50, -6, 0), CAM_DEF_POS = new BABYLON.Vector3(50, -6, -1184);
+  // Default RTS view: an oblique top-down look at the flattened floor plane (models are all at Z=0). The
+  // camera is raised in +Z and pulled back along -Y (so the far edge sits at the top of the screen), giving
+  // beta≈0.62 rad off straight-down at radius 1184 — same zoom scale as before, now tilted like an RTS.
+  const CAM_DEF_TGT = new BABYLON.Vector3(50, -6, 0), CAM_DEF_POS = new BABYLON.Vector3(50, -693.6, 963.7);
+  let CAM_DEF_ALPHA = 0, CAM_DEF_BETA = 0;   // filled in from the derived angles right after the first resetView() (used by viewPerp)
   const resetView = () => { scene.stopAnimation(cam);   // R → restore the default starting view
     if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }
     cam.setTarget(CAM_DEF_TGT.clone()); cam.setPosition(CAM_DEF_POS.clone());
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0; cam.inertialPanningX = cam.inertialPanningY = 0; gZoomVel = 0; };
   resetView();
+  CAM_DEF_ALPHA = cam.alpha; CAM_DEF_BETA = cam.beta;   // capture the RTS-orbit angles Babylon derived from the default position (for viewPerp)
   cam.lowerRadiusLimit = Math.max(0.3, cam.radius*0.0006);   // tiny positive floor → no flip; allows getting right up to an atom (double-click keeps its scale)
   cam.upperRadiusLimit = cam.radius*5;
   // Centre a freshly-selected object: a SHORT one-shot target animation (smooth swivel). This would
@@ -6082,17 +6090,13 @@ async function run(){
     D.addEventListener('fullscreenchange', sync); D.addEventListener('webkitfullscreenchange', sync);
     D.body.appendChild(fs); }
 
-  // ── Camera: swing perpendicular to the spawn plane (view the 2-D sheet head-on) ──
+  // ── Camera: swing back to the default RTS framing (oblique top-down, orbit parallel to the floor) ──
   const viewPerp = () => {
-    let best = null, bd = Infinity;                            // nearest raw alpha looking along ±Z
-    for(const base of [Math.PI/2, -Math.PI/2]){
-      const v = base + 2*Math.PI*Math.round((cam.alpha - base)/(2*Math.PI));
-      const d = Math.abs(v - cam.alpha); if(d < bd){ bd = d; best = v; }
-    }
+    const best = CAM_DEF_ALPHA + 2*Math.PI*Math.round((cam.alpha - CAM_DEF_ALPHA)/(2*Math.PI));   // nearest wrap of the default heading (no long way round)
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
     cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
     BABYLON.Animation.CreateAndStartAnimation('perpA', cam, 'alpha', 60, 26, cam.alpha, best, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
-    BABYLON.Animation.CreateAndStartAnimation('perpB', cam, 'beta', 60, 26, cam.beta, Math.PI/2, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('perpB', cam, 'beta', 60, 26, cam.beta, CAM_DEF_BETA, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
   const capOf = [2,6,10,14], subL = ['s','p','d','f'];
   const sup = c => String(c).replace(/[0-9]/g, d => '⁰¹²³⁴⁵⁶⁷⁸⁹'[+d]);
