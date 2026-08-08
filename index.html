@@ -5638,8 +5638,10 @@ async function run(){
       } else { m.x=nx; m.y=ny; }
       syncMesh(m);
     };
-    // §16 per-type override hooks — call m.hooks[name] if present, else the base default (undefined = "no hook").
-    const hook = (m, name, ...a) => (m.hooks && m.hooks[name]) ? m.hooks[name](m, ...a) : undefined;
+    // §16 per-type override hooks — virtual dispatch like a MoleculeBody subclass: a per-INSTANCE hook wins,
+    // else the molecule TYPE's definition (moleculeSpec[name], see PER-MOLECULE DEFINITIONS), else the base
+    // default (undefined = "no hook", i.e. Godot's stub).
+    const hook = (m, name, ...a) => { const h = (m.hooks && m.hooks[name]) || (moleculeSpec[m.name] && moleculeSpec[m.name][name]); return h ? h(m, ...a) : undefined; };
     const isMolecule = b => b && b.tags && b.tags.has('MoleculeBody2D') && b.alive;
     const isAncestor = (m, body) => { let p = body.parentComplex; while(p){ if(p===m) return true; p=p.parentComplex; } return false; };
     const withinR = (a, b, r) => { const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy <= r*r; };
@@ -5684,7 +5686,7 @@ async function run(){
     // §8.2 try_PULLING — move the body onto the in-transit category, register it on the slot, steer it in.
     const tryPulling = (m, body) => {
       const slot = pullingConditions(m, body);
-      if(slot){ setCategory(body, CAT.IN_TRANSIT); slot.pulledBodies.add(body); body.hardTarget = slot; body.flags.repelFrom = null; }
+      if(slot){ setCategory(body, CAT.IN_TRANSIT); slot.pulledBodies.add(body); body.hardTarget = slot; body.flags.repelFrom = null; hook(m,'pullingSpecialActions', body); }
       else repelling(m, body);
     };
     // §8.3 repelling — nudge a latecomer away from a slot of mine it is drifting to that is already full.
@@ -5735,10 +5737,94 @@ async function run(){
       cascadeAfterBind(m, slot);                                             // ACTIONS 16-19
     };
     /* ── §10 RELEASE — emit a bound molecule back into the world as a fresh free agent. ── */
-    const moleculeSpec = {};                                               // per-type {speed,radius,placeInChain,...} — populated in Part 8; defaults below
+    /* ══════════════════════════════════════════════════════════════════════════════════════════════
+       PER-MOLECULE DEFINITIONS  —  one block per molecule type, mirroring ProjectMPB's per-molecule
+       scripts (Scenes/Level_7_scenes_and_scripts/<Name>.gd). Everything GENERIC lives in the shared
+       engine above (= the base MoleculeBody2D.gd). Each block here is the equivalent of a subclass:
+       its numeric config (speed / radius / placeInChain / excitable — set by the .tscn scene in Godot)
+       plus the handful of overridable hooks a molecule actually customises:
+          ready                    ← _ready() extras (after super._ready)
+          physicsProcess           ← _physics_process() extras (after super)
+          checkSoftTarget          ← check_soft_target()
+          pullingSpecialActions    ← PULLING_special_actions(body)
+          bindingSpecialConditions ← BINDING_special_conditions(body, slot)   (return false = block)
+          bindingSpecialActions    ← BINDING_special_actions(slot)
+          releasingSpecialConditions ← RELEASING_special_conditions(name)     (return false = block)
+          releasingSpecialActions  ← RELEASING_special_actions(body)
+       Hooks are dispatched by type via hook()/hookAsync() (virtual-dispatch on molecule_name). A block
+       may omit any hook — the engine then uses the base default (Godot's stub: `return true` / `pass`).
+       ══════════════════════════════════════════════════════════════════════════════════════════════ */
+    // OEC water-splitting (OEC.gd → try_to_remove_electron_from_water): H2O→OH→O over two extractions,
+    // each ejecting one electron (into my electron slot) + one proton, and finally releasing an O.
+    const oecSplitWater = (m) => {
+      const eslot = (m.bindSites||[]).find(s => s.name === 'electron');
+      const wslot = (m.bindSites||[]).find(s => s.name === 'H2O');
+      if(!eslot || !wslot || !wslot.occupied || eslot.occupied) return;        // need bound water + an empty electron slot
+      const psII = [...nodesInGroup('photosystem_II')];
+      const tgt = psII.length ? psII[Math.floor(rnd01()*psII.length)] : null;  // soft target for the products (a PSII)
+      m._waterState = m._waterState || 0;                                       // 0 = H2O, 1 = OH
+      if(m._waterState === 0){ m._waterState = 1; }                             // H2O → OH (first extraction)
+      else { m._waterState = 0;                                                 // OH → O: emit the oxygen atom, empty the slot
+        const o = make('O', wslot.x, wslot.y, { speed: specOf('O').speed ?? 60, radius: specOf('O').radius ?? 6 });
+        o.category = CAT.IN_TRANSIT; o.flags.exiting = true; if(tgt){ o.softTarget = tgt; o.dir = norm({x:tgt.x-o.x, y:tgt.y-o.y}); }
+        all.add(o); hook(o,'ready'); wslot.occupied = false; syncMesh(wslot); }
+      const e = make('electron', wslot.x, wslot.y, { speed: specOf('electron').speed ?? 90, radius: specOf('electron').radius ?? 5 });
+      e.category = CAT.IN_TRANSIT; e.hardTarget = eslot; eslot.pulledBodies.add(e); all.add(e); hook(e,'ready');   // electron flies into my electron slot
+      const p = make('proton', wslot.x, wslot.y, { speed: specOf('proton').speed ?? 70, radius: specOf('proton').radius ?? 4 });
+      p.category = CAT.IN_TRANSIT; p.flags.exiting = true; if(tgt) p.softTarget = tgt; p.dir = norm({x: rnd01()*2-1, y: 1}); all.add(p); hook(p,'ready');
+    };
+    const moleculeSpec = {
+      // ── H2O.gd ── drifts to a random OEC's water slot
+      H2O: { speed:50, radius:6,
+        checkSoftTarget(m){ const oec=[...nodesInGroup('OEC')]; if(!oec.length) return; const s=(oec[Math.floor(rnd01()*oec.length)].bindSites||[]).find(x=>x.name==='H2O'); if(s) m.softTarget=s; } },
+      // ── electron.gd ── an orphaned electron (no target, not bound, not mid-handshake) dies
+      electron: { speed:90, radius:5,
+        physicsProcess(m){ if(!m.isSlot && !m.hardTarget && !m.boundTo && !m.flags.binding_ongoing && !m.flags.exiting) kill(m); } },
+      // ── proton.gd ── all special hooks are stubs
+      proton: { speed:70, radius:4 },
+      // ── O.gd ── on spawn, pair up with the nearest other O (mutual hard target → they meet and fuse to O2 in the base)
+      O: { speed:60, radius:6,
+        ready(m){ const others=[...nodesInGroup('O')].filter(o=>o!==m&&o.alive&&!o.isSlot); if(!others.length) return;
+          let best=others[0],bd=Infinity; for(const o of others){ const dx=o.x-m.x,dy=o.y-m.y,d=dx*dx+dy*dy; if(d<bd){bd=d;best=o;} }
+          m.hardTarget=best; best.hardTarget=m; } },
+      // ── O2.gd ── special hooks are stubs (cosmetic pulsing only in Godot)
+      O2: { speed:60, radius:7 },
+      // ── photon.gd ── aim at the nearest antenna pigment on spawn; keep the sprite pointing along travel
+      photon: { speed:220, radius:4,
+        ready(m){ const cand=[...nodesInGroup('chlorophyll_A'),...nodesInGroup('chlorophyll_A_PSI'),...nodesInGroup('violaxanthin'),...nodesInGroup('zeaxanthin')].filter(c=>c.alive&&!c.isSlot);
+          if(!cand.length) return; let best=cand[0],bd=Infinity; for(const c of cand){ const dx=c.x-m.x,dy=c.y-m.y,d=dx*dx+dy*dy; if(d<bd){bd=d;best=c;} }
+          m.dir=norm({x:best.x-m.x, y:best.y-m.y}); },
+        physicsProcess(m){ m.rot = Math.atan2(m.dir.y, m.dir.x); } },
+      // ── chlorophyll_A.gd / P680.gd / P700.gd ── antenna + reaction centres: hooks are stubs (label loop is cosmetic)
+      chlorophyll_A: {}, chlorophyll_A_PSI: {}, P680: {}, P700: {},
+      // ── OEC.gd ── binding OR releasing water triggers an extraction step
+      OEC: { bindingSpecialActions(m){ oecSplitWater(m); }, releasingSpecialActions(m){ oecSplitWater(m); } },
+      // ── NADP.gd ── only take an electron while bound to FNR; only take a proton once an electron is held. Never releases (sink).
+      NADP: { speed:50, radius:9,
+        bindingSpecialConditions(m, body){
+          if(inGroup(body,'electron') && !(m.boundTo && inGroup(m.boundTo,'FNR'))) return false;
+          if(inGroup(body,'proton')){ const e=(m.bindSites||[]).find(s=>s.name==='electron'); if(!(e && e.occupied)) return false; }
+          return true; },
+        releasingSpecialConditions(){ return false; },
+        checkSoftTarget(m){ const e=(m.bindSites||[]).find(s=>s.name==='electron');
+          const grp = (e && e.occupied) ? 'RuBisCO' : 'FNR', hosts=[...nodesInGroup(grp)];
+          if(hosts.length){ const s=(hosts[Math.floor(rnd01()*hosts.length)].bindSites||[]).find(x=>x.name.indexOf('NADP')===0); if(s) m.softTarget=s; } } },
+      // ── Photosystem_II.gd ── only accept a plastoquinone_B whose own slots are all empty
+      photosystem_II: { bindingSpecialConditions(m, body){ if(inGroup(body,'plastoquinone_B')){ for(const s of (body.bindSites||[])) if(s.occupied) return false; } return true; } },
+      // ── photosystem_I.gd ── only accept a plastocyanin that is carrying an electron
+      photosystem_I: { bindingSpecialConditions(m, body){ if(inGroup(body,'plastocyanin')){ const e=(body.bindSites||[]).find(s=>s.name==='electron'); if(!(e && e.occupied)) return false; } return true; } },
+      // ── mobile carriers (numeric config only; special hooks are stubs) ──
+      plastoquinone_B: { speed:40, radius:10 }, plastocyanin: { speed:60, radius:8 }, ferredoxin: { speed:60, radius:8 },
+      // ── Calvin-cycle + misc free molecules (stubs) ──
+      CO2: { speed:55, radius:6 }, ATP: { speed:55, radius:8 }, ADP: { speed:55, radius:8 }, phosphate: { speed:60, radius:4 }, glucose: { speed:40, radius:10 },
+      // Fixed cofactor complexes below customise nothing (all-stub subclasses): tyrosine, pheophytin, heme,
+      // iron_sulfur_cluster_inside_cytochrome_b6f, iron_sulfur_cluster_inside_photosystem_I, phylloquinone,
+      // plastoquinone_A, violaxanthin, zeaxanthin, ferredoxin/FNR/plastocyanin proteins, cytochrome_b6f,
+      // ATP-synthase, NDH-1, RuBisCO, Fe3+ — they run entirely on the shared engine.
+    };
     const specOf = name => moleculeSpec[name] || {};
     const rnd01 = () => Math.random();
-    const hookAsync = async (m, name, ...a) => (m.hooks && m.hooks[name]) ? await m.hooks[name](m, ...a) : undefined;
+    const hookAsync = async (m, name, ...a) => { const h = (m.hooks && m.hooks[name]) || (moleculeSpec[m.name] && moleculeSpec[m.name][name]); return h ? await h(m, ...a) : undefined; };
     const pointDirectionToTarget = b => { const t = b.hardTarget || b.softTarget; if(t) b.dir = norm({x:t.x-b.x, y:t.y-b.y}); };
     const cloneSlots = (srcSlots, parent) => (srcSlots || []).map(s => {    // deep-copy a slot subtree (state carried outward)
       const c = make(s.name, s.x, s.y, { isSlot:true, radius:s.radius, nearbyR:s.nearbyR, touchR:s.touchR, parentComplex:parent, visible:s.visible });
@@ -5768,7 +5854,7 @@ async function run(){
       all.add(body); syncMesh(body);
       if(inGroup(body,'electron') && acceptor){ body.hardTarget = acceptor; acceptor.pulledBodies.add(body); }   // electron → fly to acceptor
       for(const b of [...m._nearbySet]) if(isMolecule(b)){ tryReleasing(b); tryPulling(m, b); }   // cascade
-      hook(body,'checkSoftTarget'); hook(m,'releasingSpecialActions', body); pointDirectionToTarget(body);
+      hook(body,'ready'); hook(body,'checkSoftTarget'); hook(m,'releasingSpecialActions', body); pointDirectionToTarget(body);
       return body;
     };
     const tryReleasing = async (m) => {                                   // §10.2 scan my slots, release each that qualifies
@@ -5839,7 +5925,7 @@ async function run(){
       if(inGroup(m,'O') && inGroup(body,'O') && body!==m && !m.flags.combining && !body.flags.combining){   // O + O → O2
         m.flags.combining = true; body.flags.combining = true;
         const o2 = make('O2', (m.x+body.x)/2, (m.y+body.y)/2, { speed: specOf('O2').speed ?? 60, radius: specOf('O2').radius ?? 8 });
-        all.add(o2); syncMesh(o2); kill(body); kill(m); return; }
+        all.add(o2); syncMesh(o2); hook(o2,'ready'); kill(body); kill(m); return; }
       if(!isAncestor(m, body) && !isAncestor(body, m) && body!==m) body.overlapping.push(m); // overlap bookkeeping
       if(inGroup(m,'plastoquinone_B') && inGroup(body,'membrane')) allowOverlap(m, body);    // PQ_B passes through the membrane
       if(inGroup(m,'plastoquinone_B') && inGroup(body,'plastoquinone_B')) allowOverlap(m, body);
@@ -5959,13 +6045,14 @@ async function run(){
       if(typeof gMolecules !== 'undefined') for(const mol of gMolecules){                        // free agents driving the spawned molecules
         const nm = MOLNAME[mol.name] || mol.name;
         const ag = spawnFree(nm, mol.cx, mol.cy, { speed:(moleculeSpec[nm] && moleculeSpec[nm].speed) || 60, radius:6 });
-        ag._gmol = mol;
+        ag._gmol = mol; hook(ag,'ready');   // fire the type's _ready() (e.g. photon aims at an antenna, O pairs up)
       }
     };
     // One simulation frame: move → repel → sense → advance coroutines. Callable manually (for deterministic
     // tests, independent of the throttled render loop) or driven by the render loop below.
     const tickOnce = (dt) => {
       for(const m of all) step(m, dt);
+      for(const m of [...all]) if(m.alive && !m.isSlot) hook(m, 'physicsProcess', dt);   // per-type _physics_process() extras (snapshot: a hook may kill)
       repelStep();
       sense();
       advanceDelays();
