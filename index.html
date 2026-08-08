@@ -2975,6 +2975,7 @@ async function run(){
   let gCollScale = 1.0;       // reactive-site / collision sphere radius multiplier. Dev slider.
   let gReactSites = null;     // { count, siteWorld(gi,out), radiusOf(gi), typeOf(gi) } → cofactor reactive spheres
   let gCollViz = null, gCollVizUpdate = null;   // dev wireframe collision spheres + their per-frame updater
+  let gCollVizHold = false;                     // true while V is held → reveal the collision spheres (independent of dev mode)
   let gShadePlaneMesh = null;                   // dev-only white plane at the shading reference
   const gParticles = [];      // game particles: water / photon / products {kind, mesh, x,y,z, vx,vy,vz, life}
   // Cofactor highlight: hovered group renders 25% brighter; selecting flashes the brightness a few times.
@@ -5047,7 +5048,7 @@ async function run(){
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
-    if(gCollViz) gCollViz.setEnabled(gDev);                 // wireframe collision spheres
+    if(gCollViz) gCollViz.setEnabled(gDev || gCollVizHold);   // wireframe collision spheres (also on while V is held)
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
@@ -5125,6 +5126,7 @@ async function run(){
   const COF_CID = { 7: 156620228 };                                    // 7 = chlorophyll a (PubChem link + skeletal fallback)
   const showEtcSel = gi => {
     etcSel = gi;
+    if(gi >= 0 && (gSel.size || gSelMol.size)){ gSel.clear(); gSelMol.clear(); updateSelectionUI(); }   // picking a cofactor drops any protein/molecule RTS selection, so the thick green silhouette (driven by gSel) stops wrapping the HOST PROTEIN and the cofactor's own green outline is what shows
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
     if(gi < 0 || !etcGroupPos){ modelLabel.style.display='none'; return; }
     const g = etcGroups[gi];
@@ -6089,7 +6091,7 @@ async function run(){
         for(let gi=0; gi<gReactSites.count; gi++){ if(gReactSites.typeOf(gi)!==1) continue;   // type 1 = OEC
           gReactSites.siteWorld(gi, _c); const r=gReactSites.radiusOf(gi)+p.rad, dx=p.x-_c.x, dy=p.y-_c.y, dz=p.z-_c.z;
           if(dx*dx+dy*dy+dz*dz < r*r){ gParticles.splice(i,1); splitWater(p); break; } } } }
-      if(gDev && gCollVizUpdate) gCollVizUpdate();   // keep the dev spheres on their (moving) cofactors
+      if((gDev || gCollVizHold) && gCollVizUpdate) gCollVizUpdate();   // keep the collision spheres on their (moving) cofactors (dev mode OR V held)
     });
   }
 
@@ -6949,8 +6951,10 @@ void main(void){
         m.vx = m.svx; m.vy = m.svy; m.av = m.sav; } }
     else if(k === 's' || k === 'S'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
         m.mtx = undefined; m.vx = 0; m.vy = 0; m.av = 0; } }   // S → cancel the move order + stop, but keep the stored heading so M resumes the SAME direction
+    else if(k === 'v' || k === 'V'){ gCollVizHold = true; if(gCollViz){ gCollViz.setEnabled(true); if(gCollVizUpdate) gCollVizUpdate(); } }   // V held → reveal the collision spheres
   });
-  window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false; });
+  window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false;
+    if(e.key === 'v' || e.key === 'V'){ gCollVizHold = false; if(gCollViz) gCollViz.setEnabled(gDev); } });   // V released → back to the dev-mode state
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
   { const sc = document.createElement('div'); sc.id = 'shortcuts';
     sc.style.cssText = 'position:fixed;left:16px;bottom:calc(25vh + 22px);z-index:14;display:none;'
@@ -6959,7 +6963,7 @@ void main(void){
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','zoom'],['Keskinappi + rulla','hidas zoom'],
       ['Nuolinäppäimet','panoroi'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
       ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
-      ['H','piilota käyttöliittymä'],['P','maalausefekti'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit']];
+      ['H','piilota käyttöliittymä'],['P','maalausefekti'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit'],['V (pohjassa)','näytä törmäyshahmot']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
       + rows.map(([k,v]) => '<span style="color:var(--brown);font-weight:bold">'+k+'</span> — '+v).join('<br>');
     document.body.appendChild(sc); gShortcuts = sc; }
