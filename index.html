@@ -2232,6 +2232,8 @@ async function run(){
     else if(etcSel >= 0 && etcGroups[etcSel]){ const g = etcGroups[etcSel]; sc = _zSel.set(g.cx, g.cy, g.cz); refD = Math.max(g.r * 4.0, 3.0); }
     else if(gSelModel >= 0){ const mi = mInfo[gSelModel]; sc = _zSel.set(mi.cx+gModelOff[gSelModel*3], mi.cy+gModelOff[gSelModel*3+1], mi.cz+gModelOff[gSelModel*3+2]);
       refD = Math.max(0.5 * Math.hypot(mi.x1-mi.x0, mi.y1-mi.y0, mi.z1-mi.z0), 6.0); }
+    else if(gSel && gSel.size){ let cx=0,cy=0,cz=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }   // RTS complex selection → centroid
+      const n=gSel.size; sc = _zSel.set(cx/n, cy/n, cz/n); refD = Math.max(fitRadius*0.06, 6.0); }
     if(sc){
       const d = BABYLON.Vector3.Distance(cam.position, sc);
       delta *= Math.max(0.05, Math.min(1.0, d / refD));   // 5% speed right at the object → smooth arrival
@@ -2245,10 +2247,11 @@ async function run(){
       cam.radius = minR;
     } else {
       const newR = Math.min(r, hi);
-      // Zoom TOWARD the cursor (not the viewport centre): keep the world point under the cursor fixed by
-      // shifting the pivot the same fraction the distance changed - target = P + f*(target - P).
-      if(gZoomP){ const f = newR / oldR;
-        cam.target.set(gZoomP.x + f*(cam.target.x-gZoomP.x), gZoomP.y + f*(cam.target.y-gZoomP.y), gZoomP.z + f*(cam.target.z-gZoomP.z)); }
+      // Zoom TOWARD the SELECTION when something is selected (sc), otherwise toward the cursor (gZoomP): keep
+      // that world point fixed by shifting the pivot the same fraction the distance changed - target = P + f*(target - P).
+      const zp = sc || gZoomP;
+      if(zp){ const f = newR / oldR;
+        cam.target.set(zp.x + f*(cam.target.x-zp.x), zp.y + f*(cam.target.y-zp.y), zp.z + f*(cam.target.z-zp.z)); }
       cam.radius = newR;
     }
   };
@@ -4523,8 +4526,13 @@ async function run(){
   selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
+  const _selMX = new BABYLON.Matrix(), _selLo = new BABYLON.Matrix(), _selTmp = new BABYLON.Matrix();
   const setSelOut = atom => {
     const n = fillOutline(selOutBuf, atom);
+    if(!atom.spawn){                                            // fillOutline builds the lobes in the atom's BAKED frame; the orbitals render through gModelXform (flattened to the floor). Flatten the lobes the same way so the outline hugs the orbitals instead of sitting at the un-flattened position.
+      BABYLON.Matrix.FromArrayToRef(gModelXform, modelOf(atom.center.x, atom.center.y, atom.center.z)*16, _selMX);
+      for(let i=0;i<n;i++){ BABYLON.Matrix.FromArrayToRef(selOutBuf, i*16, _selLo); _selLo.multiplyToRef(_selMX, _selTmp); _selTmp.copyToArray(selOutBuf, i*16); }
+    }
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
@@ -6725,7 +6733,7 @@ async function run(){
     // ── Orbital render (the atom's real lobes — same 'orb' shader as the 3-D scene) — LEFT region ──
     const orbViz = document.createElement('canvas');
     orbViz.width = orbViz.height = 256;
-    orbViz.style.cssText = 'width:150px;height:150px;display:block;margin:0 auto;';
+    orbViz.style.cssText = 'width:210px;height:210px;display:block;margin:0 auto;';
     // Title: Finnish element name + "atomi" (e.g. "Hiiliatomi"), serif face like the sketch.
     const title = document.createElement('div');
     title.textContent = elemNameFi(e);
@@ -6797,7 +6805,12 @@ async function run(){
     nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
     // Vertical stack in the narrow right-side info module: name → 3D orbital render → orbital table → nucleus row.
     grid.style.margin = '0 auto';   // centre the table in the column
-    ca.appendChild(title); ca.appendChild(orbViz); ca.appendChild(grid); ca.appendChild(nucRow);
+    // Section labels: the orbital render + energy table are the ELECTRON CLOUD; the proton/neutron ball is the NUCLEUS.
+    const cloudLbl = document.createElement('div'); cloudLbl.textContent = 'elektronipilvi';
+    cloudLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:2px 0 0;letter-spacing:.3px;";
+    const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'Ydin';
+    ydinLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:10px 0 0;letter-spacing:.3px;";
+    ca.appendChild(title); ca.appendChild(cloudLbl); ca.appendChild(orbViz); ca.appendChild(grid); ca.appendChild(ydinLbl); ca.appendChild(nucRow);
     ca.style.display = 'flex';
     hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1); selPanel.style.display = 'none';   // atom info OWNS the info module
     renderPreviews(atom, orbViz, nucViz);   // 3D orbitals (+ composited nucleus) → the render canvas, real-scale 3D nucleus → the nucleus canvas
