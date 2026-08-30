@@ -6824,7 +6824,7 @@ async function run(){
   const onDouble = () => {
     if(spawnEl) return;
     const a = pickAtom();
-    if(a && BABYLON.Vector3.Distance(cam.position, a.world || a.center) <= 15.0){ clearEtcSel(); centerOnAtom(a); return; }   // atoms select only up close (≤15, to where they RENDER) — farther, fall through
+    if(a && BABYLON.Vector3.Distance(cam.position, a.world || a.center) <= BUBBLE_R){ clearEtcSel(); centerOnAtom(a); return; }   // atoms are selectable wherever they RENDER (within the reveal bubble); pickAtom already returns only revealed atoms — farther, fall through to cofactor/complex
     const gi = pickEtcGroup();
     if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
     if(gSel.size){   // double-click centres the camera on the RTS selection AND arms the follow (keeps rotation free)
@@ -6863,7 +6863,7 @@ async function run(){
       if(wholeInView()){ macroHover(); hl.setEnabled(false); return; }   // zoomed out → hover the whole protein (white box), not atoms
       if(gMacroHover){ gMacroHover=false; if(!gMacroSel) setOutline(false); }
       const a = pickAtom();
-      const overAtom = !!a && BABYLON.Vector3.Distance(cam.position, a.center) <= 15.0;
+      const overAtom = !!a && BABYLON.Vector3.Distance(cam.position, a.center) <= BUBBLE_R;   // hover an atom anywhere it renders (matches the selection gate)
       if(overAtom){   // CLOSE → hover the ATOM (same tier as selecting)
         // don't hover-outline the atom that's already selected → its selOut is enough (no doubled stroke)
         if(BABYLON.Vector3.DistanceSquared(a.center, selCenter) > 0.09) setHL(a); else hl.setEnabled(false);
