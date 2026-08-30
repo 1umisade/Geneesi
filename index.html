@@ -2152,7 +2152,7 @@ async function run(){
   // away from straight-down. (The XY sheet is the ground here, its normal is +Z.)
   cam.upVector = new BABYLON.Vector3(0, 0, 1);
   cam.fov = 0.8; cam.minZ = 0.15; cam.inertia = 0.85; cam.panningSensibility = 20;   // minZ up from 0.02 → far better depth precision (kills z-fighting stripes)
-  cam.lowerBetaLimit = 0.08; cam.upperBetaLimit = 1.45;   // clamp the tilt between near-top-down and near-edge-on, so you never rotate under the floor
+  cam.lowerBetaLimit = 0.02; cam.upperBetaLimit = Math.PI - 0.02;   // full tilt sweep — top-down → edge-on (membrane-parallel) → the other side — so you can orbit all the way around a selection (only the two gimbal poles are excluded)
   // We drive ALL camera motion ourselves (see the pointer handler): MIDDLE-drag rotates, LEFT-drag moves
   // the molecule under the cursor (or pans empty background), RIGHT-drag pans, wheel zooms. Babylon's own
   // pointer rotation is disabled (empty button list) so it never fights our handlers.
