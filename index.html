@@ -2631,6 +2631,19 @@ async function run(){
     const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
     panFloor(ex, ey, sp);
   });
+  // WASD rotates the camera exactly like the middle-drag orbit: A/D yaw (alpha) around the floor normal,
+  // W/S tilt (beta). Direct alpha/beta drive, dt-scaled so it is frame-rate independent, and it never touches
+  // the target — safe for the ArcRotateCamera. Pressing a key first cancels any running focus animation (like
+  // grabbing the mouse does). (S also stops selected molecules — that binding is a no-op with nothing selected.)
+  const wasdKeys = Object.create(null);
+  window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
+  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
+  scene.onBeforeRenderObservable.add(() => {
+    const rot = 1.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;   // ~86°/s, frame-rate independent
+    if(wasdKeys.a) cam.alpha += rot; if(wasdKeys.d) cam.alpha -= rot;   // A / D → yaw (matches dragging left / right)
+    if(wasdKeys.w) cam.beta  += rot; if(wasdKeys.s) cam.beta  -= rot;   // W / S → tilt (matches dragging up / down)
+  });
   scene.onPointerObservable.add(p => {
     const e = p.event;
     if(p.type === BABYLON.PointerEventTypes.POINTERDOWN){
