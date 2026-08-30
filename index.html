@@ -112,6 +112,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #membrane-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #membrane-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #membrane-icon{font-size:15px;line-height:1}
+#memcut-btn{position:absolute;left:16px;top:348px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#memcut-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#memcut-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#memcut-icon{font-size:15px;line-height:1}
 #vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
@@ -222,6 +230,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="dev-btn" title="Dev-tila: mallien siirto/kierto-työkalu + sijaintimerkinnät"><span id="dev-icon">🛠️</span><span id="dev-label">Dev</span></button>
 <button id="lantern-btn" title="Lyhty: pimennä kaikki paitsi kiihdytetty elektroni (valaisee lähiatomit)"><span id="lantern-icon">🏮</span><span id="lantern-label">Lyhty</span></button>
 <button id="membrane-btn" title="Piilota lipidikalvo (parantaa suorituskykyä)"><span id="membrane-icon">🟰</span><span id="membrane-label">Kalvo</span></button>
+<button id="memcut-btn" title="Piilota kameran puoleinen kalvon puolisko (näe proteiinien läpi)"><span id="memcut-icon">◧</span><span id="memcut-label">Puolikas</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="zoomtips">
@@ -3085,6 +3094,13 @@ async function run(){
         const lab=document.getElementById('membrane-label'); if(lab) lab.textContent = gMembrane ? 'Kalvo' : 'Kalvo pois'; });
       mb.classList.toggle('on', !gMembrane);   // reflect the default-hidden state on the button at startup
       const lab=document.getElementById('membrane-label'); if(lab) lab.textContent = gMembrane ? 'Kalvo' : 'Kalvo pois'; } }
+  // Membrane half-cut → fade out the CAMERA-SIDE leaflet so it stops occluding the complexes. This used to be
+  // permanently on (wantCut hardcoded true); now it is button-controlled and OFF by default, so the full
+  // bilayer shows until you choose to cut the near half. gCut[2] eases in/out over MEM_FADE_S when toggled.
+  let gMemCut = false;
+  { const cb = document.getElementById('memcut-btn');
+    if(cb){ cb.addEventListener('click', () => { gMemCut = !gMemCut; cb.classList.toggle('on', gMemCut); });
+      cb.classList.toggle('on', gMemCut); } }
   const CONE_COS = 11.0;      // reveal tube radius (Å): only atoms within this ⊥ distance of the view axis show orbitals
   // Graphics mode 2 cone half-angle, as tan(angle) off the view axis. Sized from the LIVE viewport:
   // 0.78 × the wider half-FOV → a big reveal that still never fills the frame (the long axis' edges
@@ -4345,7 +4361,7 @@ async function run(){
     // conditions below form a single on/off threshold (with hysteresis so it can't chatter on the
     // boundary), and gCut[2] then eases to that target over MEM_FADE_S seconds. At rest it is always
     // exactly 0 or 1, so lipids are either fully solid or completely gone.
-    const wantCut = true;   // camera-side membrane is hidden PERMANENTLY (RTS view) — always cut the near half
+    const wantCut = gMemCut;   // camera-side leaflet is cut only when the "Puolikas" button is on (no longer automatic)
     memCutOn = wantCut;
     const step = Math.min(engine.getDeltaTime(), 50) / (MEM_FADE_S * 1000);
     gCut[2] += Math.max(-step, Math.min(step, (wantCut ? 1 : 0) - gCut[2]));   // 1 s linear fade to full-on / full-off
