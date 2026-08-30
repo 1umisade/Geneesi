@@ -2562,7 +2562,7 @@ async function run(){
       else { _vpSel.width=canvas.clientWidth; _vpSel.height=canvas.clientHeight;
         const s=BABYLON.Vector3.Project(new BABYLON.Vector3(gPing.x,gPing.y,gPing.z), BABYLON.Matrix.Identity(), scene.getTransformMatrix(), _vpSel);
         if(s.z>=0 && s.z<=1){ const a=(1-el).toFixed(3);
-          const c1=gPing.follow?'74,51,32':'163,184,129', c2=gPing.follow?'124,92,57':'196,214,150';   // dark-brown = follow, sage = ground move (Solukko palette)
+          const c1=gPing.follow?'74,51,32':'163,184,129', c2=gPing.follow?'124,92,57':'196,214,150';   // dark-brown = follow, sage = ground move (Solukko palette)ddddddddddddddddd
           oc2.strokeStyle='rgba('+c1+','+a+')'; oc2.lineWidth=3;   oc2.beginPath(); oc2.arc(s.x, s.y, 6+el*30, 0, 6.2832); oc2.stroke();
           oc2.strokeStyle='rgba('+c2+','+a+')'; oc2.lineWidth=2; oc2.beginPath(); oc2.arc(s.x, s.y, 2+el*15, 0, 6.2832); oc2.stroke(); } } }
     if(gDev){ const W=selOverlay.width, H=selOverlay.height, M=EDGE_M;   // dev: show the edge-pan trigger bands (sage)
@@ -4207,6 +4207,23 @@ async function run(){
       () => { if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; } cam.radius = R; });   // done → stop pinning, land at the exact zoom we started with
     gFocusRadiusObs = scene.onBeforeRenderObservable.add(() => { cam.radius = R; });   // hold zoom constant for the ~0.23 s swivel (radius only — never touches alpha/beta, so it can't fight rotation)
   };
+  // Double-click focus that ALSO points the camera parallel to the membrane: centres on `center` AND snaps
+  // the orientation back to the default framing (alpha/beta = CAM_DEF), where world-X (the membrane axis)
+  // runs horizontally — the clean side-on view. All four properties animate together, target created FIRST so
+  // the alpha/beta/radius anims (created after) win each frame over the target-setter's recompute → one smooth
+  // swivel, no fight. Like every camera animation it is killed the instant a drag starts, so rotation stays safe.
+  const focusAlongMembrane = center => {
+    scene.stopAnimation(cam);
+    if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }
+    const R = cam.radius, F = 18;
+    const aEnd = CAM_DEF_ALPHA + 2*Math.PI*Math.round((cam.alpha - CAM_DEF_ALPHA)/(2*Math.PI));   // nearest wrap of the level heading (no long way round)
+    const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
+    BABYLON.Animation.CreateAndStartAnimation('memTgt', cam, 'target', 60, F, cam.getTarget().clone(), center.clone(), BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('memA',   cam, 'alpha',  60, F, cam.alpha, aEnd,         BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('memB',   cam, 'beta',   60, F, cam.beta,  CAM_DEF_BETA, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
+    BABYLON.Animation.CreateAndStartAnimation('memR',   cam, 'radius', 60, F, R, R,                    BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);   // hold zoom, overriding the target-setter's radius recompute
+  };
   cam.wheelPrecision   = 40/Math.max(dimX,1);               // additive wheel step crosses 0 for the fly-through
   cam.panningSensibility = 6000/Math.max(dimX,1);
   // Speed slider (bottom-left) → drives ONLY molecule movement + boil/wiggle speed (both via gSpeed).
@@ -5144,7 +5161,7 @@ async function run(){
     const g = etcGroups[gi];
     gFlashGroup = gi; gFlashT0 = performance.now();            // flash the picked cofactor bright a few times, then back to normal
     orbitCenter.set(g.cx, g.cy, g.cz); orbitLocked = true;      // camera orbits the cofactor you picked
-    focusCameraOn(orbitCenter);                                 // one-shot swivel to centre the picked cofactor
+    focusAlongMembrane(orbitCenter);                            // centre the picked cofactor AND level to the membrane-parallel view
     modelLabel.textContent = (ETC_NAMES[g.type]||'Kofaktori') + '   ' + g.n + ' atomia';
     modelLabel._w = new BABYLON.Vector3(g.cx, g.cy, g.cz);
   };
@@ -6796,7 +6813,7 @@ async function run(){
     if(gi >= 0){ clearAtomSel(); deselectModel(); showEtcSel(gi); return; }
     if(gSel.size){   // double-click centres the camera on the RTS selection AND arms the follow (keeps rotation free)
       let cx=0,cy=0,cz=0; for(const mi of gSel){ cx+=mInfo[mi].cx+gModelOff[mi*3]; cy+=mInfo[mi].cy+gModelOff[mi*3+1]; cz+=mInfo[mi].cz+gModelOff[mi*3+2]; }
-      const n=gSel.size; focusCameraOn(new BABYLON.Vector3(cx/n, cy/n, cz/n)); gCamFollow = true; return;
+      const n=gSel.size; focusAlongMembrane(new BABYLON.Vector3(cx/n, cy/n, cz/n)); gCamFollow = true; return;   // centre AND level to the membrane-parallel view
     }
     // Whole-complex selection (→ move/rotate gizmo) is a DEV-mode tool only.
     if(gDev){ const mid = pickModelAtCursor();
