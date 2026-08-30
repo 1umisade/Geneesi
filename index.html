@@ -3959,7 +3959,9 @@ async function run(){
     const tPosV = [ Array.from({length:NV},(_,v)=>applyVar(tPos[0],v)), Array.from({length:NV},(_,v)=>applyVar(tPos[1],v)) ];
     // Build ONE lipid's lobes with exactly the protein's representation: core (non-hybridised)
     // orbitals, hybridised σ bonds with back-knobs, π lobes, and VSEPR lone pairs.
-    // Membrane palette: yellow overall, POLAR heads (O/P/N) orange — instead of per-element colours.
+    // Membrane palette for the vdW SPHERES only: yellow overall, POLAR heads (O/P/N) orange, so the membrane
+    // still reads as one distinct structure when zoomed out. The ORBITAL lobes are coloured per-element (below),
+    // so once you zoom in to the orbitals they match the proteins' element colours.
     const lipCol = e => { const s = EL_LIST[e]; return (s==='O'||s==='P'||s==='N') ? [1.0,0.55,0.10] : [0.96,0.80,0.28]; };
     const buildLobes = pos => {
       const core={m:[],col:[],cen:[],oid:[]}, bond={m:[],tap:[],col:[],cen:[],oid:[]}, tmp=new Float32Array(16);
@@ -3969,7 +3971,7 @@ async function run(){
         for(let j=0;j<16;j++) bond.m.push(tmp[j]);
         bond.tap.push(tap); bond.col.push(c[0],c[1],c[2]); bond.cen.push(cx,cy,cz); bond.oid.push(oid); };
       for(let k=0;k<LN;k++){ const e=lipid.el[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
-        const cx=pos[k*3], cy=pos[k*3+1], cz=pos[k*3+2], c=lipCol(e);
+        const cx=pos[k*3], cy=pos[k*3+1], cz=pos[k*3+2], c=info(e).c;   // orbital lobes → per-element colour
         for(const sh of cfg){ const n=sh[0], ty=sh[1], R=n*SHELL_STEP, oid=n*100+ty*10;
           if(maxNe>1 && n===maxNe && ty<=1) continue;   // valence s/p hybridised → the bonds represent them
           if(ty===0){ sphereMat(cx,cy,cz,R*0.72,tmp,0); pushCore(c,cx,cy,cz,oid); }
@@ -3984,7 +3986,7 @@ async function run(){
       for(let b=0;b<NBL;b++){ const i=lipid.b1[b], j=lipid.b2[b], bo=lipid.bo[b]||1;
         const x1=pos[i*3],y1=pos[i*3+1],z1=pos[i*3+2], x2=pos[j*3],y2=pos[j*3+1],z2=pos[j*3+2];
         const bx=x2-x1,by=y2-y1,bz=z2-z1, bdir=nrm([bx,by,bz]), f=0.62;
-        const c1=lipCol(lipid.el[i]), c2=lipCol(lipid.el[j]), kL=0.24, kW=LOBE_W*0.5;
+        const c1=info(lipid.el[i]).c, c2=info(lipid.el[j]).c, kL=0.24, kW=LOBE_W*0.5;   // bond lobes → per-element colour
         put(x1,y1,z1, x1+bx*f,y1+by*f,z1+bz*f, LOBE_W,1.0,c1, x1,y1,z1, 1000+(hyb++));   // σ
         put(x2,y2,z2, x2-bx*f,y2-by*f,z2-bz*f, LOBE_W,1.0,c2, x2,y2,z2, 1000+(hyb++));
         if(EL_LIST[lipid.el[i]]!=='H') put(x1,y1,z1, x1-bx*kL,y1-by*kL,z1-bz*kL, kW,1.0,c1, x1,y1,z1, 1000);   // back knob
@@ -3999,7 +4001,7 @@ async function run(){
               put(x1+gx,y1+gy,z1+gz, x1+bx*pf+gx,y1+by*pf+gy,z1+bz*pf+gz, pw,1.0,c1, x1,y1,z1, 900);
               put(x2+gx,y2+gy,z2+gz, x2-bx*pf+gx,y2-by*pf+gy,z2-bz*pf+gz, pw,1.0,c2, x2,y2,z2, 900); } } } }
       for(let k=0;k<LN;k++){ const lpn=lonePairs(lipid.el[k]); if(lpn===0||bd[k].length===0) continue;
-        const ax=pos[k*3],ay=pos[k*3+1],az=pos[k*3+2], c=lipCol(lipid.el[k]); let li=0;
+        const ax=pos[k*3],ay=pos[k*3+1],az=pos[k*3+2], c=info(lipid.el[k]).c; let li=0;   // lone-pair lobes → per-element colour
         for(const d of lonePairDirs(bd[k],lpn)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az, 2000+(li++)); }
       return {core, bond};
     };
