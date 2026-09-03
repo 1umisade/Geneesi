@@ -2630,13 +2630,20 @@ async function run(){
     if(e.key==='ArrowLeft'||e.key==='ArrowRight'||e.key==='ArrowUp'||e.key==='ArrowDown'){ arrowKeys[e.key]=true; e.preventDefault(); } });
   window.addEventListener('keyup', e => { arrowKeys[e.key]=false; });
   scene.onBeforeRenderObservable.add(() => {
-    let ex=0, ey=0;
-    if(arrowKeys.ArrowLeft) ex-=1; if(arrowKeys.ArrowRight) ex+=1;
-    if(arrowKeys.ArrowUp) ey+=1; if(arrowKeys.ArrowDown) ey-=1;
-    if(!ex && !ey) return;
+    // Arrow keys FLY the camera (FPS-style): ↑/↓ forward/back along the view direction (move-in = zoom in),
+    // ←/→ strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
+    let fwd=0, strafe=0;
+    if(arrowKeys.ArrowUp) fwd+=1; if(arrowKeys.ArrowDown) fwd-=1;
+    if(arrowKeys.ArrowRight) strafe+=1; if(arrowKeys.ArrowLeft) strafe-=1;
+    if(!fwd && !strafe) return;
     orbitLocked = false; gCamFollow = false;
-    const sp = Math.abs(cam.radius) * 0.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
-    panFloor(ex, ey, sp);
+    const t=cam.getTarget(), p=cam.position;
+    let Fx=t.x-p.x, Fy=t.y-p.y, Fz=t.z-p.z; const fl=Math.hypot(Fx,Fy,Fz)||1; Fx/=fl; Fy/=fl; Fz/=fl;   // view forward
+    let Rx=Fy, Ry=-Fx, Rz=0; const rl=Math.hypot(Rx,Ry,Rz)||1; Rx/=rl; Ry/=rl;                            // cross(forward, Z) → level right
+    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    const mx=(Fx*fwd+Rx*strafe)*sp, my=(Fy*fwd+Ry*strafe)*sp, mz=(Fz*fwd+Rz*strafe)*sp;
+    p.x+=mx; p.y+=my; p.z+=mz;
+    cam.setTarget(new BABYLON.Vector3(t.x+mx, t.y+my, t.z+mz));   // shift target the SAME amount → pure translation, no rotation
   });
   // WASD rotates the camera exactly like the middle-drag orbit: A/D yaw (alpha) around the floor normal,
   // W/S tilt (beta). Direct alpha/beta drive, dt-scaled so it is frame-rate independent, and it never touches
@@ -2646,10 +2653,24 @@ async function run(){
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
   window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
+  // WASD turns the camera like a HEAD: the camera stays put and only its view direction rotates. A/D look
+  // left/right (yaw around the floor normal), W/S look up/down (pitch, clamped shy of straight up/down). We keep
+  // the position fixed and move the target to pos + newForward*dist, so it is a head-turn, never an orbit. Up
+  // stays Z (no roll). Fresh target vector each frame → forces ArcRotate to rebuild its angles.
   scene.onBeforeRenderObservable.add(() => {
-    const rot = 1.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;   // ~86°/s, frame-rate independent
-    if(wasdKeys.a) cam.alpha -= rot; if(wasdKeys.d) cam.alpha += rot;   // A / D → yaw (orbit / scan around the pivot)
-    if(wasdKeys.w) cam.beta  -= rot; if(wasdKeys.s) cam.beta  += rot;   // W / S → tilt
+    const rot = 1.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    let ya=0, pa=0;
+    if(wasdKeys.a) ya += rot; if(wasdKeys.d) ya -= rot;   // A / D → look left / right
+    if(wasdKeys.w) pa += rot; if(wasdKeys.s) pa -= rot;   // W / S → look up / down
+    if(!ya && !pa) return;
+    const pos = cam.position, t = cam.getTarget();
+    const fx=t.x-pos.x, fy=t.y-pos.y, fz=t.z-pos.z, dist=Math.hypot(fx,fy,fz)||50;
+    const az = Math.atan2(fy, fx) + ya;   // A/D turn the HEADING around the floor-normal → left always shows the left
+    let pitch = Math.asin(Math.max(-1, Math.min(1, fz/dist))) + pa;
+    pitch = Math.max(-1.15, Math.min(1.15, pitch));          // clamp well shy of straight up/down: near-vertical yaw would spin/roll the floor view ("looking at your feet")
+    const cp = Math.cos(pitch);
+    cam.inertialAlphaOffset = cam.inertialBetaOffset = 0;
+    cam.setTarget(new BABYLON.Vector3(pos.x + cp*Math.cos(az)*dist, pos.y + cp*Math.sin(az)*dist, pos.z + Math.sin(pitch)*dist));
   });
   scene.onPointerObservable.add(p => {
     const e = p.event;
@@ -3107,7 +3128,7 @@ async function run(){
       const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
   // Membrane toggle → hide the tiled lipid bilayer for a big performance win (the cull loop + nucleon
   // pool observer read gMembrane each frame and force every membrane mesh off when it is false).
-  let gMembrane = false;   // membrane HIDDEN by default (performance) — turn it on with the Kalvo button
+  let gMembrane = true;    // membrane SHOWN by default (with the half-cut below → only the far leaflet renders); Kalvo button hides it
   { const mb = document.getElementById('membrane-btn');
     if(mb){ mb.addEventListener('click', () => { gMembrane = !gMembrane;
         mb.classList.toggle('on', !gMembrane);   // highlight the button when the membrane is HIDDEN
@@ -3117,7 +3138,7 @@ async function run(){
   // Membrane half-cut → fade out the CAMERA-SIDE leaflet so it stops occluding the complexes. This used to be
   // permanently on (wantCut hardcoded true); now it is button-controlled and OFF by default, so the full
   // bilayer shows until you choose to cut the near half. gCut[2] eases in/out over MEM_FADE_S when toggled.
-  let gMemCut = false;
+  let gMemCut = true;   // half-cut ON by default → only the far lipid leaflet is visible
   { const cb = document.getElementById('memcut-btn');
     if(cb){ cb.addEventListener('click', () => { gMemCut = !gMemCut; cb.classList.toggle('on', gMemCut); });
       cb.classList.toggle('on', gMemCut); } }
@@ -4226,6 +4247,7 @@ async function run(){
   let CAM_DEF_ALPHA = 0, CAM_DEF_BETA = 0;   // filled in from the derived angles right after the first resetView() (used by viewPerp)
   const resetView = () => { scene.stopAnimation(cam);   // R → restore the default starting view
     if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }
+    cam.upVector.set(0, 0, 1);   // undo any WASD arcball roll → the default view is level again
     cam.setTarget(CAM_DEF_TGT.clone()); cam.setPosition(CAM_DEF_POS.clone());
     cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0; cam.inertialPanningX = cam.inertialPanningY = 0; gZoomVel = 0; };
   resetView();
@@ -4253,6 +4275,8 @@ async function run(){
   const focusAlongMembrane = center => {
     scene.stopAnimation(cam);
     if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }
+    if(Math.abs(cam.upVector.x) > 1e-4 || Math.abs(cam.upVector.y) > 1e-4){   // undo any WASD arcball roll, then rebuild angles in the Z-up frame so the level snap below is actually level
+      cam.upVector.set(0,0,1); cam.setTarget(cam.getTarget().clone()); }
     const R = cam.radius, F = 18;
     const aEnd = CAM_DEF_ALPHA + 2*Math.PI*Math.round((cam.alpha - CAM_DEF_ALPHA)/(2*Math.PI));   // nearest wrap of the level heading (no long way round)
     const ease = new BABYLON.CubicEase(); ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
@@ -4365,7 +4389,8 @@ async function run(){
     // free mode also keeps current via setTarget); radius + mode shown too.
     if(camcoordsEl){ if(gDev){ const p=cam.position, DEG=180/Math.PI;
         camcoordsEl.style.display='block';
-        camcoordsEl.innerHTML = 'pos '+p.x.toFixed(0)+', '+p.y.toFixed(0)+', '+p.z.toFixed(0)
+        camcoordsEl.innerHTML = Math.round(scene.getEngine().getFps())+' fps'
+          +'<br>pos '+p.x.toFixed(0)+', '+p.y.toFixed(0)+', '+p.z.toFixed(0)
           +'<br>α '+(cam.alpha*DEG).toFixed(1)+'°  β '+(cam.beta*DEG).toFixed(1)+'°'
           +'<br>r '+Math.abs(cam.radius).toFixed(0); }
       else camcoordsEl.style.display='none'; }
