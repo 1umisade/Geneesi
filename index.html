@@ -2658,9 +2658,11 @@ async function run(){
   // (quaternion), so holding W pitches all the way over into a backflip. Position is fixed → look, never orbit.
   const _flM = new BABYLON.Matrix(), _flF = new BABYLON.Vector3(), _flU = new BABYLON.Vector3(), _flR = new BABYLON.Vector3();
   scene.onBeforeRenderObservable.add(() => {
-    const rot = 1.5 * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
+    // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
+    const rot = 2.2 * Math.min(120, scene.getEngine().getDeltaTime())/1000;
     let ya=0, pa=0;
-    if(wasdKeys.a) ya += rot; if(wasdKeys.d) ya -= rot;   // A / D → yaw (look left / right)
+    if(wasdKeys.a) ya += rot; if(wasdKeys.d) ya -= rot;   // A / D → yaw (look left / right), continuous while held
     if(wasdKeys.w) pa += rot; if(wasdKeys.s) pa -= rot;   // W / S → pitch (hold W → backflip)
     if(!ya && !pa) return;
     const pos = cam.position, t = cam.getTarget();
