@@ -4660,6 +4660,7 @@ async function run(){
     const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
     const REVEAL2 = gCrisp*gCrisp;
     const M=macroGizmoNode.getWorldMatrix().m, cx0=psiiCenter.x, cy0=psiiCenter.y, cz0=psiiCenter.z;   // full PSII transform (rotation+translation)
+    let matSwaps = 0;   // per-frame budget for LOD material changes (see the swap below)
     // Membrane cross-cut is a smooth per-fragment fade done in the membrane shaders (NOT a block cull),
     // driven by camera ELEVATION: the front lipids dissolve gradually as the view drops to the
     // membrane's level. Here we only compute the fade parameters; the whole sheet still renders and
@@ -4734,8 +4735,12 @@ async function run(){
         if(cell.sphCount !== want){ cell.sphCount = want; cell.sphere.thinInstanceCount = want; }
         // ONE quality boundary: inside the crisp zone an atom gets the full ray-traced treatment, outside
         // it drops to the cheap OPAQUE disc — a flat fill that also early-Z rejects when hidden.
+        // Swapping mesh.material makes Babylon re-prepare that mesh's binding, so doing it for hundreds of
+        // cells in one frame — which is exactly what a big zoom change causes — stalls hard (a measured
+        // ~1.2 s frame). Spend a small budget per frame instead: the boundary still moves, just over a few
+        // frames, and each cell keeps rendering with its old material until its turn comes.
         const far = !near;
-        if(cell.farOn !== far){ cell.farOn = far;
+        if(cell.farOn !== far && matSwaps < 12){ matSwaps++; cell.farOn = far;
           cell.sphere.material = far ? (cell.macro ? vdwFarMat : vdwStaticFarMat)
                                      : (cell.macro ? vdwMat : vdwMatStatic); }
       }
@@ -7408,28 +7413,26 @@ void main(void){
     };
   }
 
-  /* Pre-compile everything reachable BEFORE the loading screen lifts. Every distinct material is compiled
-     against a mesh that actually uses it, the far-LOD twins are compiled explicitly (the culler only
-     assigns them later), and then a few real frames are rendered so the post-process chain and the render
-     targets compile too. This deliberately makes loading longer — the payoff is that nothing has to
-     compile a shader mid-flight, which is what a first-use hitch actually is. The membrane is built after
-     this point by design, so its materials are covered by the one-shot warm-up observer instead. */
-  { setLbl('Esikäännetään varjostimia…');
-    const seen = new Set();
-    for(const m of scene.meshes){
-      const mat = m.material;
-      if(!mat || seen.has(mat.uniqueId)) continue;
-      seen.add(mat.uniqueId);
-      try { mat.forceCompilation(m); } catch(_){}
-    }
-    const pm = scene.meshes.find(m => /^cs\d/.test(m.name));
-    if(pm){ try { vdwFarMat.forceCompilation(pm); } catch(_){} }
-    for(let i=0;i<3;i++){ try { scene.render(); } catch(_){} }
-  }
-  document.getElementById('overlay').classList.add('gone');
+  // (shader pre-compile + loading-screen dismissal now happen after the background builds finish)
+
   // (F desaturation is done PER-FRAGMENT in the atom + background shaders — see bindFocus / the
   //  "focusAmt" blocks — so the coloured region is the selection's EXACT silhouette, not a circle.)
   { const st = document.createElement('style'); st.textContent = 'html.ui-hidden body > *:not(#c){display:none!important}'; document.head.appendChild(st); }
+  /* Hide the pointer after 10 s of no input, so a still shot is clean. The !important on a descendant
+     selector is deliberate — the app sets per-element cursors (grab, panning) all over, and this has to
+     beat all of them without any of that logic knowing about it. Any input at all brings it straight back. */
+  { const st = document.createElement('style');
+    st.textContent = 'html.cursor-idle, html.cursor-idle *{cursor:none!important}';
+    document.head.appendChild(st);
+    let idleTimer = null;
+    const wake = () => {
+      document.documentElement.classList.remove('cursor-idle');
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => document.documentElement.classList.add('cursor-idle'), 10000);
+    };
+    for(const ev of ['pointermove','pointerdown','pointerup','wheel','keydown','touchstart'])
+      window.addEventListener(ev, wake, {passive:true});
+    wake(); }
   window.addEventListener('keydown', e => {
     if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;   // don't hijack typing in dev inputs
     const k = e.key;
@@ -7587,14 +7590,47 @@ void main(void){
   //    dynamic culling / deferred shader compilation.
   engine.runRenderLoop(() => scene.render());
   window.addEventListener('resize', () => engine.resize());
-  // Scene is live now (vdW spheres visible). Fill in the rest in the background so the load no longer
-  // blocks for ~11s up front: first the lipid membrane (also visible in vdW mode, fills in block-by-
-  // block), then the atomic detail (nucleons / orbitals / bond + lone-pair lobes) that only shows in
-  // orbital mode or up close. Both stream in over many frames while the scene stays interactive.
-  Promise.resolve()
-    .then(() => buildMembrane && buildMembrane())
-    .then(() => buildDetail && buildDetail())
-    .catch(e => console.warn('background build failed:', e));
+
+  /* Build EVERYTHING before the loading screen lifts, rather than streaming it in behind the user's back.
+     The membrane and the atomic detail each create thousands of meshes and upload their instance buffers,
+     and doing that across live frames is what made the scene stutter while flying — the frame itself
+     renders in under 3 ms, so the hitching was never the renderer, it was the build competing with it.
+     Waiting here is the deliberate trade: a longer load for a scene that is smooth once you are in it. */
+  try {
+    if(buildMembrane){ setLbl('Rakennetaan kalvoa…'); setBar(0.80); await buildMembrane(); }
+    if(buildDetail){ setLbl('Rakennetaan atomeja…'); setBar(0.90); await buildDetail(); }
+  } catch(err){ console.warn('background build failed:', err); }
+
+  /* Now pre-compile everything that exists — including the membrane materials, which did not exist
+     earlier. Each distinct material is compiled against a mesh that actually uses it, the far-LOD twins
+     explicitly (the culler only assigns those later), then a few real frames are rendered so the
+     post-process chain and the render targets compile too. Nothing should have to compile mid-flight. */
+  { setLbl('Esikäännetään varjostimia…'); setBar(0.97);
+    const seen = new Set();
+    for(const m of scene.meshes){
+      const mat = m.material;
+      if(!mat || seen.has(mat.uniqueId)) continue;
+      seen.add(mat.uniqueId);
+      try { mat.forceCompilation(m); } catch(_){}
+    }
+    const pm = scene.meshes.find(m => /^cs\d/.test(m.name));
+    const lm = scene.meshes.find(m => m.name.startsWith('lipSp'));
+    if(pm){ try { vdwFarMat.forceCompilation(pm); } catch(_){} }
+    if(lm){ try { vdwStaticFarMat.forceCompilation(lm); } catch(_){} }
+    for(let i=0;i<3;i++){ try { scene.render(); } catch(_){} }
+    /* Compiling the materials is not enough: each MESH also pays a one-off cost the first time it is
+       actually drawn (its vertex-array and instance-buffer bindings are created then). With thousands of
+       cells that lands as a stall the moment a lot of geometry swings into view at once — measured as a
+       230 ms frame when pulling back. So draw every mesh once here, then restore what was enabled. */
+    setLbl('Lämmitetään puskureita…');
+    const wasOn = scene.meshes.map(m => m.isEnabled());
+    for(const m of scene.meshes){ try { m.setEnabled(true); } catch(_){} }
+    for(let i=0;i<2;i++){ try { scene.render(); } catch(_){} }
+    scene.meshes.forEach((m, i) => { try { m.setEnabled(wasOn[i]); } catch(_){} });
+    try { scene.render(); } catch(_){}
+  }
+  setBar(1); setLbl('Valmis');
+  document.getElementById('overlay').classList.add('gone');
 }
 
 /* ── Auto-load PSII on page load (no prompt) ───────────────────────────── */
