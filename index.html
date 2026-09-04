@@ -704,6 +704,24 @@ uniform float boil;      // line-boil amount (0 = off) → warps the silhouette,
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));  // raking light from the side (right)
 void main(void){
   float r2 = dot(vUV, vUV);
+#ifdef CHEAP
+  // FAR LOD - a flat shaded disc, written OPAQUE. Two separate wins. It skips the boil warp, the
+  // per-fragment sphere raytrace, the gl_FragDepthEXT write, the ink rim, the fresnel shimmer and all the
+  // focus/cofactor work - none of which is visible on an atom a couple of pixels wide. And because it is
+  // opaque with a plain depth write (no blending, no fragment depth), the GPU can early-Z reject it, so a
+  // far atom hidden behind nearer geometry is never shaded at all.
+  if(r2 > 1.0) discard;
+#ifdef MEMFADE
+  if(memCut.z * step(0.0,(vMemAnc - memCut.x)*memCut.y) > 0.5) discard;   // honour the membrane cross-cut
+#endif
+  vec3 colF = vColor * (0.72 - 0.22 * vUV.y);
+#ifdef MODELMOVE
+  if(selModel >= 0.0 && abs(vMid - selModel) < 0.5) colF = mix(colF, selCol, 0.35);   // keep selection readable
+#endif
+  float fogF = clamp((fogEnd - vCenterV.z) / (fogEnd - fogStart), 0.0, 1.0);
+  gl_FragColor = vec4(mix(fogColor, colF, fogF), 1.0);
+  return;
+#endif
   if(boil > 0.001){                          // WARP the silhouette (not just shift): push the disc radius in/out
     float zc0 = sqrt(max(0.0, 1.0 - min(r2, 1.0)));
     vec3 nW = vWB0 * vUV.x + vWB1 * vUV.y + vWB2 * (-zc0);   // world-space surface normal → lumps ride WITH the sphere
@@ -2672,7 +2690,7 @@ async function run(){
   let gMoveSpeed = 1.0;    // multiplier on the distance-scaled fly speed (arrow keys)
   let gRotSpeed  = 2.2;    // max yaw/pitch rate in rad/s (WASD) — 2.2 ≈ 126 deg/s
   const RAMP_S = 3.0;      // seconds from the initial nudge to full speed
-  const RAMP_MIN = 0.30;   // a press starts at 30% of max, so a tap moves NOW instead of creeping from a standstill
+  const RAMP_MIN = 0.10;   // a press starts at 10% of max, so a tap still nudges instead of creeping from a standstill
   let _moveRamp = RAMP_MIN, _rotRamp = RAMP_MIN;
   const rampStep = () => (1-RAMP_MIN) * Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
   scene.onBeforeRenderObservable.add(() => {
@@ -3529,6 +3547,41 @@ async function run(){
     eff.setFloat('isShell', gShell); eff.setFloat('shellMin', gShellMin); eff.setFloat('revealFade', gRevealFade); eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 1 → membrane vdW goes 50% transparent where revealed
     eff.setFloat('uT',gWaveT); eff.setFloat('boil', gBoil); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]); eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd);
     eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo); eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread); bindFocus(eff); bindCof(eff); });
+
+  /* FAR twins of the two vdW materials. Same shader, same instance buffers — but compiled with CHEAP, and
+     crucially left OPAQUE (no realAlpha, depth write on, no gl_FragDepthEXT). The normal materials are
+     alpha-blended, which means the GPU cannot depth-reject them: every hidden atom is still shaded and
+     blended, which is where the overdraw goes. Opaque far atoms get early-Z instead, so an atom behind
+     something else costs nothing, and they lay down depth that the blended near geometry then tests
+     against too. The frame loop swaps a cell to these once its atoms are only a couple of pixels wide. */
+  const mkFar = (name, attrs, extraU, defs) => {
+    const m = new BABYLON.ShaderMaterial(name, scene, 'imp', {
+      attributes: attrs,
+      uniforms: ['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','boil','depthBias','selCenter','coneCos'].concat(extraU),
+      defines: defs });
+    m.setFloat('radius',1.0); m.setFloat('isShell',0); m.setFloat('shellMin',0); m.setFloat('bubbleR',1e9);
+    m.setFloat('protonOutline',0); m.setFloat('depthBias',0); m.setFloat('coneCos',-1.0); m.setFloat('boil',0);
+    m.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6));
+    m.backFaceCulling=false; m.forceDepthWrite=true;   // OPAQUE on purpose — this is what buys the early-Z
+    return m;
+  };
+  const vdwFarMat = mkFar('vdwLODfar',
+    ['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
+    ['macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    ['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define CHEAP']);
+  vdwFarMat.setFloat('selModel', -1);
+  vdwFarMat.onBindObservable.add(()=>{ const eff=vdwFarMat.getEffect(); if(!eff)return;
+    eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
+    eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
+    eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+    eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
+  const vdwStaticFarMat = mkFar('vdwLODsfar',
+    ['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
+    ['memCut'],
+    ['#define IMPRAD','#define MEMFADE','#define CHEAP']);
+  vdwStaticFarMat.onBindObservable.add(()=>{ const eff=vdwStaticFarMat.getEffect(); if(!eff)return;
+    eff.setFloat('uT',gWaveT); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
+    eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
@@ -4531,6 +4584,12 @@ async function run(){
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
   const fitRadius = cam.radius;                    // radius at which the whole model fits
   const REVEAL_DIST = Math.max(130, CELL*2.2);     // camera-to-cell distance within which orbital detail shows (else vdW spheres)
+  // Nuclei get their OWN, much tighter range. They are by far the densest thing in the scene — a single
+  // carbon is 12 nucleon impostors, so a cell in range contributes an order of magnitude more instances
+  // than its atoms do. Past a few dozen units a nucleon is sub-pixel speckle buried inside an already
+  // near-solid vdW sphere, so drawing them out to the full orbital range bought nothing.
+  const NUC_DIST = Math.max(65, REVEAL_DIST*0.5);
+  const FAR_LOD2 = 420*420;   // beyond ~420 units an atom is ~2 px → cheap opaque material (squared, for d2)
   applyGfxMode();   // orbitals are ON by default → push the reveal params (needs REVEAL_DIST) + button label now that it exists
   const zoomEl = document.getElementById('zoomval');
   const camcoordsEl = document.getElementById('camcoords');   // dev-only camera pos/rotation readout
@@ -4627,7 +4686,8 @@ async function run(){
       const nr = REVEAL_DIST + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
       const wantOrb = vis && gGfxMode === 1 && near;      // orbitals only for NEAR cells in mode 1 (never rendered out of range)
       const wantSph = vis && !!cell.sphere;               // vdW always drawn; in mode 1 it goes 50% transparent where its atom reveals orbitals
-      const wantNuc = near && gGfxMode === 1;             // nuclei: mode 1, up close only (shader further gates them to the reveal range)
+      const nucR = NUC_DIST + cR + 8;                     // nuclei use their OWN tight range, not the orbital one
+      const wantNuc = vis && gGfxMode === 1 && d2 < nucR*nucR;   // nuclei: mode 1, genuinely up close only
       if(cell.visOn !== wantOrb){ cell.visOn = wantOrb; for(const m of cell.meshes) m.setEnabled(wantOrb); }
       if(cell.sphOn !== wantSph){ cell.sphOn = wantSph; if(cell.sphere) cell.sphere.setEnabled(wantSph); }
       /* DISTANCE LOD for the vdW impostors — the real cost here is overdraw, not triangles: each impostor
@@ -4635,15 +4695,19 @@ async function run(){
          screens' worth of pixels for atoms only ~2 px across. Far away they overlap into a solid mass, so
          drawing a fraction of them looks the same. Only thinInstanceCount changes — no buffer work. */
       if(wantSph && cell.sphere && cell.sphFull){
-        let want;
-        if(cell.macro){                                   // proteins: only thin when the atoms are ~1 px
-          want = d2 > 1440000 ? (cell.sphFull>>2) : d2 > 360000 ? (cell.sphFull>>1) : cell.sphFull;
-        } else if(cell.sphEnd && cell.sphEnd.length){      // membrane: thins earlier, it is a textureless mush
-          const nT = cell.sphEnd.length;
-          const f = d2 > 1000000 ? 0.125 : d2 > 250000 ? 0.25 : d2 > 62500 ? 0.5 : 1;
-          want = cell.sphEnd[Math.max(0, Math.min(nT-1, Math.round(nT*f)-1))];
-        } else want = cell.sphFull;
+        // The MEMBRANE always draws every lipid — thinning it at distance visibly changed the density of
+        // the sheet, so it keeps its full count. Only the proteins thin, and only once their atoms are
+        // down to about a pixel, where they have already merged into a solid mass.
+        const want = cell.macro
+          ? (d2 > 1440000 ? (cell.sphFull>>2) : d2 > 360000 ? (cell.sphFull>>1) : cell.sphFull)
+          : cell.sphFull;
         if(cell.sphCount !== want){ cell.sphCount = want; cell.sphere.thinInstanceCount = want; }
+        // Past FAR_LOD2 an atom is only a couple of pixels across: swap to the cheap OPAQUE material so it
+        // costs a flat disc AND can be early-Z rejected when it is hidden behind something nearer.
+        const far = d2 > FAR_LOD2;
+        if(cell.farOn !== far){ cell.farOn = far;
+          cell.sphere.material = far ? (cell.macro ? vdwFarMat : vdwStaticFarMat)
+                                     : (cell.macro ? vdwMat : vdwMatStatic); }
       }
       if(cell.nucOn !== wantNuc){ cell.nucOn = wantNuc; if(cell.nuc) cell.nuc.setEnabled(wantNuc); }
     }
