@@ -3142,6 +3142,7 @@ async function run(){
   let gRevealFade = 0.95;     // revealed-shell opacity at the FAR reveal edge → distant atoms stay ~solid, close ones go glass. Dev slider.
   let gEtc = false, etcOverlay = null;  // ETC cofactor overlay toggle + its mesh (built later) — OFF by default (it also drives the see-through reveal and a heavy depth pass, so the scene starts plain and fast)
   let gOutlines = true;                 // black molecule silhouette + green selection ring — both off together via the "Reunat" button
+  let gCullOnly = false;                // DEV: draw ONLY the cells inside the reveal/cull range, so you can see exactly what the culler keeps
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
@@ -4685,7 +4686,9 @@ async function run(){
       }
       const nr = REVEAL_DIST + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
       const wantOrb = vis && gGfxMode === 1 && near;      // orbitals only for NEAR cells in mode 1 (never rendered out of range)
-      const wantSph = vis && !!cell.sphere;               // vdW always drawn; in mode 1 it goes 50% transparent where its atom reveals orbitals
+      // DEV "vain culling-alue": drop every cell OUTSIDE the reveal range, so what stays on screen is
+      // exactly the set the culler considers in range — the far LOD tier becomes visible as empty space.
+      const wantSph = vis && !!cell.sphere && (!gCullOnly || near);
       const nucR = NUC_DIST + cR + 8;                     // nuclei use their OWN tight range, not the orbital one
       const wantNuc = vis && gGfxMode === 1 && d2 < nucR*nucR;   // nuclei: mode 1, genuinely up close only
       if(cell.visOn !== wantOrb){ cell.visOn = wantOrb; for(const m of cell.meshes) m.setEnabled(wantOrb); }
@@ -5407,6 +5410,19 @@ async function run(){
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
   const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld, fdSld, fvStrSld, fvRchSld];
   const devDefaults = devSliders.map(s => s.value);
+  // Show ONLY what the culler keeps: every cell beyond the reveal range is hidden outright, so the
+  // in-range set is exactly what remains on screen (and the cost of everything else is visible as the
+  // frame-rate difference).
+  const cullRow = document.createElement('div');
+  const cullBtn = document.createElement('button');
+  const cullStyle = on => 'cursor:pointer;font:11px ui-monospace,monospace;border:2px solid var(--brown);'
+    + 'border-radius:9px;box-shadow:0 2px 0 var(--brown);padding:3px 11px;align-self:flex-start;margin-top:2px;'
+    + (on ? 'color:var(--sageink);background:var(--sage);' : 'color:var(--ink);background:var(--paper);');
+  const syncCull = () => { cullBtn.textContent = gCullOnly ? 'vain culling-alue: ON' : 'vain culling-alue';
+    cullBtn.style.cssText = cullStyle(gCullOnly); };
+  cullBtn.onclick = () => { gCullOnly = !gCullOnly; syncCull(); };
+  syncCull();
+  cullRow.appendChild(cullBtn);
   const resetRow = document.createElement('div');
   const resetBtn = document.createElement('button'); resetBtn.textContent = 'palauta oletukset';
   resetBtn.style.cssText = 'cursor:pointer;font:11px ui-monospace,monospace;color:var(--sageink);background:var(--sage);'
@@ -5416,7 +5432,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(mvRow); devPanel.appendChild(mvSld); devPanel.appendChild(rtRow); devPanel.appendChild(rtSld); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld); devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(mvRow); devPanel.appendChild(mvSld); devPanel.appendChild(rtRow); devPanel.appendChild(rtSld); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld); devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld); devPanel.appendChild(cullRow); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
