@@ -2700,11 +2700,11 @@ async function run(){
   let _moveRamp = RAMP_MIN, _rotRamp = RAMP_MIN;
   const rampStep = () => (1-RAMP_MIN) * Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
   scene.onBeforeRenderObservable.add(() => {
-    // Arrow keys FLY the camera (FPS-style): ↑/↓ forward/back along the view direction (move-in = zoom in),
-    // ←/→ strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
+    // WASD FLIES the camera (FPS-style): W/S forward/back along the view direction (moving in = zooming in),
+    // A/D strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
     let fwd=0, strafe=0;
-    if(arrowKeys.ArrowUp) fwd+=1; if(arrowKeys.ArrowDown) fwd-=1;
-    if(arrowKeys.ArrowRight) strafe+=1; if(arrowKeys.ArrowLeft) strafe-=1;
+    if(wasdKeys.w) fwd+=1; if(wasdKeys.s) fwd-=1;          // W / S → forward / back along the view direction
+    if(wasdKeys.d) strafe+=1; if(wasdKeys.a) strafe-=1;    // A / D → strafe left / right
     if(!fwd && !strafe){ _moveRamp = RAMP_MIN; return; }
     _moveRamp = Math.min(1, _moveRamp + rampStep());
     orbitLocked = false; gCamFollow = false;
@@ -2723,8 +2723,8 @@ async function run(){
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
   window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
-  // WASD is a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
-  // This is a VR HEADSET head-turn, not an FPS body-spin. A/D yaw about the camera's OWN up and W/S
+  // The ARROW KEYS are a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
+  // This is a VR HEADSET head-turn, not an FPS body-spin. Left/right yaw about the camera's OWN up and up/down
   // pitch about its OWN right, so the gaze always sweeps along the screen's own axes: whatever sits at
   // the left edge comes to the centre when you press A, at ANY head angle — including looking straight
   // down at the membrane. (Yawing about the WORLD vertical instead is the FPS behaviour, and it
@@ -2738,13 +2738,13 @@ async function run(){
   scene.onBeforeRenderObservable.add(() => {
     // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
-    const anyTurn = wasdKeys.a || wasdKeys.d || wasdKeys.w || wasdKeys.s;
+    const anyTurn = arrowKeys.ArrowLeft || arrowKeys.ArrowRight || arrowKeys.ArrowUp || arrowKeys.ArrowDown;
     if(!anyTurn){ _rotRamp = RAMP_MIN; return; }
     _rotRamp = Math.min(1, _rotRamp + rampStep());   // ease 0 → full turn rate over RAMP_S
     const rot = gRotSpeed * _rotRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
     let ya=0, pa=0;
-    if(wasdKeys.a) ya -= rot; if(wasdKeys.d) ya += rot;   // A / D → yaw (look left / right), continuous while held
-    if(wasdKeys.w) pa += rot; if(wasdKeys.s) pa -= rot;   // W / S → pitch (hold W → backflip)
+    if(arrowKeys.ArrowLeft) ya -= rot; if(arrowKeys.ArrowRight) ya += rot;   // ← / → → yaw (look left / right), continuous while held
+    if(arrowKeys.ArrowUp) pa += rot; if(arrowKeys.ArrowDown) pa -= rot;      // ↑ / ↓ → pitch (hold ↑ → backflip)
     if(!ya && !pa) return;
     const pos = cam.position, t = cam.getTarget();
     _flF.set(t.x-pos.x, t.y-pos.y, t.z-pos.z); const dist=_flF.length()||50; _flF.scaleInPlace(1/dist);   // forward
@@ -5308,13 +5308,13 @@ async function run(){
     + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;bottom:246px;max-height:none;overflow-y:auto;';
   // Camera feel: max fly speed (arrow keys) and max turn rate (WASD). Both ease 0 → max over 1 s.
   const mvRow = document.createElement('div');
-  mvRow.innerHTML = 'move speed: <b id="dev-mv-val">1.00×</b>';
+  mvRow.innerHTML = 'liikkumisnopeus: <b id="dev-mv-val">1.00×</b>';
   const mvSld = document.createElement('input');
   mvSld.type='range'; mvSld.min='5'; mvSld.max='400'; mvSld.value='100'; mvSld.style.cssText='width:100%;cursor:pointer;';
   const mvValEl = mvRow.querySelector('#dev-mv-val');
   mvSld.oninput = () => { gMoveSpeed = +mvSld.value/100; mvValEl.textContent = gMoveSpeed.toFixed(2)+'×'; };
   const rtRow = document.createElement('div');
-  rtRow.innerHTML = 'turn speed: <b id="dev-rt-val">126°/s</b>';
+  rtRow.innerHTML = 'kääntymisnopeus: <b id="dev-rt-val">126°/s</b>';
   const rtSld = document.createElement('input');
   rtSld.type='range'; rtSld.min='5'; rtSld.max='400'; rtSld.value='100'; rtSld.style.cssText='width:100%;cursor:pointer;';
   const rtValEl = rtRow.querySelector('#dev-rt-val');
@@ -5481,7 +5481,9 @@ async function run(){
   // Only the crisp-zone slider plus the two read-outs. Every other slider object is still created
   // above (so its startup side-effects, such as the render-scale default, still run) - it is simply
   // not shown any more.
-  devPanel.appendChild(backRow); devPanel.appendChild(czRow); devPanel.appendChild(czSld); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(czRow); devPanel.appendChild(czSld);
+  devPanel.appendChild(mvRow); devPanel.appendChild(mvSld); devPanel.appendChild(rtRow); devPanel.appendChild(rtSld);
+  devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -5505,6 +5507,7 @@ async function run(){
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
     { const rf = scene.getMeshByName('rtsFloor'); if(rf) rf.setEnabled(gDev); }   // light-green floor sheet → dev-only
     if(gCollViz) gCollViz.setEnabled(COLL_VIZ && (gDev || gCollVizHold));   // wireframe collision spheres (also on while V is held)
+    { const mm = document.getElementById('rts-minimap'); if(mm) mm.style.display = gDev ? '' : 'none'; }   // minimap → dev-only
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
@@ -7461,7 +7464,7 @@ void main(void){
       + 'font-family:"Courier New",monospace;font-size:11.5px;line-height:1.75;color:var(--ink);background:var(--paper);'
       + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 13px;pointer-events:none;';
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','lähennys'],['Keskinappi + rulla','hidas lähennys'],
-      ['Nuolinäppäimet','panoroi'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
+      ['WASD','liiku ja sivuaskella'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
       ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
       ['H','piilota käyttöliittymä'],['P','maalausefekti'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
@@ -7632,6 +7635,9 @@ void main(void){
     scene.meshes.forEach((m, i) => { try { m.setEnabled(wasOn[i]); } catch(_){} });
     try { scene.render(); } catch(_){}
   }
+  // Apply the dev-only visibility ONCE now that everything it touches exists (minimap, cheatsheet,
+  // floor sheet, read-outs). It used to run only on toggle, so all of those started out visible.
+  try { applyDevMode(); } catch(_){}
   setBar(1); setLbl('Valmis');
   document.getElementById('overlay').classList.add('gone');
 }
