@@ -7430,7 +7430,9 @@ void main(void){
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => document.documentElement.classList.add('cursor-idle'), 10000);
     };
-    for(const ev of ['pointermove','pointerdown','pointerup','wheel','keydown','touchstart'])
+    // POINTER activity only — deliberately NOT keydown. Flying with WASD/arrows leaves the mouse still,
+    // and that is exactly when the cursor should get out of the way.
+    for(const ev of ['pointermove','pointerdown','pointerup','wheel','touchstart'])
       window.addEventListener(ev, wake, {passive:true});
     wake(); }
   window.addEventListener('keydown', e => {
