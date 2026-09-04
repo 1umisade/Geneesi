@@ -580,6 +580,9 @@ void main(void){
   // BOTH the shaken point and the centre — exactly the order the orb shader uses. Doing modelXform first
   // (as before) made the nuclei shake with the flattened Z while the orbitals shook with the original Z,
   // so they waved out of phase and drifted apart. Now the nuclei ride WITH their orbitals.
+#ifdef CHEAP
+  vec3 wc = base;   // outside the crisp zone nothing animates - no thermal shake, no boil hash, nothing
+#else
   vec3 wc = shake(base);
   if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
     float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
@@ -587,8 +590,11 @@ void main(void){
     float hz = fract(sin(dot(base, vec3(39.346, 11.135, 83.155)) + bt*1.7) * 24634.633) - 0.5;
     wc += boil * 0.2 * vec3(hx, hy, hz);   // small per-atom drift — the SHAPE warp itself is done in the fragment, this is just a little life
   }
+#endif
 #ifdef MEMFADE
-  wc += memSway(base);
+#ifndef CHEAP
+  wc += memSway(base);   // membrane fluid sway - skipped outside the crisp zone (sub-pixel there anyway)
+#endif
 #ifdef LIPTILE
   vMemAnc = tileOff.z;   // pooled nucleons: the tile origin IS the lipid anchor (one tile per mesh)
 #else
@@ -3143,6 +3149,10 @@ async function run(){
   let gEtc = false, etcOverlay = null;  // ETC cofactor overlay toggle + its mesh (built later) — OFF by default (it also drives the see-through reveal and a heavy depth pass, so the scene starts plain and fast)
   let gOutlines = true;                 // black molecule silhouette + green selection ring — both off together via the "Reunat" button
   let gCullOnly = false;                // DEV: draw ONLY the cells right next to the camera, so you can see exactly what is close by
+  // THE crisp zone. Inside it atoms get the full treatment (orbitals, nuclei, ray-traced spheres, ink
+  // rims). Outside it EVERYTHING drops to the cheap opaque disc material — one radius governs both, so
+  // there is exactly one quality boundary in the scene. Set to the real value once CELL is known.
+  let gCrisp = 130;
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
@@ -3170,7 +3180,7 @@ async function run(){
   const applyGfxMode = () => {   // push the current mode into the reveal params + the button UI
     // Reveal by RANGE, plus the dev-adjustable forward cone (gDevCone, −1 = off) if the dev enabled it.
     gConeCos = gDevCone;
-    gBubbleR = (gGfxMode === 1) ? REVEAL_DIST : 1e9;
+    gBubbleR = (gGfxMode === 1) ? gCrisp : 1e9;
     gShell   = (gGfxMode === 1) ? 1 : 0;
     gShellMin = (gGfxMode === 1) ? 0.22 : 0.0;   // revealed shell: near-clear at the CENTRE so orbitals show through (a rim in the shader keeps the sphere readable)
     const g = GFX_MODES[gGfxMode];
@@ -3448,7 +3458,7 @@ async function run(){
   orbMatG.onBindObservable.add(() => {
     const eff = orbMatG.getEffect(); if(!eff) return;
     eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → orbitals only inside the close forward cone
-    eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform);
+    eff.setFloat('uT', gWaveT); eff.setFloat('elecR', gCrisp); eff.setMatrices('modelXform', gModelXform);
     eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
     eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
@@ -3465,7 +3475,7 @@ async function run(){
     mat.onBindObservable.add(() => {
       const eff = mat.getEffect(); if(!eff) return;
       eff.setFloat('coneCos', gConeCos); eff.setFloat('bubbleR', gBubbleR);   // mode 2 → close forward-cone reveal
-      eff.setFloat('uT', gWaveT); eff.setFloat('elecR', REVEAL_DIST); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
+      eff.setFloat('uT', gWaveT); eff.setFloat('elecR', gCrisp); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setColor3('fogColor', scene.fogColor); eff.setFloat('fogStart', scene.fogStart); eff.setFloat('fogEnd', scene.fogEnd);
       eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE); bindFocus(eff);
@@ -4061,7 +4071,7 @@ async function run(){
     // Follow the graphics mode: orbitals only in mode 1 AND when the camera is in range; vdW always on.
     scene.onBeforeRenderObservable.add(()=>{
       const dx=cam.position.x-chlCx, dy=cam.position.y-chlCy, dz=cam.position.z-chlCz;
-      const orbOn = gGfxMode === 1 && (dx*dx+dy*dy+dz*dz < REVEAL_DIST*REVEAL_DIST);
+      const orbOn = gGfxMode === 1 && (dx*dx+dy*dy+dz*dz < gCrisp*gCrisp);
       chlCore.setEnabled(orbOn); chlBonds.setEnabled(orbOn); chlNuc.setEnabled(orbOn);
     });
     // Chlorophyll is ALWAYS shown (never gated away) and built once at rest — the shader shakeOff
@@ -4599,12 +4609,12 @@ async function run(){
   const modelR = 0.5*Math.hypot(dimX,dimY,dimZ);
   const fitRadius = cam.radius;                    // radius at which the whole model fits
   const REVEAL_DIST = Math.max(130, CELL*2.2);     // camera-to-cell distance within which orbital detail shows (else vdW spheres)
+  gCrisp = REVEAL_DIST;                            // the live, slider-driven crisp-zone radius starts here
   // Nuclei get their OWN, much tighter range. They are by far the densest thing in the scene — a single
   // carbon is 12 nucleon impostors, so a cell in range contributes an order of magnitude more instances
   // than its atoms do. Past a few dozen units a nucleon is sub-pixel speckle buried inside an already
   // near-solid vdW sphere, so drawing them out to the full orbital range bought nothing.
   const NUC_DIST = Math.max(65, REVEAL_DIST*0.5);
-  const FAR_LOD2 = 420*420;   // beyond ~420 units an atom is ~2 px → cheap opaque material (squared, for d2)
   const CULL_CLOSE = 35;      // DEV "vain lähialue": how far past a cell's near edge still counts as "right here"
   applyGfxMode();   // orbitals are ON by default → push the reveal params (needs REVEAL_DIST) + button label now that it exists
   const zoomEl = document.getElementById('zoomval');
@@ -4648,7 +4658,7 @@ async function run(){
     // on only for cells within REVEAL_DIST of the camera, so zooming out sheds that detail cleanly.
     const cp = cam.position;
     const fplanes = BABYLON.Frustum.GetPlanes(cam.getTransformationMatrix());   // world-space, normals inward
-    const REVEAL2 = REVEAL_DIST*REVEAL_DIST;
+    const REVEAL2 = gCrisp*gCrisp;
     const M=macroGizmoNode.getWorldMatrix().m, cx0=psiiCenter.x, cy0=psiiCenter.y, cz0=psiiCenter.z;   // full PSII transform (rotation+translation)
     // Membrane cross-cut is a smooth per-fragment fade done in the membrane shaders (NOT a block cull),
     // driven by camera ELEVATION: the front lipids dissolve gradually as the view drops to the
@@ -4699,14 +4709,14 @@ async function run(){
           if(pl.normal.x*wcx + pl.normal.y*wcy + pl.normal.z*wcz + pl.d < -cM){ vis=false; break; }
         }
       }
-      const nr = REVEAL_DIST + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
+      const nr = gCrisp + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
       const wantOrb = vis && gGfxMode === 1 && near;      // orbitals only for NEAR cells in mode 1 (never rendered out of range)
       // DEV "vain lähialue": keep ONLY cells whose NEAR EDGE is within CULL_CLOSE of the camera, i.e. the
       // handful you are practically standing in. Everything else is dropped outright, so the screen shows
       // just the immediate neighbourhood and the cost of all the rest reads off the frame rate.
       const closeR = CULL_CLOSE + cR;
       const wantSph = vis && !!cell.sphere && (!gCullOnly || d2 < closeR*closeR);
-      const nucR = NUC_DIST + cR + 8;                     // nuclei use their OWN tight range, not the orbital one
+      const nucR = gCrisp*0.5 + cR + 8;                     // nuclei use their OWN tight range, not the orbital one
       const wantNuc = vis && gGfxMode === 1 && d2 < nucR*nucR;   // nuclei: mode 1, genuinely up close only
       if(cell.visOn !== wantOrb){ cell.visOn = wantOrb; for(const m of cell.meshes) m.setEnabled(wantOrb); }
       if(cell.sphOn !== wantSph){ cell.sphOn = wantSph; if(cell.sphere) cell.sphere.setEnabled(wantSph); }
@@ -4722,9 +4732,9 @@ async function run(){
           ? (d2 > 1440000 ? (cell.sphFull>>2) : d2 > 360000 ? (cell.sphFull>>1) : cell.sphFull)
           : cell.sphFull;
         if(cell.sphCount !== want){ cell.sphCount = want; cell.sphere.thinInstanceCount = want; }
-        // Past FAR_LOD2 an atom is only a couple of pixels across: swap to the cheap OPAQUE material so it
-        // costs a flat disc AND can be early-Z rejected when it is hidden behind something nearer.
-        const far = d2 > FAR_LOD2;
+        // ONE quality boundary: inside the crisp zone an atom gets the full ray-traced treatment, outside
+        // it drops to the cheap OPAQUE disc — a flat fill that also early-Z rejects when hidden.
+        const far = !near;
         if(cell.farOn !== far){ cell.farOn = far;
           cell.sphere.material = far ? (cell.macro ? vdwFarMat : vdwStaticFarMat)
                                      : (cell.macro ? vdwMat : vdwMatStatic); }
@@ -5429,6 +5439,18 @@ async function run(){
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
   const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld, fdSld, fvStrSld, fvRchSld];
   const devDefaults = devSliders.map(s => s.value);
+  /* THE one control: the radius of the crisp zone. Inside it atoms are fully rendered (orbitals, nuclei,
+     ray-traced spheres, ink rims, thermal shake). Outside it everything drops to a flat opaque disc with
+     no per-fragment sphere, no depth write, no animation. Moving this slider moves that single boundary. */
+  const czRow = document.createElement('div');
+  czRow.innerHTML = 'terävä alue: <b id="dev-cz-val">130</b>';
+  const czSld = document.createElement('input');
+  czSld.type='range'; czSld.min='30'; czSld.max='600'; czSld.style.cssText='width:100%;cursor:pointer;';
+  const czValEl = czRow.querySelector('#dev-cz-val');
+  czSld.oninput = () => { gCrisp = +czSld.value; czValEl.textContent = String(gCrisp);
+    gBubbleR = (gGfxMode === 1) ? gCrisp : 1e9; };   // keep the shader reveal radius on the same boundary
+  czSld.value = String(Math.round(gCrisp)); czValEl.textContent = String(Math.round(gCrisp));   // start at the built-in reveal distance
+
   // Show ONLY the immediate neighbourhood: every cell whose near edge is further than CULL_CLOSE from the
   // camera is hidden outright, leaving just what you are practically standing in.
   const cullRow = document.createElement('div');
@@ -5450,7 +5472,10 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(mvRow); devPanel.appendChild(mvSld); devPanel.appendChild(rtRow); devPanel.appendChild(rtSld); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld); devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld); devPanel.appendChild(cullRow); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  // Only the crisp-zone slider plus the two read-outs. Every other slider object is still created
+  // above (so its startup side-effects, such as the render-scale default, still run) - it is simply
+  // not shown any more.
+  devPanel.appendChild(backRow); devPanel.appendChild(czRow); devPanel.appendChild(czSld); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -7296,7 +7321,8 @@ async function run(){
   });
 
   if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
-  document.getElementById('overlay').classList.add('gone');
+  // NOTE: the loading screen is dismissed AFTER the shader pre-compile pass below, once the whole
+  // post-process chain exists — see "Esikäännetään varjostimia" near the end of setup.
 
   // Silhouette pass — runs FIRST, on the RAW scene (background is the exact flat colour). Inks a black
   // outline where the frame meets the background (the whole assembly) AND around each cofactor molecule
@@ -7381,6 +7407,26 @@ void main(void){
       eff.setFloat('aspect', w / h);
     };
   }
+
+  /* Pre-compile everything reachable BEFORE the loading screen lifts. Every distinct material is compiled
+     against a mesh that actually uses it, the far-LOD twins are compiled explicitly (the culler only
+     assigns them later), and then a few real frames are rendered so the post-process chain and the render
+     targets compile too. This deliberately makes loading longer — the payoff is that nothing has to
+     compile a shader mid-flight, which is what a first-use hitch actually is. The membrane is built after
+     this point by design, so its materials are covered by the one-shot warm-up observer instead. */
+  { setLbl('Esikäännetään varjostimia…');
+    const seen = new Set();
+    for(const m of scene.meshes){
+      const mat = m.material;
+      if(!mat || seen.has(mat.uniqueId)) continue;
+      seen.add(mat.uniqueId);
+      try { mat.forceCompilation(m); } catch(_){}
+    }
+    const pm = scene.meshes.find(m => /^cs\d/.test(m.name));
+    if(pm){ try { vdwFarMat.forceCompilation(pm); } catch(_){} }
+    for(let i=0;i<3;i++){ try { scene.render(); } catch(_){} }
+  }
+  document.getElementById('overlay').classList.add('gone');
   // (F desaturation is done PER-FRAGMENT in the atom + background shaders — see bindFocus / the
   //  "focusAmt" blocks — so the coloured region is the selection's EXACT silhouette, not a circle.)
   { const st = document.createElement('style'); st.textContent = 'html.ui-hidden body > *:not(#c){display:none!important}'; document.head.appendChild(st); }
