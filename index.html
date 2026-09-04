@@ -344,6 +344,10 @@ const ETC_RES = { OEX:1, MN:1, CA:1,   PHO:2,   PL9:3, PQN:3, PQ9:3, UQ:3,   HEM
   BCR:8, LUT:8, NEX:8, XAT:8, VIO:8, ZEA:8, LU2:8, A86:8, ECH:8,   // carotenoids (ECH = echinenone, b6f)
   NAP:10, NDP:10, NADP:10 };   // 10 = NADP+ / NADPH (FNR)
 const ETC_TYRZ = 9;                                             // assigned geometrically, not by residue name
+// The four real thylakoid membrane lipids, by their PDB residue names. MGDG and DGDG are the
+// galactolipids (uncharged sugar heads) that dominate the bilayer, SQDG carries a sulfonate head
+// and PG is the ONLY one with a phosphate head — so a realistic mix shows all four head groups.
+const LIPID_RES = { LMG:1, DGD:2, SQD:3, LHG:4 };
 // Every cofactor type is one of five bright hues: RED, GREEN, CORAL, BLUE, PINK.
 const _RED=[1.00,0.16,0.16], _GRN=[0.16,0.90,0.36], _COR=[1.00,0.50,0.34], _BLU=[0.28,0.56,1.00], _PNK=[1.00,0.42,0.80];
 const ETC_COL = [ [0,0,0],   // 0 unused
@@ -384,6 +388,7 @@ function parseMol2(text){
         cur.cof = new Uint8Array(cur.na);  // 1 = electron-transport-chain cofactor (for the render-on-top overlay)
         cur.sid = new Int32Array(cur.na);  // subst_id (residue instance) → to extract one chlorophyll
         cur.tyr = new Uint8Array(cur.na);  // 1 = atom of a TYR residue → markTyrZ picks the one beside the OEC
+        cur.lip = new Uint8Array(cur.na);  // LIPID_RES code → lets the bilayer tile a real MGDG/DGDG/SQDG/PG mixture
         cur.b1 = new Int32Array(cur.nb);   cur.b2 = new Int32Array(cur.nb);  cur.bi = 0;
         cur.bo = new Uint8Array(cur.nb);   // bond order (1 single, 2 double, 3 triple)
       }
@@ -396,6 +401,7 @@ function parseMol2(text){
       cur.x[k] = +p[2]; cur.y[k] = +p[3]; cur.z[k] = +p[4]; cur.el[k] = codeOf(p[5]);
       cur.cat[k] = catOf(p[7] || ''); cur.sid[k] = +p[6] || 0; cur.cof[k] = ETC_RES[p[7]] || 0;   // 0 = not a cofactor, else type code 1-9
       if(p[7] === 'TYR') cur.tyr[k] = 1;
+      cur.lip[k] = LIPID_RES[p[7]] || 0;
     } else if(section === 'BOND'){
       const p = ln.trim().split(/\s+/);
       if(p.length < 4 || cur.bi >= cur.nb) continue;
@@ -476,10 +482,13 @@ function extractChlorophyll(m){
 
 /* Pull one lipid molecule (category 4) out of the model → atoms AND its internal bonds
    (the bonds are needed to build the same hybridised σ/π/lone-pair lobes as the protein). */
-function extractLipid(m){
+function extractLipid(m, code){
   if(!m.sid) return null;
   const groups = new Map();
-  for(let k=0;k<m.na;k++) if(m.cat[k]===4){ const g=groups.get(m.sid[k]); if(g) g.push(k); else groups.set(m.sid[k],[k]); }
+  // `code` (a LIPID_RES value) picks ONE named lipid species. Without it, the largest lipid of any
+  // kind is taken — kept as the fallback for models whose lipids carry names we do not recognise.
+  for(let k=0;k<m.na;k++){ const want = code ? (m.lip && m.lip[k]===code) : (m.cat[k]===4);
+    if(want){ const g=groups.get(m.sid[k]); if(g) g.push(k); else groups.set(m.sid[k],[k]); } }
   let best=null;
   for(const g of groups.values()) if(!best || g.length>best.length) best=g;   // largest = a complete lipid
   if(!best || best.length < 30) return null;
@@ -2043,7 +2052,14 @@ async function run(){
   setLbl('Placing complexes…'); await yield_();
   const psii = mols.find(m => m.cfg && m.cfg.match==='3jcu') || mols[0];
   const chl = null;   // chlorophyll is now a normal model (chlorophyll.mol2), not a runtime-extracted showcase — every `if(chl)`/`m===chl` guard below no-ops
-  const lipid = extractLipid(psii);              // one lipid → tiled into the bilayer
+  // A REALISTIC thylakoid lipid mixture rather than one species tiled everywhere. Weights are the
+  // measured composition of plant thylakoids — the galactolipids dominate, the two anionic lipids
+  // are minor, and PG is the only phosphate-bearing head group in the sheet.
+  const LIPID_MIX = [ {code:1, name:'MGDG', w:50}, {code:2, name:'DGDG', w:30},
+                      {code:3, name:'SQDG', w:10}, {code:4, name:'PG',   w:10} ];
+  const lipids = [];
+  for(const L of LIPID_MIX){ const g = extractLipid(psii, L.code); if(g){ g.lname=L.name; g.w=L.w; lipids.push(g); } }
+  if(!lipids.length){ const g = extractLipid(psii); if(g){ g.lname='lipid'; g.w=1; lipids.push(g); } }   // fallback: old single-lipid behaviour
 
   // Rotate every model 90° about Z (as before) so complexes stand upright-ish across the membrane.
   for(const m of mols){ for(let k=0;k<m.na;k++){ const x=m.x[k], y=m.y[k]; m.x[k]=y; m.y[k]=-x; } }
@@ -3938,12 +3954,16 @@ async function run(){
     });
   }
 
-  /* ── Lipid bilayer showcase: tile one extracted lipid into a two-leaflet membrane
+  /* ── Lipid bilayer showcase: tile a realistic MGDG/DGDG/SQDG/PG mixture into a two-leaflet membrane
      (~2000 lipids) as space-filling vdW spheres, placed below the protein. ─────── */
   const bilayerCen = new BABYLON.Vector3(memCenX, MEMBRANE_Y, memCenZ);
   let bilayerHalf = 0;
   let buildMembrane = null;   // the heavy lipid membrane build, deferred to run AFTER the scene is revealed (complexes show first, membrane fills in)
-  if(lipid){
+  if(lipids.length){
+    const NTY = lipids.length;
+    /* Every species is prepared on its own: find its polar-head → tail axis, stand that axis up on
+       +Y, and record its extent. The tiler below then mixes the prepared species tile by tile. */
+    const prep = lipids.map(lipid => {
     const LN = lipid.na, NBL = lipid.nb;
     let cx=0,cy=0,cz=0; for(let k=0;k<LN;k++){ cx+=lipid.x[k]; cy+=lipid.y[k]; cz+=lipid.z[k]; } cx/=LN;cy/=LN;cz/=LN;
     // head (polar O/P/N) → tail (C) axis. Distance²-weight both ends so the FAR sugar/phosphate head
@@ -3969,6 +3989,11 @@ async function run(){
       for(let k=0;k<LN;k++){ const s=EL_LIST[lipid.el[k]], y=lp[k*3+1];
         if(s==='O'||s==='P'||s==='N'){pY+=y;pN++;} else if(s==='C'){cY+=y;cN++;} }
       if(pN&&cN && pY/pN < cY/cN){ for(let k=0;k<LN;k++) lp[k*3+1]=-lp[k*3+1]; const t=-yMin; yMin=-yMax; yMax=t; } }
+    return { lipid, LN, NBL, lp, yMin, yMax, xr, zr };
+    });
+    // Grid pitch and block size must fit the BIGGEST species, so no lipid overflows its tile.
+    const xr = Math.max(...prep.map(P=>P.xr)), zr = Math.max(...prep.map(P=>P.zr));
+    const ySpan = Math.max(...prep.map(P=>P.yMax-P.yMin));
     // RECTANGULAR bilayer that ALWAYS spans the FULL embedded-complex extent (wide in X, shallow in Z).
     // The whole sheet's instance buffers are uploaded up front (~75 KB per lipid), so TARGET_LIPIDS is a
     // hard memory ceiling. Rather than shrink the sheet to hit that ceiling (which collapsed it into a
@@ -4003,20 +4028,27 @@ async function run(){
     const tileVar=(gi,gj,leaf)=> hash2(gi*2+leaf, gj*3+leaf) % NV;
     const tileJit=(gi,gj,leaf)=>{ const h=hash2(gi+leaf*911+1, gj+leaf*337+1);
       return [ ((h&1023)/1023-0.5)*2*JIT, (((h>>>10)&1023)/1023-0.5)*2*(S*0.04), (((h>>>20)&1023)/1023-0.5)*2*JIT ]; };
-    // Base leaflet templates (0 = heads up, 1 = mirrored so the tails meet at Y=0). Every tile is a
-    // TRANSLATION of one rotamer VARIANT of one of these two.
-    const tPos = [new Float32Array(LN*3), new Float32Array(LN*3)];
-    for(let k=0;k<LN;k++){ const px=lp[k*3], py=lp[k*3+1], pz=lp[k*3+2];
-      tPos[0][k*3]=px; tPos[0][k*3+1]=py-yMin;  tPos[0][k*3+2]=pz;
-      tPos[1][k*3]=px; tPos[1][k*3+1]=-py+yMin; tPos[1][k*3+2]=-pz; }
-    const tPosV = [ Array.from({length:NV},(_,v)=>applyVar(tPos[0],v)), Array.from({length:NV},(_,v)=>applyVar(tPos[1],v)) ];
+    // Which SPECIES this tile is, drawn from the composition weights by the same deterministic hash
+    // scheme — so the sphere/orbital build and the per-frame nucleon pool always agree on the tile.
+    const wTot = lipids.reduce((s,l)=>s+l.w, 0);
+    const tileType=(gi,gj,leaf)=>{ let r = (hash2(gi*5+leaf*17+7, gj*11+leaf*29+3) >>> 8) / 16777216 * wTot;
+      for(let t=0;t<NTY;t++){ r -= lipids[t].w; if(r < 0) return t; } return NTY-1; };
+    // Base leaflet templates (0 = heads up, 1 = mirrored so the tails meet at Y=0), built for EACH
+    // species. Every tile is a TRANSLATION of one rotamer VARIANT of one leaflet of one species.
+    const tPosV = prep.map(P => {
+      const tPos = [new Float32Array(P.LN*3), new Float32Array(P.LN*3)];
+      for(let k=0;k<P.LN;k++){ const px=P.lp[k*3], py=P.lp[k*3+1], pz=P.lp[k*3+2];
+        tPos[0][k*3]=px; tPos[0][k*3+1]=py-P.yMin;  tPos[0][k*3+2]=pz;
+        tPos[1][k*3]=px; tPos[1][k*3+1]=-py+P.yMin; tPos[1][k*3+2]=-pz; }
+      return [ Array.from({length:NV},(_,v)=>applyVar(tPos[0],v)), Array.from({length:NV},(_,v)=>applyVar(tPos[1],v)) ]; });
     // Build ONE lipid's lobes with exactly the protein's representation: core (non-hybridised)
     // orbitals, hybridised σ bonds with back-knobs, π lobes, and VSEPR lone pairs.
     // Membrane palette for the vdW SPHERES only: yellow overall, POLAR heads (O/P/N) orange, so the membrane
     // still reads as one distinct structure when zoomed out. The ORBITAL lobes are coloured per-element (below),
     // so once you zoom in to the orbitals they match the proteins' element colours.
     const lipCol = e => { const s = EL_LIST[e]; return (s==='O'||s==='P'||s==='N') ? [1.0,0.55,0.10] : [0.96,0.80,0.28]; };
-    const buildLobes = pos => {
+    const buildLobes = (pos, P) => {
+      const {lipid, LN, NBL} = P;   // the species this template is for
       const core={m:[],col:[],cen:[],oid:[]}, bond={m:[],tap:[],col:[],cen:[],oid:[]}, tmp=new Float32Array(16);
       const pushCore=(c,cx,cy,cz,oid)=>{ for(let j=0;j<16;j++) core.m.push(tmp[j]);
         core.col.push(c[0],c[1],c[2]); core.cen.push(cx,cy,cz); core.oid.push(oid); };
@@ -4058,7 +4090,13 @@ async function run(){
         for(const d of lonePairDirs(bd[k],lpn)) put(ax,ay,az, ax+d[0]*0.75,ay+d[1]*0.75,az+d[2]*0.75, LOBE_W,1.0,c, ax,ay,az, 2000+(li++)); }
       return {core, bond};
     };
-    const TV = [ Array.from({length:NV},(_,v)=>buildLobes(tPosV[0][v])), Array.from({length:NV},(_,v)=>buildLobes(tPosV[1][v])) ];
+    // TV[species][leaflet][rotamer]. Yield between species so building 4× the templates does not
+    // freeze the frame loop in one long block.
+    const TV = [];
+    for(let ty=0; ty<NTY; ty++){ const P = prep[ty];
+      TV.push([ Array.from({length:NV},(_,v)=>buildLobes(tPosV[ty][0][v], P)),
+                Array.from({length:NV},(_,v)=>buildLobes(tPosV[ty][1][v], P)) ]);
+      await yield_(); }
     await yield_();
     const NEAR_R = Math.max(60, S*3);   // "close to the camera" → nuclei + electrons switch on inside this
     const mkLipMat = (nm, shader, attrs, extra) => {
@@ -4078,16 +4116,22 @@ async function run(){
     // Split the G×G grid (×2 leaflets) into BL×BL-tile BLOCKS, each a cellList entry, so the membrane
     // frustum-culls and LODs (orbitals near ↔ vdW spheres far) exactly like the protein cells do.
     const BL = 4, nbx = Math.ceil(Gx/BL), nbz = Math.ceil(Gz/BL);
-    const blockR = 0.5*Math.hypot(BL*S, (yMax-yMin)+2*Math.max(xr,zr,1), BL*S) + JIT;
+    const blockR = 0.5*Math.hypot(BL*S, ySpan+2*Math.max(xr,zr,1), BL*S) + JIT;
     for(let bgi=0;bgi<nbx;bgi++){ for(let bgj=0;bgj<nbz;bgj++){
       const gi0=bgi*BL, gj0=bgj*BL, gi1=Math.min(Gx,gi0+BL), gj1=Math.min(Gz,gj0+BL), nt=(gi1-gi0)*(gj1-gj0);
-      for(let leaf=0;leaf<2;leaf++){ const cn=TV[leaf][0].core.m.length/16, bn=TV[leaf][0].bond.m.length/16;   // lobe COUNT is identical across rotamer variants
-        const coreM=new Float32Array(cn*nt*16), coreCol=new Float32Array(cn*nt*3), coreCen=new Float32Array(cn*nt*3), coreOid=new Float32Array(cn*nt), coreAnc=new Float32Array(cn*nt);
-        const bM=new Float32Array(bn*nt*16), bTap=new Float32Array(bn*nt), bCol=new Float32Array(bn*nt*3), bCen=new Float32Array(bn*nt*3), bOid=new Float32Array(bn*nt), bAnc=new Float32Array(bn*nt);
-        const sM=new Float32Array(LN*nt*16), sC=new Float32Array(LN*nt*4), sR=new Float32Array(LN*nt), sAnc=new Float32Array(LN*nt);   // per-instance lipid anchor Z (whole-molecule cross-cut)
+      for(let leaf=0;leaf<2;leaf++){
+        // The lobe COUNT is identical across rotamer variants but DIFFERS between species, so size
+        // the buffers for the biggest species and pack the tiles back to back. The draw count is
+        // whatever was actually written, so the slack at the end is never rendered.
+        const cnA=TV.map(T=>T[leaf][0].core.m.length/16), bnA=TV.map(T=>T[leaf][0].bond.m.length/16);
+        const cnX=Math.max(...cnA), bnX=Math.max(...bnA), lnX=Math.max(...prep.map(P=>P.LN));
+        const coreM=new Float32Array(cnX*nt*16), coreCol=new Float32Array(cnX*nt*3), coreCen=new Float32Array(cnX*nt*3), coreOid=new Float32Array(cnX*nt), coreAnc=new Float32Array(cnX*nt);
+        const bM=new Float32Array(bnX*nt*16), bTap=new Float32Array(bnX*nt), bCol=new Float32Array(bnX*nt*3), bCen=new Float32Array(bnX*nt*3), bOid=new Float32Array(bnX*nt), bAnc=new Float32Array(bnX*nt);
+        const sM=new Float32Array(lnX*nt*16), sC=new Float32Array(lnX*nt*4), sR=new Float32Array(lnX*nt), sAnc=new Float32Array(lnX*nt);   // per-instance lipid anchor Z (whole-molecule cross-cut)
         let ci=0, bi=0, si=0, bcx=0, bcz=0;
         for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
-          const v=tileVar(gi,gj,leaf), jt=tileJit(gi,gj,leaf), tp=tPosV[leaf][v], t=TV[leaf][v];   // per-tile rotamer + jitter
+          const ty=tileType(gi,gj,leaf), P=prep[ty], lipid=P.lipid, LN=P.LN, cn=cnA[ty], bn=bnA[ty];   // per-tile species
+          const v=tileVar(gi,gj,leaf), jt=tileJit(gi,gj,leaf), tp=tPosV[ty][leaf][v], t=TV[ty][leaf][v];   // per-tile rotamer + jitter
           const ox=bilayerCen.x+gi*S-halfX+jt[0], oy=bilayerCen.y+jt[1], oz=bilayerCen.z+gj*S-halfZ+jt[2]; bcx+=ox; bcz+=oz;
           for(let k=0;k<LN;k++){ const el=lipid.el[k], cc=lipCol(el), o=si*16;
             sM[o]=1;sM[o+5]=1;sM[o+10]=1;sM[o+15]=1;
@@ -4111,15 +4155,15 @@ async function run(){
         const coreMesh=BABYLON.MeshBuilder.CreateSphere('lipCo'+bgi+'_'+bgj+'_'+leaf,{segments:6,diameter:1},scene);
         coreMesh.material=lipCoreMat; coreMesh.isPickable=false; coreMesh.alwaysSelectAsActiveMesh=true;
         coreMesh.thinInstanceSetBuffer('ocol',coreCol,3,true); coreMesh.thinInstanceSetBuffer('ocen',coreCen,3,true);
-        coreMesh.thinInstanceSetBuffer('oid',coreOid,1,true); coreMesh.thinInstanceSetBuffer('memAnc',coreAnc,1,true); coreMesh.thinInstanceSetBuffer('matrix',coreM,16,true); coreMesh.thinInstanceCount=cn*nt;
+        coreMesh.thinInstanceSetBuffer('oid',coreOid,1,true); coreMesh.thinInstanceSetBuffer('memAnc',coreAnc,1,true); coreMesh.thinInstanceSetBuffer('matrix',coreM,16,true); coreMesh.thinInstanceCount=ci;
         const bondMesh=BABYLON.MeshBuilder.CreateSphere('lipBo'+bgi+'_'+bgj+'_'+leaf,{segments:5,diameter:1},scene);
         bondMesh.material=lipBondMat; bondMesh.isPickable=false; bondMesh.alwaysSelectAsActiveMesh=true;
         bondMesh.thinInstanceSetBuffer('taper',bTap,1,true); bondMesh.thinInstanceSetBuffer('bcol',bCol,3,true);
         bondMesh.thinInstanceSetBuffer('ocen',bCen,3,true); bondMesh.thinInstanceSetBuffer('oid',bOid,1,true); bondMesh.thinInstanceSetBuffer('memAnc',bAnc,1,true);
-        bondMesh.thinInstanceSetBuffer('matrix',bM,16,true); bondMesh.thinInstanceCount=bn*nt;
+        bondMesh.thinInstanceSetBuffer('matrix',bM,16,true); bondMesh.thinInstanceCount=bi;
         const sphMesh=BABYLON.MeshBuilder.CreatePlane('lipSp'+bgi+'_'+bgj+'_'+leaf,{size:2},scene);
         sphMesh.material=vdwMatStatic; sphMesh.isPickable=false; sphMesh.alwaysSelectAsActiveMesh=true; sphMesh.renderingGroupId=1;
-        sphMesh.thinInstanceSetBuffer('matrix',sM,16,true); sphMesh.thinInstanceSetBuffer('instanceColor',sC,4,true); sphMesh.thinInstanceSetBuffer('instR',sR,1,true); sphMesh.thinInstanceSetBuffer('memAnc',sAnc,1,true);
+        sphMesh.thinInstanceSetBuffer('matrix',sM,16,true); sphMesh.thinInstanceSetBuffer('instanceColor',sC,4,true); sphMesh.thinInstanceSetBuffer('instR',sR,1,true); sphMesh.thinInstanceSetBuffer('memAnc',sAnc,1,true); sphMesh.thinInstanceCount=si;
         coreMesh.setEnabled(false); bondMesh.setEnabled(false); sphMesh.setEnabled(false);
         cellList.push({ cx:bcX, cy:bilayerCen.y, cz:bcZ, meshes:[coreMesh,bondMesh], nuc:null, sphere:sphMesh, macro:false, r:blockR, visOn:false, nucOn:false, sphOn:false });
       }
@@ -4129,8 +4173,9 @@ async function run(){
     /* Nucleons would be ~2 M instances across the whole membrane, so instead a small POOL of
        meshes SHARES one nucleon template buffer per leaflet and is re-positioned (via the imp
        shader's tileOff uniform) onto the tiles nearest the camera each frame. */
-    let nucN=0; for(let k=0;k<LN;k++) nucN += info(lipid.el[k]).n;
-    const buildNuc = pos => {
+    const nucNA = prep.map(P => { let n=0; for(let k=0;k<P.LN;k++) n += info(P.lipid.el[k]).n; return n; });
+    const buildNuc = (pos, P) => {
+      const {lipid, LN} = P; const nucN = nucNA[prep.indexOf(P)];
       const mt=new Float32Array(nucN*16), cl=new Float32Array(nucN*4); let ni=0;
       for(let k=0;k<LN;k++){ const e=lipid.el[k], A=info(e).n, Z=info(e).z;
         const px=pos[k*3], py=pos[k*3+1], pz=pos[k*3+2];
@@ -4141,7 +4186,8 @@ async function run(){
           cl[ni*4]=c[0];cl[ni*4+1]=c[1];cl[ni*4+2]=c[2];cl[ni*4+3]=0; ni++; } }
       return {mt,cl};
     };
-    const nucTplV = [ Array.from({length:NV},(_,v)=>buildNuc(tPosV[0][v])), Array.from({length:NV},(_,v)=>buildNuc(tPosV[1][v])) ];
+    const nucTplV = prep.map((P,ty) => [ Array.from({length:NV},(_,v)=>buildNuc(tPosV[ty][0][v], P)),
+                                         Array.from({length:NV},(_,v)=>buildNuc(tPosV[ty][1][v], P)) ]);
     const _zeroOff = new BABYLON.Vector3(0,0,0);
     const nucMatL = new BABYLON.ShaderMaterial('lipNucMat', scene, 'imp', {
       attributes:['position','instanceColor','world0','world1','world2','world3'],
@@ -4161,10 +4207,10 @@ async function run(){
     for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
       const mesh=BABYLON.MeshBuilder.CreatePlane('lipNuc'+leaf+'_'+p,{size:2},scene);
       mesh.material=nucMatL; mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true; mesh.renderingGroupId=1;
-      mesh.thinInstanceSetBuffer('instanceColor', nucTplV[leaf][0].cl,4,true);
-      mesh.thinInstanceSetBuffer('matrix', nucTplV[leaf][0].mt,16,true);
-      mesh.thinInstanceCount=nucN; mesh.setEnabled(false);
-      mesh.metadata={ off:new BABYLON.Vector3(0,0,0), v:0 };   // v = which rotamer buffer is currently loaded
+      mesh.thinInstanceSetBuffer('instanceColor', nucTplV[0][leaf][0].cl,4,true);
+      mesh.thinInstanceSetBuffer('matrix', nucTplV[0][leaf][0].mt,16,true);
+      mesh.thinInstanceCount=nucNA[0]; mesh.setEnabled(false);
+      mesh.metadata={ off:new BABYLON.Vector3(0,0,0), v:0, ty:0 };   // v/ty = which rotamer of which species is loaded
       nucPool.push(mesh);
     }
     const nearTiles=[];
@@ -4182,10 +4228,10 @@ async function run(){
       }
       for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
         const mesh=nucPool[leaf*POOL+p], t=nearTiles[p];
-        if(t){ const v=tileVar(t.gi,t.gj,leaf), jt=tileJit(t.gi,t.gj,leaf);   // match this tile's rotamer + jitter
+        if(t){ const v=tileVar(t.gi,t.gj,leaf), ty=tileType(t.gi,t.gj,leaf), jt=tileJit(t.gi,t.gj,leaf);   // match this tile's species + rotamer + jitter
           mesh.metadata.off.set(bilayerCen.x+t.gi*S-halfX+jt[0], bilayerCen.y+jt[1], bilayerCen.z+t.gj*S-halfZ+jt[2]);
-          if(mesh.metadata.v!==v){ mesh.thinInstanceSetBuffer('instanceColor', nucTplV[leaf][v].cl,4,true);
-            mesh.thinInstanceSetBuffer('matrix', nucTplV[leaf][v].mt,16,true); mesh.thinInstanceCount=nucN; mesh.metadata.v=v; }
+          if(mesh.metadata.v!==v || mesh.metadata.ty!==ty){ mesh.thinInstanceSetBuffer('instanceColor', nucTplV[ty][leaf][v].cl,4,true);
+            mesh.thinInstanceSetBuffer('matrix', nucTplV[ty][leaf][v].mt,16,true); mesh.thinInstanceCount=nucNA[ty]; mesh.metadata.v=v; mesh.metadata.ty=ty; }
           mesh.setEnabled(true); }
         else mesh.setEnabled(false);
       }
@@ -4311,7 +4357,7 @@ async function run(){
      bouncing off the walls (kinematic — constant velocity, reflect at the faces). */
   {
     let x0=gMiX,x1=gMaX,y0=gMiY,y1=gMaY,z0=gSceneZmin,z1=gSceneZmax;   // Z from the FLATTENED bounds (gMiZ/gMaZ are the huge pre-flatten range) → box hugs the molecule sheet
-    if(lipid){ x0=Math.min(x0,bilayerCen.x-bilayerHalf); x1=Math.max(x1,bilayerCen.x+bilayerHalf);
+    if(lipids.length){ x0=Math.min(x0,bilayerCen.x-bilayerHalf); x1=Math.max(x1,bilayerCen.x+bilayerHalf);
       y0=Math.min(y0,bilayerCen.y-30); y1=Math.max(y1,bilayerCen.y+30); }   // box Z keeps hugging the molecule sheet — do NOT stretch it over the bilayer's huge pre-flatten Z span
     const pad=25; x0-=pad;x1+=pad;y0-=pad;y1+=pad;z0-=pad;z1+=pad;
     const bw=x1-x0, bh=y1-y0, bd=z1-z0;
