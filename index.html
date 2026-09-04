@@ -2686,13 +2686,16 @@ async function run(){
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
     const rot = 2.2 * Math.min(120, scene.getEngine().getDeltaTime())/1000;
     let ya=0, pa=0;
-    if(wasdKeys.a) ya += rot; if(wasdKeys.d) ya -= rot;   // A / D → yaw (look left / right), continuous while held
+    if(wasdKeys.a) ya -= rot; if(wasdKeys.d) ya += rot;   // A / D → yaw (look left / right), continuous while held
     if(wasdKeys.w) pa += rot; if(wasdKeys.s) pa -= rot;   // W / S → pitch (hold W → backflip)
     if(!ya && !pa) return;
     const pos = cam.position, t = cam.getTarget();
     _flF.set(t.x-pos.x, t.y-pos.y, t.z-pos.z); const dist=_flF.length()||50; _flF.scaleInPlace(1/dist);   // forward
     cam.getDirectionToRef(BABYLON.Axis.Y, _flU); _flU.normalize();                                          // the camera's REAL screen-up
-    BABYLON.Vector3.CrossToRef(_flF, _flU, _flR); _flR.normalize();                                         // right = forward × up
+    // CAREFUL: the scene is LEFT-handed (useRightHandedSystem = false), so forward × up is the camera's
+    // screen-LEFT, not its right — it is anti-parallel to the camera's local +X. The pitch sign below is
+    // set to match that, and A/D are signed for it too. Do not "correct" this to look right-handed.
+    BABYLON.Vector3.CrossToRef(_flF, _flU, _flR); _flR.normalize();                                        // = screen LEFT (see above)
     const q = BABYLON.Quaternion.RotationAxis(_flU, ya).multiply(BABYLON.Quaternion.RotationAxis(_flR, pa));
     BABYLON.Matrix.FromQuaternionToRef(q, _flM);
     const nF = BABYLON.Vector3.TransformCoordinates(_flF, _flM), nU = BABYLON.Vector3.TransformCoordinates(_flU, _flM); nU.normalize();
