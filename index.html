@@ -563,6 +563,21 @@ attribute float groupId;   // per-cofactor-atom group index → the fragment bri
 varying float vGid;
 #endif
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
+#ifdef WATERBOX
+// Free water: the molecule flies at a constant velocity and reflects off the container walls. Folding
+// (start + v*t) into a TRIANGLE WAVE gives exactly that, analytically, with no state - so 20000 molecules
+// animate entirely on the GPU instead of costing a per-frame integration and a multi-megabyte re-upload.
+// The three atoms of one molecule share wOrig/wVel and add their own local offset, so it stays rigid.
+attribute vec3 wOrig;
+attribute vec3 wVel;
+uniform vec3 boxLo;
+uniform vec3 boxHi;
+float bnc(float x, float lo, float hi){
+  float s = hi - lo;
+  float t = mod(x - lo, 2.0*s);
+  return lo + (t < s ? t : 2.0*s - t);
+}
+#endif
 #ifdef MEMFADE
 // Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
 // of one upright lipid shares it and the lipid stays rigid, while lipids a tile apart are out of
@@ -573,6 +588,11 @@ vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec3 base = W[3].xyz;
+#ifdef WATERBOX
+  base = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
+              bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
+              bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z)) + W[3].xyz;
+#endif
 #ifdef LIPTILE
   base += tileOff;
 #endif
@@ -4567,11 +4587,13 @@ async function run(){
     gSpawnPlaneZ = gcz;
     gSpawnBounds = {x0:gcx-iw, x1:gcx+iw, y0:gcy-ih, y1:gcy+ih};
 
-    const NW=0, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };   // free-floating water removed from the thylakoid scene
+    const NW=20000, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };   // free-floating water filling the container box
     const wc=new Float32Array(NW*3), wv=new Float32Array(NW*3), wh1=new Float32Array(NW*3), wh2=new Float32Array(NW*3);
     for(let i=0;i<NW;i++){
-      wc[i*3]=x0+rnd(i+1)*bw; wc[i*3+1]=y0+rnd(i+2)*bh; wc[i*3+2]=z0+rnd(i+3)*bd;
-      const sp=28+rnd(i+7)*40, th=rnd(i+4)*6.283, ph=Math.acos(2*rnd(i+5)-1);
+      // Seed each axis from its OWN stream (i*3+n, not i+n) — with i+n consecutive molecules share draws
+      // (molecule i's Y is molecule i+1's X), which reads as diagonal banding once there are thousands.
+      wc[i*3]=x0+rnd(i*3+1)*bw; wc[i*3+1]=y0+rnd(i*3+2)*bh; wc[i*3+2]=z0+rnd(i*3+3)*bd;
+      const sp=28+rnd(i*5+7)*40, th=rnd(i*5+4)*6.283, ph=Math.acos(2*rnd(i*5+5)-1);
       wv[i*3]=sp*Math.sin(ph)*Math.cos(th); wv[i*3+1]=sp*Math.cos(ph); wv[i*3+2]=sp*Math.sin(ph)*Math.sin(th);
       // two O–H bonds (0.96 Å, 104.5°) in a random orientation
       let ux=rnd(i*7+1)*2-1, uy=rnd(i*7+2)*2-1, uz=rnd(i*7+3)*2-1; const ul=Math.hypot(ux,uy,uz)||1; ux/=ul;uy/=ul;uz/=ul;
@@ -4582,28 +4604,36 @@ async function run(){
       wh2[i*3]=oh*(ux*ca-qx*sa); wh2[i*3+1]=oh*(uy*ca-qy*sa); wh2[i*3+2]=oh*(uz*ca-qz*sa);
     }
     const codeO=codeOf('O'), codeH=codeOf('H');
-    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{attributes:['position','instanceColor','world0','world1','world2','world3'],uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos']});
+    /* Everything below is uploaded ONCE. The molecules fly and bounce entirely in the vertex shader
+       (see WATERBOX), driven by the existing uT clock — which is already advanced by dt × gSpeed, so the
+       speed slider still governs them. Integrating 20000 molecules on the CPU and re-uploading their
+       60000 matrices every frame cost ~8 ms per frame, which is most of the frame budget. */
+    const oR = info(codeO).vr*FILL_SCALE;
+    const bLo = new BABYLON.Vector3(x0+oR, y0+oR, z0+oR), bHi = new BABYLON.Vector3(x1-oR, y1-oR, z1-oR);
+    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
+        attributes:['position','instanceColor','wOrig','wVel','world0','world1','world2','world3'],
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi'],
+        defines:['#define WATERBOX'] });
       m.setFloat('radius',rad);m.setFloat('isShell',0);m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.setFloat('coneCos',-1.0);m.backFaceCulling=false;
-      m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
-    const mkImp=(nm,rad,col,cnt)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
-      const cb=new Float32Array(cnt*4); for(let i=0;i<cnt;i++){ cb[i*4]=col[0];cb[i*4+1]=col[1];cb[i*4+2]=col[2];cb[i*4+3]=0; } mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
-      const mb=new Float32Array(cnt*16); for(let i=0;i<cnt;i++){ mb[i*16]=1;mb[i*16+5]=1;mb[i*16+10]=1;mb[i*16+15]=1; } mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=cnt; return {mesh,mb}; };
-    const oI=mkImp('wO', info(codeO).vr*FILL_SCALE, [0.94,0.15,0.15], NW);
-    const hI=mkImp('wH', info(codeH).vr*FILL_SCALE, [0.92,0.92,0.92], NW*2);
-    scene.onBeforeRenderObservable.add(()=>{
-      const dt=Math.min(engine.getDeltaTime(),50)*0.001*gSpeed, oR=info(codeO).vr*FILL_SCALE;
-      for(let i=0;i<NW;i++){
-        for(let a=0;a<3;a++){ const j=i*3+a; wc[j]+=wv[j]*dt;
-          const lo=[x0,y0,z0][a]+oR, hi=[x1,y1,z1][a]-oR;
-          if(wc[j]<lo){ wc[j]=lo; wv[j]=Math.abs(wv[j]); } else if(wc[j]>hi){ wc[j]=hi; wv[j]=-Math.abs(wv[j]); } }
-        const cx=wc[i*3],cy=wc[i*3+1],cz=wc[i*3+2], o=i*16;
-        oI.mb[o+12]=cx; oI.mb[o+13]=cy; oI.mb[o+14]=cz;
-        const oa=(i*2)*16, ob=(i*2+1)*16;
-        hI.mb[oa+12]=cx+wh1[i*3]; hI.mb[oa+13]=cy+wh1[i*3+1]; hI.mb[oa+14]=cz+wh1[i*3+2];
-        hI.mb[ob+12]=cx+wh2[i*3]; hI.mb[ob+13]=cy+wh2[i*3+1]; hI.mb[ob+14]=cz+wh2[i*3+2];
-      }
-      oI.mesh.thinInstanceBufferUpdated('matrix'); hI.mesh.thinInstanceBufferUpdated('matrix');
-    });
+      m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT);
+        eff.setVector3('boxLo',bLo); eff.setVector3('boxHi',bHi);
+        eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
+    // `off` gives each atom its rigid offset from the molecule centre (0 for O, the two O–H vectors for H)
+    const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+      const cb=new Float32Array(cnt*4), mb=new Float32Array(cnt*16), og=new Float32Array(cnt*3), vl=new Float32Array(cnt*3);
+      for(let k=0;k<cnt;k++){ const i=off?(k>>1):k;                       // two H instances per molecule
+        cb[k*4]=col[0];cb[k*4+1]=col[1];cb[k*4+2]=col[2];cb[k*4+3]=0;
+        mb[k*16]=1;mb[k*16+5]=1;mb[k*16+10]=1;mb[k*16+15]=1;
+        if(off){ const h=(k&1)?wh2:wh1; mb[k*16+12]=h[i*3]; mb[k*16+13]=h[i*3+1]; mb[k*16+14]=h[i*3+2]; }
+        og[k*3]=wc[i*3]; og[k*3+1]=wc[i*3+1]; og[k*3+2]=wc[i*3+2];
+        vl[k*3]=wv[i*3]; vl[k*3+1]=wv[i*3+1]; vl[k*3+2]=wv[i*3+2]; }
+      mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
+      mesh.thinInstanceSetBuffer('matrix',mb,16,true);
+      mesh.thinInstanceSetBuffer('wOrig',og,3,true);
+      mesh.thinInstanceSetBuffer('wVel',vl,3,true);
+      mesh.thinInstanceCount=cnt; return mesh; };
+    mkImp('wO', oR, [0.94,0.15,0.15], NW, false);
+    mkImp('wH', info(codeH).vr*FILL_SCALE, [0.92,0.92,0.92], NW*2, true);
   }
 
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
