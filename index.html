@@ -2669,10 +2669,14 @@ async function run(){
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
   window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
-  // WASD is a TRULY FREE look: the camera stays put and its orientation rotates with no limit. A/D yaw around
-  // the camera's own up, W/S pitch around its own right — rotating BOTH the forward AND the up vector together
-  // (quaternion), so holding W pitches all the way over into a backflip. Position is fixed → look, never orbit.
+  // WASD is a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
+  // A/D yaw around the WORLD vertical (the floor normal) — NOT around the camera's own up. Looking down
+  // at the membrane leaves the camera's own up lying nearly flat IN the floor, so yawing about it tumbles
+  // the view over the plane instead of turning it. Yawing about the floor normal is a real head-turn:
+  // A always brings what is on the left into view, at any pitch.
+  // W/S still pitch around the camera's own right, so holding W pitches all the way over into a backflip.
   const _flM = new BABYLON.Matrix(), _flF = new BABYLON.Vector3(), _flU = new BABYLON.Vector3(), _flR = new BABYLON.Vector3();
+  const _flYaw = new BABYLON.Vector3(0, 0, 1);   // floor normal = the axis a head turns about
   scene.onBeforeRenderObservable.add(() => {
     // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
@@ -2685,7 +2689,7 @@ async function run(){
     _flF.set(t.x-pos.x, t.y-pos.y, t.z-pos.z); const dist=_flF.length()||50; _flF.scaleInPlace(1/dist);   // forward
     _flU.copyFrom(cam.upVector); _flU.normalize();                                                          // up
     BABYLON.Vector3.CrossToRef(_flF, _flU, _flR); _flR.normalize();                                         // right = forward × up
-    const q = BABYLON.Quaternion.RotationAxis(_flU, ya).multiply(BABYLON.Quaternion.RotationAxis(_flR, pa));
+    const q = BABYLON.Quaternion.RotationAxis(_flYaw, ya).multiply(BABYLON.Quaternion.RotationAxis(_flR, pa));
     BABYLON.Matrix.FromQuaternionToRef(q, _flM);
     const nF = BABYLON.Vector3.TransformCoordinates(_flF, _flM), nU = BABYLON.Vector3.TransformCoordinates(_flU, _flM); nU.normalize();
     cam.upVector.copyFrom(nU);
@@ -4005,8 +4009,8 @@ async function run(){
     const S = Math.max(Math.max(xr,zr)*0.46, areaPitch, 5);
     const Gx = Math.max(4, Math.round(2*memHalfX/S)+1), Gz = Math.max(4, Math.round(2*memHalfZ/S)+1);
     const halfX=(Gx-1)*S*0.5, halfZ=(Gz-1)*S*0.5;
-    const JIT = S*0.16;   // per-tile in-plane position jitter → breaks the crystalline grid
-    bilayerHalf = Math.max(halfX, halfZ) + Math.max(xr,zr) + JIT;
+    const JIT = S*0.34;   // per-tile in-plane position jitter → breaks the crystalline grid
+    bilayerHalf = Math.max(halfX, halfZ) + Math.max(xr,zr) + JIT + S*0.5;   // +S*0.5 = the row stagger below
     buildMembrane = async () => {   // deferred: runs after the scene is revealed, so the complexes show first and the membrane fills in
     await yield_();
     // ── Randomisation: NV pre-baked rotamer templates. Each tile picks one by a DETERMINISTIC hash
@@ -4033,6 +4037,15 @@ async function run(){
     const wTot = lipids.reduce((s,l)=>s+l.w, 0);
     const tileType=(gi,gj,leaf)=>{ let r = (hash2(gi*5+leaf*17+7, gj*11+leaf*29+3) >>> 8) / 16777216 * wTot;
       for(let t=0;t<NTY;t++){ r -= lipids[t].w; if(r < 0) return t; } return NTY-1; };
+    /* Where a tile actually sits. A plain square lattice reads as obvious rows and columns however
+       much the molecules are spun, so alternate rows are STAGGERED by half a pitch (hexagonal
+       packing, the densest even spread) and every tile is then jittered hard. The result is an
+       evenly spread but visibly random fluid. Every consumer must use this one function so the
+       sphere/orbital build and the per-frame nucleon pool place the same tile identically. */
+    const tileOrg=(gi,gj,leaf)=>{ const jt=tileJit(gi,gj,leaf);
+      return [ bilayerCen.x + gi*S - halfX + (gj&1)*S*0.5 + jt[0],
+               bilayerCen.y + jt[1],
+               bilayerCen.z + gj*S - halfZ + jt[2] ]; };
     // Base leaflet templates (0 = heads up, 1 = mirrored so the tails meet at Y=0), built for EACH
     // species. Every tile is a TRANSLATION of one rotamer VARIANT of one leaflet of one species.
     const tPosV = prep.map(P => {
@@ -4116,7 +4129,7 @@ async function run(){
     // Split the G×G grid (×2 leaflets) into BL×BL-tile BLOCKS, each a cellList entry, so the membrane
     // frustum-culls and LODs (orbitals near ↔ vdW spheres far) exactly like the protein cells do.
     const BL = 4, nbx = Math.ceil(Gx/BL), nbz = Math.ceil(Gz/BL);
-    const blockR = 0.5*Math.hypot(BL*S, ySpan+2*Math.max(xr,zr,1), BL*S) + JIT;
+    const blockR = 0.5*Math.hypot(BL*S, ySpan+2*Math.max(xr,zr,1), BL*S) + JIT + S*0.5;   // +S*0.5 = the odd-row stagger
     for(let bgi=0;bgi<nbx;bgi++){ for(let bgj=0;bgj<nbz;bgj++){
       const gi0=bgi*BL, gj0=bgj*BL, gi1=Math.min(Gx,gi0+BL), gj1=Math.min(Gz,gj0+BL), nt=(gi1-gi0)*(gj1-gj0);
       for(let leaf=0;leaf<2;leaf++){
@@ -4131,8 +4144,8 @@ async function run(){
         let ci=0, bi=0, si=0, bcx=0, bcz=0;
         for(let gi=gi0;gi<gi1;gi++) for(let gj=gj0;gj<gj1;gj++){
           const ty=tileType(gi,gj,leaf), P=prep[ty], lipid=P.lipid, LN=P.LN, cn=cnA[ty], bn=bnA[ty];   // per-tile species
-          const v=tileVar(gi,gj,leaf), jt=tileJit(gi,gj,leaf), tp=tPosV[ty][leaf][v], t=TV[ty][leaf][v];   // per-tile rotamer + jitter
-          const ox=bilayerCen.x+gi*S-halfX+jt[0], oy=bilayerCen.y+jt[1], oz=bilayerCen.z+gj*S-halfZ+jt[2]; bcx+=ox; bcz+=oz;
+          const v=tileVar(gi,gj,leaf), tp=tPosV[ty][leaf][v], t=TV[ty][leaf][v];   // per-tile rotamer
+          const og=tileOrg(gi,gj,leaf), ox=og[0], oy=og[1], oz=og[2]; bcx+=ox; bcz+=oz;
           for(let k=0;k<LN;k++){ const el=lipid.el[k], cc=lipCol(el), o=si*16;
             sM[o]=1;sM[o+5]=1;sM[o+10]=1;sM[o+15]=1;
             sM[o+12]=tp[k*3]+ox; sM[o+13]=tp[k*3+1]+oy; sM[o+14]=tp[k*3+2]+oz;
@@ -4220,16 +4233,16 @@ async function run(){
         const gi0=Math.round((cp.x-bilayerCen.x+halfX)/S), gj0=Math.round((cp.z-bilayerCen.z+halfZ)/S), RAD=3;
         for(let di=-RAD;di<=RAD;di++) for(let dj=-RAD;dj<=RAD;dj++){
           const gi=gi0+di, gj=gj0+dj; if(gi<0||gj<0||gi>=Gx||gj>=Gz) continue;
-          const ox=bilayerCen.x+gi*S-halfX, oz=bilayerCen.z+gj*S-halfZ;
-          const dx=ox-cp.x, dz=oz-cp.z, d2=dx*dx+dz*dz;
+          const og=tileOrg(gi,gj,0);   // leaflet 0's origin is close enough to rank tiles by distance
+          const dx=og[0]-cp.x, dz=og[2]-cp.z, d2=dx*dx+dz*dz;
           if(d2 < NEAR_R*NEAR_R) nearTiles.push({gi,gj,d2});
         }
         nearTiles.sort((a,b)=>a.d2-b.d2);
       }
       for(let leaf=0;leaf<2;leaf++) for(let p=0;p<POOL;p++){
         const mesh=nucPool[leaf*POOL+p], t=nearTiles[p];
-        if(t){ const v=tileVar(t.gi,t.gj,leaf), ty=tileType(t.gi,t.gj,leaf), jt=tileJit(t.gi,t.gj,leaf);   // match this tile's species + rotamer + jitter
-          mesh.metadata.off.set(bilayerCen.x+t.gi*S-halfX+jt[0], bilayerCen.y+jt[1], bilayerCen.z+t.gj*S-halfZ+jt[2]);
+        if(t){ const v=tileVar(t.gi,t.gj,leaf), ty=tileType(t.gi,t.gj,leaf), og=tileOrg(t.gi,t.gj,leaf);   // match this tile's species + rotamer + placement
+          mesh.metadata.off.set(og[0], og[1], og[2]);
           if(mesh.metadata.v!==v || mesh.metadata.ty!==ty){ mesh.thinInstanceSetBuffer('instanceColor', nucTplV[ty][leaf][v].cl,4,true);
             mesh.thinInstanceSetBuffer('matrix', nucTplV[ty][leaf][v].mt,16,true); mesh.thinInstanceCount=nucNA[ty]; mesh.metadata.v=v; mesh.metadata.ty=ty; }
           mesh.setEnabled(true); }
