@@ -4731,16 +4731,21 @@ async function run(){
     const wPick=new Int32Array(WCAP), wPickD=new Float32Array(WCAP), wPos=new Float32Array(WCAP*3);
     scene.onBeforeRenderObservable.add(()=>{
       const cp=cam.position, R=gCrisp, R2=R*R;
+      /* Use the clock the SHADER will see, not the current one. gWaveT is advanced by an observer that is
+         registered AFTER this one, so by the time the water spheres are drawn it has already moved on by a
+         frame. Reading gWaveT directly here left the orbitals trailing their own atoms by one frame — at
+         28-68 units/s that is about an atom radius, which is exactly what it looked like. */
+      const T = gWaveT + Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;
       /* Take the NEAREST WCAP molecules in the zone, not the first WCAP by index — an index-ordered pick
          would swap which molecules are detailed as they drift, making orbitals blink on and off around
          you. Insertion into a WCAP-sized worst-first list, so no full sort of the candidates. */
       let n=0, worst=Infinity;
       for(let i=0;i<NW;i++){
-        const px=bnc(wc[i*3]  +wv[i*3]  *gWaveT, bLo.x, bHi.x);
+        const px=bnc(wc[i*3]  +wv[i*3]  *T, bLo.x, bHi.x);
         const dx=px-cp.x; if(dx*dx>R2) continue;                       // cheap axis reject before the rest
-        const py=bnc(wc[i*3+1]+wv[i*3+1]*gWaveT, bLo.y, bHi.y);
+        const py=bnc(wc[i*3+1]+wv[i*3+1]*T, bLo.y, bHi.y);
         const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
-        const pz=bnc(wc[i*3+2]+wv[i*3+2]*gWaveT, bLo.z, bHi.z);
+        const pz=bnc(wc[i*3+2]+wv[i*3+2]*T, bLo.z, bHi.z);
         const dz=pz-cp.z; const d2=dx*dx+dy*dy+dz*dz; if(d2>R2) continue;
         if(n===WCAP && d2>=worst) continue;
         let at=n<WCAP ? n++ : WCAP-1;
