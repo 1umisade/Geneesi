@@ -123,6 +123,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 #memcut-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #memcut-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #memcut-icon{font-size:15px;line-height:1}
+#memonly-btn{position:absolute;left:16px;top:396px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#memonly-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#memonly-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#memonly-icon{font-size:15px;line-height:1}
 #vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
@@ -234,6 +242,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="lantern-btn" title="Lyhty: pimennä kaikki paitsi kiihdytetty elektroni (valaisee lähiatomit)"><span id="lantern-icon">🏮</span><span id="lantern-label">Lyhty</span></button>
 <button id="membrane-btn" title="Piilota lipidikalvo (parantaa suorituskykyä)"><span id="membrane-icon">🟰</span><span id="membrane-label">Kalvo</span></button>
 <button id="memcut-btn" title="Piilota kameran puoleinen kalvon puolisko (näe proteiinien läpi)"><span id="memcut-icon">◧</span><span id="memcut-label">Puolikas</span></button>
+<button id="memonly-btn" title="Näytä vain kalvoon sitoutuneet proteiinit (piilota irralliset — keventää)"><span id="memonly-icon">🧫</span><span id="memonly-label">Vain kalvo</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="camcoords"></div>
@@ -3140,6 +3149,14 @@ async function run(){
   // permanently on (wantCut hardcoded true); now it is button-controlled and OFF by default, so the full
   // bilayer shows until you choose to cut the near half. gCut[2] eases in/out over MEM_FADE_S when toggled.
   let gMemCut = false;   // full bilayer by default (both leaflets); the Puolikas button cuts the near half
+  // "Membrane only" perf mode: hide the peripheral (soluble) proteins, keep the ones EMBEDDED in the membrane.
+  // A model is membrane-integral when its scene Y sits near the bilayer plane (|y| small); peripheral ones are
+  // offset into the stroma / lumen (|y| large — see the MODELS table).
+  let gMemOnly = false;
+  const gMemBound = mols.map(m => Math.abs((m.cfg && m.cfg.y) || 0) < 120);
+  { const ob = document.getElementById('memonly-btn');
+    if(ob){ ob.addEventListener('click', () => { gMemOnly = !gMemOnly; ob.classList.toggle('on', gMemOnly); });
+      ob.classList.toggle('on', gMemOnly); } }
   { const cb = document.getElementById('memcut-btn');
     if(cb){ cb.addEventListener('click', () => { gMemCut = !gMemCut; cb.classList.toggle('on', gMemCut); });
       cb.classList.toggle('on', gMemCut); } }
@@ -4427,6 +4444,12 @@ async function run(){
     gCut[1] = (cp.z - bilayerCen.z) >= 0 ? 1 : -1;                   // which side is toward the camera
     for(const cell of cellList){
       if(!cell.macro && !gMembrane){   // membrane hidden (perf toggle) → force every lipid mesh off, skip the rest
+        if(cell.visOn !== false){ cell.visOn = false; for(const m of cell.meshes) m.setEnabled(false); }
+        if(cell.sphOn !== false){ cell.sphOn = false; if(cell.sphere) cell.sphere.setEnabled(false); }
+        if(cell.nucOn !== false){ cell.nucOn = false; if(cell.nuc) cell.nuc.setEnabled(false); }
+        continue;
+      }
+      if(cell.macro && gMemOnly && !gMemBound[cell.mi|0]){   // "membrane only" mode → force peripheral (non-integral) proteins off
         if(cell.visOn !== false){ cell.visOn = false; for(const m of cell.meshes) m.setEnabled(false); }
         if(cell.sphOn !== false){ cell.sphOn = false; if(cell.sphere) cell.sphere.setEnabled(false); }
         if(cell.nucOn !== false){ cell.nucOn = false; if(cell.nuc) cell.nuc.setEnabled(false); }
