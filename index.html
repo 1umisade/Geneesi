@@ -3142,7 +3142,7 @@ async function run(){
   let gRevealFade = 0.95;     // revealed-shell opacity at the FAR reveal edge → distant atoms stay ~solid, close ones go glass. Dev slider.
   let gEtc = false, etcOverlay = null;  // ETC cofactor overlay toggle + its mesh (built later) — OFF by default (it also drives the see-through reveal and a heavy depth pass, so the scene starts plain and fast)
   let gOutlines = true;                 // black molecule silhouette + green selection ring — both off together via the "Reunat" button
-  let gCullOnly = false;                // DEV: draw ONLY the cells inside the reveal/cull range, so you can see exactly what the culler keeps
+  let gCullOnly = false;                // DEV: draw ONLY the cells right next to the camera, so you can see exactly what is close by
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
@@ -4591,6 +4591,7 @@ async function run(){
   // near-solid vdW sphere, so drawing them out to the full orbital range bought nothing.
   const NUC_DIST = Math.max(65, REVEAL_DIST*0.5);
   const FAR_LOD2 = 420*420;   // beyond ~420 units an atom is ~2 px → cheap opaque material (squared, for d2)
+  const CULL_CLOSE = 35;      // DEV "vain lähialue": how far past a cell's near edge still counts as "right here"
   applyGfxMode();   // orbitals are ON by default → push the reveal params (needs REVEAL_DIST) + button label now that it exists
   const zoomEl = document.getElementById('zoomval');
   const camcoordsEl = document.getElementById('camcoords');   // dev-only camera pos/rotation readout
@@ -4686,9 +4687,11 @@ async function run(){
       }
       const nr = REVEAL_DIST + cR + 8; const near = vis && d2 < nr*nr;   // enable when the cell's NEAR EDGE (not centre) reaches the reveal distance → orbitals are present before those atoms' vdW shells go glass (no see-through gap)
       const wantOrb = vis && gGfxMode === 1 && near;      // orbitals only for NEAR cells in mode 1 (never rendered out of range)
-      // DEV "vain culling-alue": drop every cell OUTSIDE the reveal range, so what stays on screen is
-      // exactly the set the culler considers in range — the far LOD tier becomes visible as empty space.
-      const wantSph = vis && !!cell.sphere && (!gCullOnly || near);
+      // DEV "vain lähialue": keep ONLY cells whose NEAR EDGE is within CULL_CLOSE of the camera, i.e. the
+      // handful you are practically standing in. Everything else is dropped outright, so the screen shows
+      // just the immediate neighbourhood and the cost of all the rest reads off the frame rate.
+      const closeR = CULL_CLOSE + cR;
+      const wantSph = vis && !!cell.sphere && (!gCullOnly || d2 < closeR*closeR);
       const nucR = NUC_DIST + cR + 8;                     // nuclei use their OWN tight range, not the orbital one
       const wantNuc = vis && gGfxMode === 1 && d2 < nucR*nucR;   // nuclei: mode 1, genuinely up close only
       if(cell.visOn !== wantOrb){ cell.visOn = wantOrb; for(const m of cell.meshes) m.setEnabled(wantOrb); }
@@ -5410,15 +5413,14 @@ async function run(){
   // Restore-defaults button: snapshot every slider's starting value now, then reset + re-apply on click.
   const devSliders = [coneSld, qSld, lSld, bSld, ctSld, cbSld, caSld, oaSld, coSld, crSld, clSld, fpSld, dsSld, dcSld, asSld, spSld, csSld, rfSld, fdSld, fvStrSld, fvRchSld];
   const devDefaults = devSliders.map(s => s.value);
-  // Show ONLY what the culler keeps: every cell beyond the reveal range is hidden outright, so the
-  // in-range set is exactly what remains on screen (and the cost of everything else is visible as the
-  // frame-rate difference).
+  // Show ONLY the immediate neighbourhood: every cell whose near edge is further than CULL_CLOSE from the
+  // camera is hidden outright, leaving just what you are practically standing in.
   const cullRow = document.createElement('div');
   const cullBtn = document.createElement('button');
   const cullStyle = on => 'cursor:pointer;font:11px ui-monospace,monospace;border:2px solid var(--brown);'
     + 'border-radius:9px;box-shadow:0 2px 0 var(--brown);padding:3px 11px;align-self:flex-start;margin-top:2px;'
     + (on ? 'color:var(--sageink);background:var(--sage);' : 'color:var(--ink);background:var(--paper);');
-  const syncCull = () => { cullBtn.textContent = gCullOnly ? 'vain culling-alue: ON' : 'vain culling-alue';
+  const syncCull = () => { cullBtn.textContent = gCullOnly ? 'vain lähialue: ON' : 'vain lähialue';
     cullBtn.style.cssText = cullStyle(gCullOnly); };
   cullBtn.onclick = () => { gCullOnly = !gCullOnly; syncCull(); };
   syncCull();
