@@ -3584,6 +3584,20 @@ async function run(){
     eff.setFloat('uT',gWaveT); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
+  /* Warm the far shaders up ONCE, on the first frame where a mesh of each kind exists. Without this the
+     very first LOD swap has to compile the shader mid-flight, which shows up as a hitch exactly when new
+     geometry comes into view — a measured 11.5 ms frame against a 2.6 ms steady state. */
+  { let warmed = false;
+    scene.onBeforeRenderObservable.add(() => {
+      if(warmed) return;
+      const pm = scene.meshes.find(m => /^cs\d/.test(m.name));
+      const lm = scene.meshes.find(m => m.name.startsWith('lipSp'));
+      if(!pm || !lm) return;
+      warmed = true;
+      try { vdwFarMat.forceCompilation(pm); } catch(_){}
+      try { vdwStaticFarMat.forceCompilation(lm); } catch(_){}
+    }); }
+
   // ── ETC cofactor overlay ──────────────────────────────────────────────────
   // The electron-transport cofactors (OEC, pheophytin, plasto-/phylloquinone, hemes, Fe-S clusters,
   // Cu) as vdW spheres, drawn in a rendering group whose depth buffer is cleared first, so they sit
@@ -5273,7 +5287,9 @@ async function run(){
   const devPanel = document.createElement('div');
   devPanel.style.cssText = 'position:fixed;right:16px;top:56px;z-index:22;display:none;flex-direction:column;gap:7px;'
     + 'font:11px ui-monospace,monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);'
-    + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;max-height:calc(100vh - 140px);overflow-y:auto;';
+    // Anchored between the top bar and the bottom console (sc2-console is ~229 tall) instead of a bare
+    // max-height, so the panel can never run underneath it — it just scrolls internally when it is taller.
+    + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;bottom:246px;max-height:none;overflow-y:auto;';
   // Camera feel: max fly speed (arrow keys) and max turn rate (WASD). Both ease 0 → max over 1 s.
   const mvRow = document.createElement('div');
   mvRow.innerHTML = 'move speed: <b id="dev-mv-val">1.00×</b>';
