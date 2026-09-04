@@ -3815,6 +3815,7 @@ async function run(){
   /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
      torus mesh; the shader shows it only inside the reveal-bubble. */
+  const ringCells = [];   // per-bucket aromatic-ring meshes, culled by camera distance in the frame loop
   if(RINGS.length){
     const perpV = n => { const a = Math.abs(n[0])<0.9?[1,0,0]:[0,1,0]; const c=crs(n,a); const l=Math.hypot(c[0],c[1],c[2])||1; return [c[0]/l,c[1]/l,c[2]/l]; };
     const ringMat = new BABYLON.ShaderMaterial('ringMat', scene, 'ring', {
@@ -3825,8 +3826,8 @@ async function run(){
       eff.setMatrices('modelXform', gModelXform); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setFloat('uT',gWaveT); eff.setFloat('uRingT',gWaveT*2.2);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
-    const torus = BABYLON.MeshBuilder.CreateTorus('rings', {diameter:2, thickness:0.35, tessellation:14}, scene);   // 2× narrower tube
-    torus.material=ringMat; torus.isPickable=false; torus.alwaysSelectAsActiveMesh=true;
+    const torusTpl = BABYLON.MeshBuilder.CreateTorus('ringsTpl', {diameter:2, thickness:0.35, tessellation:14}, scene);   // 2× narrower tube
+    torusTpl.material=ringMat; torusTpl.isPickable=false; torusTpl.setEnabled(false);   // template only — the per-bucket clones share its geometry
     const rmat = new Float32Array(RINGS.length*2*16), rcol = new Float32Array(RINGS.length*2*3), rmid = new Float32Array(RINGS.length*2); let ii=0;
     for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], T=perpV(N), B=crs(N,T), R=rg.R, c=rg.col;
       for(const dw of [0.5,-0.5]){ const o=ii*16;
@@ -3836,8 +3837,6 @@ async function run(){
         rmat[o+12]=rg.cx+dw*N[0]; rmat[o+13]=rg.cy+dw*N[1]; rmat[o+14]=rg.cz+dw*N[2]; rmat[o+15]=1;
         rcol[ii*3]=c[0]; rcol[ii*3+1]=c[1]; rcol[ii*3+2]=c[2]; rmid[ii]=rg.mi|0; ii++; }
     }
-    torus.thinInstanceSetBuffer('matrix', rmat, 16, true); torus.thinInstanceSetBuffer('rcol', rcol, 3, true);
-    torus.thinInstanceSetBuffer('modelId', rmid, 1, true); torus.thinInstanceCount = RINGS.length*2;
 
     /* The unhybridised p-orbitals (perpendicular to the ring on each carbon) that
        overlap side-on to form the delocalised π. Drawn with the orbital shader. */
@@ -3851,8 +3850,8 @@ async function run(){
       eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
-    const pMesh = BABYLON.MeshBuilder.CreateSphere('aromP', {segments:3, diameter:1}, scene);
-    pMesh.material=pMat; pMesh.isPickable=false; pMesh.alwaysSelectAsActiveMesh=true;
+    const pTpl = BABYLON.MeshBuilder.CreateSphere('aromPTpl', {segments:3, diameter:1}, scene);
+    pTpl.material=pMat; pTpl.isPickable=false; pTpl.setEnabled(false);   // template only
     const NP = RINGS.length*6*2;   // 6 atoms × 2 lobes (±normal)
     const pmat=new Float32Array(NP*16), pcol=new Float32Array(NP*3), pcen=new Float32Array(NP*3), pmid=new Float32Array(NP), pLen=0.62, pW=0.30; let pi=0;
     for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], c=rg.col;
@@ -3860,7 +3859,47 @@ async function run(){
         for(const s of [1,-1]){ cylTo(ax,ay,az, ax+N[0]*pLen*s, ay+N[1]*pLen*s, az+N[2]*pLen*s, pmat, pi*16, pW);
           pcol[pi*3]=c[0];pcol[pi*3+1]=c[1];pcol[pi*3+2]=c[2]; pcen[pi*3]=ax;pcen[pi*3+1]=ay;pcen[pi*3+2]=az; pmid[pi]=rg.mi|0; pi++; } }
     }
-    pMesh.thinInstanceSetBuffer('matrix', pmat,16,true); pMesh.thinInstanceSetBuffer('ocol', pcol,3,true); pMesh.thinInstanceSetBuffer('ocen', pcen,3,true); pMesh.thinInstanceSetBuffer('oid', new Float32Array(NP).fill(99),1,true); pMesh.thinInstanceSetBuffer('modelId', pmid,1,true); pMesh.thinInstanceCount=NP;
+    /* The tori and p-lobes are ~94% of the scene's triangles, and the shaders discard every one of them
+       past BUBBLE_R of the camera — so as one global mesh the whole lot was transformed each frame only
+       to be thrown away. Bucket them by model + a coarse cell so entire buckets switch off. A bucket's
+       centre is kept in PRE-transform space and pushed through gModelXform/macroXform each frame, exactly
+       as the atom cells are, so buckets stay correct when a molecule is dragged. */
+    const RCELL = 48;                       // ≈ BUBBLE_R → usually only a handful of buckets are live
+    const rbuck = new Map();
+    RINGS.forEach((rg, i) => {
+      const k = (rg.mi|0)+'|'+Math.floor(rg.cx/RCELL)+'|'+Math.floor(rg.cy/RCELL)+'|'+Math.floor(rg.cz/RCELL);
+      let b = rbuck.get(k); if(!b){ b = { mi:rg.mi|0, idx:[] }; rbuck.set(k, b); }
+      b.idx.push(i);
+    });
+    const sub = (src, stride, idx, per) => {   // gather `per` consecutive instances per ring into a compact buffer
+      const out = new Float32Array(idx.length*per*stride);
+      for(let n=0;n<idx.length;n++) out.set(src.subarray(idx[n]*per*stride, (idx[n]*per+per)*stride), n*per*stride);
+      return out; };
+    let bn = 0;
+    for(const b of rbuck.values()){
+      const idx = b.idx;
+      let bx=0,by=0,bz=0; for(const i of idx){ bx+=RINGS[i].cx; by+=RINGS[i].cy; bz+=RINGS[i].cz; }
+      bx/=idx.length; by/=idx.length; bz/=idx.length;
+      let r=0; for(const i of idx) r = Math.max(r, Math.hypot(RINGS[i].cx-bx, RINGS[i].cy-by, RINGS[i].cz-bz) + RINGS[i].R);
+      r += 3;   // p-lobe reach + thermal shake
+      const tm = torusTpl.clone('rings'+bn);   // clone shares the template geometry
+      tm.material=ringMat; tm.isPickable=false; tm.alwaysSelectAsActiveMesh=true;
+      tm.thinInstanceSetBuffer('matrix', sub(rmat,16,idx,2),16,true);
+      tm.thinInstanceSetBuffer('rcol',   sub(rcol,3,idx,2),3,true);
+      tm.thinInstanceSetBuffer('modelId',sub(rmid,1,idx,2),1,true);
+      tm.thinInstanceCount = idx.length*2; tm.setEnabled(false);
+      const pm = pTpl.clone('aromP'+bn);
+      pm.material=pMat; pm.isPickable=false; pm.alwaysSelectAsActiveMesh=true;
+      pm.thinInstanceSetBuffer('matrix', sub(pmat,16,idx,12),16,true);
+      pm.thinInstanceSetBuffer('ocol',   sub(pcol,3,idx,12),3,true);
+      pm.thinInstanceSetBuffer('ocen',   sub(pcen,3,idx,12),3,true);
+      pm.thinInstanceSetBuffer('modelId',sub(pmid,1,idx,12),1,true);
+      pm.thinInstanceSetBuffer('oid', new Float32Array(idx.length*12).fill(99),1,true);
+      pm.thinInstanceCount = idx.length*12; pm.setEnabled(false);
+      ringCells.push({ mi:b.mi, cx:bx, cy:by, cz:bz, r, meshes:[tm,pm], on:false });
+      bn++;
+    }
+    await yield_();
   }
 
   /* ── Chlorophyll showcase: the SAME orbital representation as the protein
@@ -4578,6 +4617,18 @@ async function run(){
       if(cell.sphOn !== wantSph){ cell.sphOn = wantSph; if(cell.sphere) cell.sphere.setEnabled(wantSph); }
       if(cell.nucOn !== wantNuc){ cell.nucOn = wantNuc; if(cell.nuc) cell.nuc.setEnabled(wantNuc); }
     }
+    // Aromatic ring buckets: the shaders discard these past BUBBLE_R of the camera, so switch off any
+    // bucket whose NEAR EDGE is beyond that — same per-model → macro transform chain as the cells above,
+    // so a dragged molecule's rings are culled at their real position.
+    for(const rc of ringCells){
+      const mm=gModelXform, mo=rc.mi*16, bx=rc.cx, by=rc.cy, bz=rc.cz;
+      const px=mm[mo]*bx+mm[mo+4]*by+mm[mo+8]*bz+mm[mo+12], py=mm[mo+1]*bx+mm[mo+5]*by+mm[mo+9]*bz+mm[mo+13], pz=mm[mo+2]*bx+mm[mo+6]*by+mm[mo+10]*bz+mm[mo+14];
+      const lx=px-cx0, ly=py-cy0, lz=pz-cz0;
+      const wx=M[0]*lx+M[4]*ly+M[8]*lz+M[12], wy=M[1]*lx+M[5]*ly+M[9]*lz+M[13], wz=M[2]*lx+M[6]*ly+M[10]*lz+M[14];
+      const dx=wx-cp.x, dy=wy-cp.y, dz=wz-cp.z, reach=BUBBLE_R+rc.r;
+      const want = (dx*dx+dy*dy+dz*dz) < reach*reach;
+      if(rc.on !== want){ rc.on = want; for(const m of rc.meshes) m.setEnabled(want); }
+    }
     if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
       if(++lowFrames > 90){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
@@ -5156,8 +5207,10 @@ async function run(){
   const applyQ = () => { const hsl = QHSL_LOW + (+qSld.value/100)*(QHSL_HIGH-QHSL_LOW);
     engine.setHardwareScalingLevel(hsl); qValEl.textContent = (1/hsl).toFixed(2) + '× res'; };
   qSld.oninput = applyQ;
-  { const cur = engine.getHardwareScalingLevel();   // start at the current auto-picked supersample
-    qSld.value = String(Math.max(0, Math.min(100, Math.round((cur-QHSL_LOW)/(QHSL_HIGH-QHSL_LOW)*100)))); applyQ(); }
+  // Start at 1:1 render scale (≈0.99× on the slider) rather than whatever the auto-detect picked — that
+  // is the setting the scene is actually tuned to look right at.
+  { const hsl = 1/0.99;
+    qSld.value = String(Math.max(0, Math.min(100, Math.round((hsl-QHSL_LOW)/(QHSL_HIGH-QHSL_LOW)*100)))); applyQ(); }
   // Lighting / brightness slider → gBright (the brightness post-process). 0.30×…2.00×, default 1.00×.
   const lRow = document.createElement('div');
   lRow.innerHTML = 'lighting: <b id="dev-l-val">1.00×</b>';
