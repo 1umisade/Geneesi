@@ -2165,7 +2165,7 @@ async function run(){
   // away from straight-down. (The XY sheet is the ground here, its normal is +Z.)
   cam.upVector = new BABYLON.Vector3(0, 0, 1);
   cam.fov = 0.8; cam.minZ = 0.15; cam.inertia = 0.85; cam.panningSensibility = 20;   // minZ up from 0.02 → far better depth precision (kills z-fighting stripes)
-  cam.lowerBetaLimit = null; cam.upperBetaLimit = null;   // no tilt clamp → fully free vertical rotation (orbit all the way around a selection, through top-down and both sides)
+  cam.lowerBetaLimit = 0.4; cam.upperBetaLimit = 2.75;   // keep the camera UPRIGHT: stop it short of both poles so it never flips upside-down (which reverses the fly/strafe directions). Range covers the WASD head-turn's pitch span.
   // We drive ALL camera motion ourselves (see the pointer handler): MIDDLE-drag rotates, LEFT-drag moves
   // the molecule under the cursor (or pans empty background), RIGHT-drag pans, wheel zooms. Babylon's own
   // pointer rotation is disabled (empty button list) so it never fights our handlers.
@@ -4928,7 +4928,7 @@ async function run(){
     fmat.emissiveColor = new BABYLON.Color3(0.64,0.78,0.51);
     fmat.disableLighting = true; fmat.alpha = 0.20;            // 80% transparent (dev "taso alpha" slider tunes it)
     fmat.backFaceCulling=false; fmat.disableDepthWrite=true;   // faint sheet that never occludes the models
-    floor.material=fmat; }
+    floor.material=fmat; floor.setEnabled(false); }   // the light-green floor sheet is now dev-only (toggled in applyDevMode)
   // Dev-only WHITE plane marking the fixed shading reference (the near-Z face of the scene box). The
   // depth darkening is measured from here, so seeing it helps tune the start/spread sliders.
   { const sp = BABYLON.MeshBuilder.CreatePlane('shadePlane', { width:(gMaX-gMiX), height:(gMaY-gMiY) }, scene);   // exact bounding-box X-Y face
@@ -5154,6 +5154,7 @@ async function run(){
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
+    { const rf = scene.getMeshByName('rtsFloor'); if(rf) rf.setEnabled(gDev); }   // light-green floor sheet → dev-only
     if(gCollViz) gCollViz.setEnabled(gDev || gCollVizHold);   // wireframe collision spheres (also on while V is held)
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
