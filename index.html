@@ -1911,28 +1911,18 @@ varying vec2 vUV;
 uniform sampler2D textureSampler;
 uniform sampler2D cofMask;
 uniform vec2 texel;
-uniform float lineW;
 uniform float cofW;
-uniform vec3 bgRef;   // the flat background colour (this pass runs on the RAW scene, so it matches exactly)
-// foreground = anything that isn't the background colour. Comparing to the EXACT flat background is
-// robust — green-tinted proteins are never mistaken for it, so no interior darkening.
-float isFg(vec3 c){ return (distance(c, bgRef) < 0.06) ? 0.0 : 1.0; }
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
-  float c = texture2D(cofMask, vUV).r, mn = c, mx = c;   // cofactor coverage
-  float f = isFg(scene), fmn = f, fmx = f;               // whole-scene foreground (proteins + membrane)
+  float c = texture2D(cofMask, vUV).r, mn = c, mx = c;   // cofactor coverage (crisp mask)
   for(int i=0;i<8;i++){
     float a = float(i) * 0.7853982;
     vec2 dir = vec2(cos(a), sin(a)) * texel;
     float s = texture2D(cofMask, vUV + dir*cofW).r;
     mn = min(mn, s); mx = max(mx, s);
-    float ff = isFg(texture2D(textureSampler, vUV + dir*lineW).rgb);
-    fmn = min(fmn, ff); fmx = max(fmx, ff);
   }
-  float cofLine  = smoothstep(0.2, 0.7, mx - mn);        // cofactor molecule silhouette
-  float protLine = smoothstep(0.2, 0.7, fmx - fmn);      // outer silhouette of the whole assembly against the background
-  float line = max(cofLine, protLine);
-  gl_FragColor = vec4(mix(scene, vec3(0.03), line), 1.0);   // silhouette = black
+  float cofLine = smoothstep(0.2, 0.7, mx - mn);   // cofactor molecule silhouette only. The whole-protein outline is left to the atoms own hugging rims, so there is no detached second edge floating off the molecule.
+  gl_FragColor = vec4(mix(scene, vec3(0.03), cofLine), 1.0);   // silhouette = black
 }`;
 /* RTS selection mask: each selected atom rendered as a SOLID white disc (paired with the imp vertex, so it
    sits exactly on the atoms). The union is the selected complexes' filled coverage → the seloutline pass
@@ -1952,14 +1942,16 @@ uniform float selOn;
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
   if(selOn < 0.5){ gl_FragColor = vec4(scene, 1.0); return; }
-  float c = texture2D(selMask, vUV).r, mn = c, mx = c;
-  for(int i=0;i<16;i++){ float a = float(i) * 0.3926991;
-    vec2 d = vec2(cos(a), sin(a)) * texel * owidth;
-    float s = texture2D(selMask, vUV + d).r;
-    mn = min(mn, s); mx = max(mx, s);
+  float c = texture2D(selMask, vUV).r, gmn=c, gmx=c, bmn=c, bmx=c;
+  for(int i=0;i<16;i++){ float a = float(i) * 0.3926991; vec2 u = vec2(cos(a), sin(a)) * texel;
+    float sg = texture2D(selMask, vUV + u*owidth).r;         gmn=min(gmn,sg); gmx=max(gmx,sg);   // THICK band → green
+    float sb = texture2D(selMask, vUV + u*(owidth*0.34)).r;  bmn=min(bmn,sb); bmx=max(bmx,sb);   // NARROW band → black
   }
-  float line = smoothstep(0.15, 0.6, mx - mn);   // thick band straddling the coverage edge = the selection outline
-  gl_FragColor = vec4(mix(scene, vec3(0.16, 1.0, 0.34), line), 1.0);
+  float green = smoothstep(0.15, 0.6, gmx - gmn);   // thick green ring straddling the coverage edge
+  float black = smoothstep(0.15, 0.6, bmx - bmn);   // narrow black ring - same mask, so equally smooth
+  vec3 col = mix(scene, vec3(0.16, 1.0, 0.34), green);   // green first (thicker, underneath)
+  col = mix(col, vec3(0.03), black);                     // black ON TOP (narrower)
+  gl_FragColor = vec4(col, 1.0);
 }`;
 
 /* ── Static dark-green background ──────────────────────────────────────────
@@ -6986,19 +6978,15 @@ async function run(){
   // Silhouette pass — runs FIRST, on the RAW scene (background is the exact flat colour). Inks a black
   // outline where the frame meets the background (the whole assembly) AND around each cofactor molecule
   // (from the coverage mask). fxaa + the painterly grade then blend it into the comic look.
-  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','lineW','cofW','bgRef'], ['cofMask'], 1.0, cam);
+  const cofsil = new BABYLON.PostProcess('cofsil', 'cofsil', ['texel','cofW'], ['cofMask'], 1.0, cam);
   cofsil.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     // silhouette thickness tracks zoom → always ~5 proton-diameters on screen (thinner zoomed out, thicker in).
     // gCofLineW/2.2 keeps the dev slider as a multiplier (1.0 at its default). Clamped so it never vanishes or blooms.
     const dist = Math.max(1, Math.abs(cam.radius));
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
-    const w = (10.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // 10*NUCLEON_R = 5 proton diameters, in world units
-    const lw = Math.max(1.0, Math.min(14.0, w));
-    eff.setFloat('lineW', lw);          // whole-assembly outer silhouette (5 proton-diameters, zoom-scaled)
     const cofw = (4.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // cofactor outline = 2 proton-diameters, scales with zoom like the proton outline
     eff.setFloat('cofW', Math.max(0.6, Math.min(6.0, cofw)));
-    eff.setColor3('bgRef', BG_GREEN);
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
   // RTS selection → a thick GREEN outline traced around the selected complexes (from the selMask coverage).
@@ -7010,8 +6998,8 @@ async function run(){
     // black outline at every zoom, instead of a constant pixel width that fattens as you zoom out.
     const dist = Math.max(1, Math.abs(cam.radius));
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
-    const w = (14.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // ~1.4× the black protein outline (10*NUCLEON_R) → clearly bolder
-    eff.setFloat('owidth', Math.max(1.5, Math.min(16.0, w)));
+    const w = (20.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // THICK green ring (was 14) → clearly bolder than the narrow black
+    eff.setFloat('owidth', Math.max(1.5, Math.min(22.0, w)));
     eff.setFloat('selOn', (gSel.size || etcSel >= 0) ? 1.0 : 0.0);   // green silhouette shows for a protein selection OR a selected cofactor (the mask is fed the cofactor's atoms in rebuildSelMask)
     if(gSelMaskRT) eff.setTexture('selMask', gSelMaskRT);
   };
