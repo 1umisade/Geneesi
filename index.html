@@ -2670,15 +2670,17 @@ async function run(){
     const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
   window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
   // WASD is a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
-  // A/D yaw around the WORLD vertical (the floor normal) — NOT around the camera's own up. Looking down
-  // at the membrane leaves the camera's own up lying nearly flat IN the floor, so yawing about it tumbles
-  // the view over the plane instead of turning it. Yawing about the floor normal is a real head-turn:
-  // A always brings what is on the left into view, at any pitch.
-  // W/S still pitch around the camera's own right, so holding W pitches all the way over into a backflip.
+  // This is a VR HEADSET head-turn, not an FPS body-spin. A/D yaw about the camera's OWN up and W/S
+  // pitch about its OWN right, so the gaze always sweeps along the screen's own axes: whatever sits at
+  // the left edge comes to the centre when you press A, at ANY head angle — including looking straight
+  // down at the membrane. (Yawing about the WORLD vertical instead is the FPS behaviour, and it
+  // degenerates into spinning the picture when you look steeply down, because then there is no "left"
+  // to turn towards — everything is below you.) Rotating forward about the up axis moves forward purely
+  // along the screen's horizontal, so the turn direction can never invert either.
+  // Both axes come from the camera's REAL basis: on an ArcRotateCamera, cam.upVector is only a hint —
+  // the actual screen-up is rebuilt from alpha/beta and orthogonalised against the view direction, and
+  // measured over a pitch sweep the two run about a quarter turn out of phase.
   const _flM = new BABYLON.Matrix(), _flF = new BABYLON.Vector3(), _flU = new BABYLON.Vector3(), _flR = new BABYLON.Vector3();
-  const _flYaw = new BABYLON.Vector3(0, 0, 1);   // floor normal = the axis a head turns about
-  const _flTrueUp = new BABYLON.Vector3();
-  let _yawSign = 1;   // which hemisphere the camera's own up is in — see the flip note in the observer
   scene.onBeforeRenderObservable.add(() => {
     // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
@@ -2689,20 +2691,9 @@ async function run(){
     if(!ya && !pa) return;
     const pos = cam.position, t = cam.getTarget();
     _flF.set(t.x-pos.x, t.y-pos.y, t.z-pos.z); const dist=_flF.length()||50; _flF.scaleInPlace(1/dist);   // forward
-    _flU.copyFrom(cam.upVector); _flU.normalize();                                                          // up
+    cam.getDirectionToRef(BABYLON.Axis.Y, _flU); _flU.normalize();                                          // the camera's REAL screen-up
     BABYLON.Vector3.CrossToRef(_flF, _flU, _flR); _flR.normalize();                                         // right = forward × up
-    // Yawing about the FIXED world vertical mirrors once the camera rolls past vertical (a backflip on
-    // W, or flying under the membrane and looking up) — A would start turning RIGHT. Flip the yaw to
-    // match whichever hemisphere the camera's own up is in, so A always turns the picture LEFT on screen.
-    // The sign only updates OUTSIDE a deadband: looking straight down (or straight up) leaves the
-    // camera's up lying exactly in the floor plane, where the hemisphere is genuinely undefined and a
-    // raw test would chatter frame to frame. Inside the band we keep the last sign, so the turn stays smooth.
-    // NB: cam.upVector is only a HINT — an ArcRotateCamera builds its real screen-up from alpha/beta
-    // and orthogonalises it against the view direction, so its sign can disagree with upVector.z.
-    // Ask the camera for its actual local +Y in world space instead.
-    cam.getDirectionToRef(BABYLON.Axis.Y, _flTrueUp);
-    if(Math.abs(_flTrueUp.z) > 0.02) _yawSign = _flTrueUp.z < 0 ? -1 : 1;
-    const q = BABYLON.Quaternion.RotationAxis(_flYaw, ya*_yawSign).multiply(BABYLON.Quaternion.RotationAxis(_flR, pa));
+    const q = BABYLON.Quaternion.RotationAxis(_flU, ya).multiply(BABYLON.Quaternion.RotationAxis(_flR, pa));
     BABYLON.Matrix.FromQuaternionToRef(q, _flM);
     const nF = BABYLON.Vector3.TransformCoordinates(_flF, _flM), nU = BABYLON.Vector3.TransformCoordinates(_flU, _flM); nU.normalize();
     cam.upVector.copyFrom(nU);
