@@ -130,6 +130,13 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
 #memonly-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #memonly-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#outline-btn{position:absolute;left:16px;top:444px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#outline-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#outline-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #memonly-icon{font-size:15px;line-height:1}
 #vr-btn{position:absolute;left:16px;top:252px;z-index:12;touch-action:manipulation;
   font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
@@ -243,6 +250,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="membrane-btn" title="Piilota lipidikalvo (parantaa suorituskykyä)"><span id="membrane-icon">🟰</span><span id="membrane-label">Kalvo</span></button>
 <button id="memcut-btn" title="Piilota kameran puoleinen kalvon puolisko (näe proteiinien läpi)"><span id="memcut-icon">◧</span><span id="memcut-label">Puolikas</span></button>
 <button id="memonly-btn" title="Näytä vain kalvoon sitoutuneet proteiinit (piilota irralliset — keventää)"><span id="memonly-icon">🧫</span><span id="memonly-label">Vain kalvo</span></button>
+<button id="outline-btn" title="Piilota mustat ja vihreät ääriviivat"><span id="outline-icon">✒️</span><span id="outline-label">Reunat</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="camcoords"></div>
@@ -1774,8 +1782,12 @@ attribute vec4 world1;
 attribute vec4 world2;
 attribute vec4 world3;
 attribute vec3 rcol;       // per-ring element colour
+attribute float modelId;   // which model this ring belongs to
 uniform mat4 view;
 uniform mat4 projection;
+uniform mat4 modelXform[24];   // per-model transform - the tori must follow their molecule exactly as its atoms do
+uniform mat4 macroXform;
+uniform vec3 macroCenter;
 uniform float uT;
 varying vec3 vViewPos;
 varying vec3 vNrmV;
@@ -1788,6 +1800,11 @@ void main(void){
 #ifdef MEMFADE
   vMemW = wp.xyz;
 #endif
+  // SAME transform chain, in the SAME order, as the orb/imp shaders apply to the atoms. Without it the
+  // tori sit at the raw mol2 coordinates while their molecule is flattened onto the floor, so they drift
+  // off and float in empty space as lone rings.
+  wp.xyz = (modelXform[int(modelId + 0.5)] * vec4(wp.xyz, 1.0)).xyz;
+  wp = macroXform * vec4(wp.xyz - macroCenter, 1.0);
   vec4 vp = view * wp;
   vViewPos = vp.xyz;
   vNrmV = (view * W * vec4(normal, 0.0)).xyz;
@@ -2646,17 +2663,26 @@ async function run(){
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
     if(e.key==='ArrowLeft'||e.key==='ArrowRight'||e.key==='ArrowUp'||e.key==='ArrowDown'){ arrowKeys[e.key]=true; e.preventDefault(); } });
   window.addEventListener('keyup', e => { arrowKeys[e.key]=false; });
+  // Camera feel, tunable from the dev panel. Each is a MAX rate that the camera eases up to: hold a key
+  // and the speed ramps 0 → max over RAMP_S seconds, then holds. Releasing every key of that kind drops
+  // the ramp straight back to 0, so a tap is a small nudge and a long hold is a full-speed sweep.
+  let gMoveSpeed = 1.0;    // multiplier on the distance-scaled fly speed (arrow keys)
+  let gRotSpeed  = 2.2;    // max yaw/pitch rate in rad/s (WASD) — 2.2 ≈ 126 deg/s
+  const RAMP_S = 1.0;      // seconds from standstill to full speed
+  let _moveRamp = 0, _rotRamp = 0;
+  const rampStep = () => Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
   scene.onBeforeRenderObservable.add(() => {
     // Arrow keys FLY the camera (FPS-style): ↑/↓ forward/back along the view direction (move-in = zoom in),
     // ←/→ strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
     let fwd=0, strafe=0;
     if(arrowKeys.ArrowUp) fwd+=1; if(arrowKeys.ArrowDown) fwd-=1;
     if(arrowKeys.ArrowRight) strafe+=1; if(arrowKeys.ArrowLeft) strafe-=1;
-    if(!fwd && !strafe) return;
+    if(!fwd && !strafe){ _moveRamp = 0; return; }
+    _moveRamp = Math.min(1, _moveRamp + rampStep());
     orbitLocked = false; gCamFollow = false;
     const t=cam.getTarget(), p=cam.position;
     const F=cam.getDirection(BABYLON.Axis.Z), R=cam.getDirection(BABYLON.Axis.X);   // camera's OWN forward + right (screen-relative → stay consistent even when flipped upside-down)
-    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * Math.min(50, scene.getEngine().getDeltaTime())/1000;
+    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * gMoveSpeed * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
     const mx=(F.x*fwd+R.x*strafe)*sp, my=(F.y*fwd+R.y*strafe)*sp, mz=(F.z*fwd+R.z*strafe)*sp;
     p.x+=mx; p.y+=my; p.z+=mz;
     cam.setTarget(new BABYLON.Vector3(t.x+mx, t.y+my, t.z+mz));   // shift target the SAME amount → pure translation, no rotation
@@ -2684,7 +2710,10 @@ async function run(){
   scene.onBeforeRenderObservable.add(() => {
     // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
-    const rot = 2.2 * Math.min(120, scene.getEngine().getDeltaTime())/1000;
+    const anyTurn = wasdKeys.a || wasdKeys.d || wasdKeys.w || wasdKeys.s;
+    if(!anyTurn){ _rotRamp = 0; return; }
+    _rotRamp = Math.min(1, _rotRamp + rampStep());   // ease 0 → full turn rate over RAMP_S
+    const rot = gRotSpeed * _rotRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
     let ya=0, pa=0;
     if(wasdKeys.a) ya -= rot; if(wasdKeys.d) ya += rot;   // A / D → yaw (look left / right), continuous while held
     if(wasdKeys.w) pa += rot; if(wasdKeys.s) pa -= rot;   // W / S → pitch (hold W → backflip)
@@ -2935,7 +2964,7 @@ async function run(){
         let cr=0,cg=0,cb=0; const ats=[];
         for(let i=0;i<6;i++){ const cc=info(m.el[path[i]]).c; cr+=cc[0];cg+=cc[1];cb+=cc[2];
           ats.push(m.x[path[i]]+ox, m.y[path[i]]+oy, m.z[path[i]]+oz); }
-        RINGS.push({ cx:cx+ox, cy:cy+oy, cz:cz+oz, nx:n[0], ny:n[1], nz:n[2], R:R/6, col:[cr/6,cg/6,cb/6], ats });
+        RINGS.push({ cx:cx+ox, cy:cy+oy, cz:cz+oz, nx:n[0], ny:n[1], nz:n[2], R:R/6, col:[cr/6,cg/6,cb/6], ats, mi });   // mi → the tori must ride the SAME per-model transform as the atoms
         for(let i=0;i<6;i++) aromSet.add(bkey(path[i], path[(i+1)%6]));
       };
       const rec = (u,cnt) => {
@@ -3089,7 +3118,8 @@ async function run(){
   let gShell   = 0;           // vdW spheres: 1 = translucent where the atom reveals orbitals, 0 = always solid
   let gShellMin = 0.0;        // alpha the vdW shell fades TO where revealed (0 = fully hidden, 0.5 = half-transparent)
   let gRevealFade = 0.95;     // revealed-shell opacity at the FAR reveal edge → distant atoms stay ~solid, close ones go glass. Dev slider.
-  let gEtc = true, etcOverlay = null;   // ETC cofactor overlay toggle + its mesh (built later) — ON by default; the cofactor outline is the overlay's own black rim (ETCDARK), which traces the molecule shape
+  let gEtc = false, etcOverlay = null;  // ETC cofactor overlay toggle + its mesh (built later) — OFF by default (it also drives the see-through reveal and a heavy depth pass, so the scene starts plain and fast)
+  let gOutlines = true;                 // black molecule silhouette + green selection ring — both off together via the "Reunat" button
   let cofListPanel = null;               // right-side cofactor-type list (built later); shown only in ETC mode
   const etcGroups = [];                  // whole cofactor molecules {cx,cy,cz,r,type,atoms} → mid-range picking
   let etcGroupPos = null;                // {gx,gy,gz} per cofactor ATOM (indices match etcGroups[].atoms)
@@ -3147,9 +3177,14 @@ async function run(){
       if(cofListPanel) cofListPanel.style.display = gEtc ? 'flex' : 'none';   // show the cofactor-type list only in ETC mode
       etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; });
-    // ETC is ON by default → reflect it in the button now (the overlay/mask/list respect gEtc as they are built)
+    // Reflect the startup state in the button now (the overlay/mask/list respect gEtc as they are built)
     if(etcBtn){ etcBtn.classList.toggle('on', gEtc);
       const lab=document.getElementById('etc-label'); if(lab) lab.textContent = gEtc ? 'ETC päällä' : 'ETC-ketju'; } }
+  { const outBtn = document.getElementById('outline-btn');   // black molecule silhouette + green selection ring, off together
+    const syncOut = () => { if(!outBtn) return; outBtn.classList.toggle('on', gOutlines);
+      const lab=document.getElementById('outline-label'); if(lab) lab.textContent = gOutlines ? 'Reunat' : 'Ei reunoja'; };
+    if(outBtn) outBtn.addEventListener('click', () => { gOutlines = !gOutlines; syncOut(); });
+    syncOut(); }
   // "Lantern" mode: darken the whole scene except the excited electron, which lights up the atoms near it.
   let gLantern = false;
   const gLanternPos = new BABYLON.Vector3(1e6, 1e6, 1e6);   // the excited electron's live world position (drives the lantern spotlight)
@@ -3783,44 +3818,49 @@ async function run(){
   if(RINGS.length){
     const perpV = n => { const a = Math.abs(n[0])<0.9?[1,0,0]:[0,1,0]; const c=crs(n,a); const l=Math.hypot(c[0],c[1],c[2])||1; return [c[0]/l,c[1]/l,c[2]/l]; };
     const ringMat = new BABYLON.ShaderMaterial('ringMat', scene, 'ring', {
-      attributes:['position','normal','rcol','world0','world1','world2','world3'],
-      uniforms:['view','projection','bubbleR','uRingT','uT','fogColor','fogStart','fogEnd'] });
+      attributes:['position','normal','rcol','modelId','world0','world1','world2','world3'],
+      uniforms:['view','projection','bubbleR','uRingT','uT','fogColor','fogStart','fogEnd','modelXform','macroXform','macroCenter'] });
     ringMat.setFloat('bubbleR', BUBBLE_R); ringMat.alpha=0.75; ringMat.disableDepthWrite=true; ringMat.backFaceCulling=true;
     ringMat.onBindObservable.add(()=>{ const eff=ringMat.getEffect(); if(!eff)return;
+      eff.setMatrices('modelXform', gModelXform); eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setFloat('uT',gWaveT); eff.setFloat('uRingT',gWaveT*2.2);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
     const torus = BABYLON.MeshBuilder.CreateTorus('rings', {diameter:2, thickness:0.35, tessellation:14}, scene);   // 2× narrower tube
     torus.material=ringMat; torus.isPickable=false; torus.alwaysSelectAsActiveMesh=true;
-    const rmat = new Float32Array(RINGS.length*2*16), rcol = new Float32Array(RINGS.length*2*3); let ii=0;
+    const rmat = new Float32Array(RINGS.length*2*16), rcol = new Float32Array(RINGS.length*2*3), rmid = new Float32Array(RINGS.length*2); let ii=0;
     for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], T=perpV(N), B=crs(N,T), R=rg.R, c=rg.col;
       for(const dw of [0.5,-0.5]){ const o=ii*16;
         rmat[o]=T[0]*R; rmat[o+1]=T[1]*R; rmat[o+2]=T[2]*R; rmat[o+3]=0;
         rmat[o+4]=N[0]*R; rmat[o+5]=N[1]*R; rmat[o+6]=N[2]*R; rmat[o+7]=0;
         rmat[o+8]=B[0]*R; rmat[o+9]=B[1]*R; rmat[o+10]=B[2]*R; rmat[o+11]=0;
         rmat[o+12]=rg.cx+dw*N[0]; rmat[o+13]=rg.cy+dw*N[1]; rmat[o+14]=rg.cz+dw*N[2]; rmat[o+15]=1;
-        rcol[ii*3]=c[0]; rcol[ii*3+1]=c[1]; rcol[ii*3+2]=c[2]; ii++; }
+        rcol[ii*3]=c[0]; rcol[ii*3+1]=c[1]; rcol[ii*3+2]=c[2]; rmid[ii]=rg.mi|0; ii++; }
     }
-    torus.thinInstanceSetBuffer('matrix', rmat, 16, true); torus.thinInstanceSetBuffer('rcol', rcol, 3, true); torus.thinInstanceCount = RINGS.length*2;
+    torus.thinInstanceSetBuffer('matrix', rmat, 16, true); torus.thinInstanceSetBuffer('rcol', rcol, 3, true);
+    torus.thinInstanceSetBuffer('modelId', rmid, 1, true); torus.thinInstanceCount = RINGS.length*2;
 
     /* The unhybridised p-orbitals (perpendicular to the ring on each carbon) that
        overlap side-on to form the delocalised π. Drawn with the orbital shader. */
     const pMat = new BABYLON.ShaderMaterial('aromPMat', scene, 'orb', {
-      attributes:['position','normal','ocol','ocen','oid','world0','world1','world2','world3'],
-      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'] });
+      attributes:['position','normal','ocol','ocen','oid','modelId','world0','world1','world2','world3'],
+      uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec','modelXform','modelCol','colorMode','macroXform','macroCenter'],
+      defines:['#define MACROMOVE','#define MODELMOVE'] });   // ride the molecule's transform, exactly like the atoms these lobes belong to
     pMat.setFloat('bubbleR', BUBBLE_R); pMat.setFloat('nElec', 1); pMat.setFloat('coneCos', -1.0); pMat.setFloat('drawElec', 1); pMat.backFaceCulling=true; pMat.alpha=0.999; pMat.forceDepthWrite=true;   // each p-lobe contributes one π electron (drawn inline)
     pMat.onBindObservable.add(()=>{ const eff=pMat.getEffect(); if(!eff)return; eff.setFloat('uT',gWaveT);
+      eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', 0);
+      eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
       eff.setVector3('selCenter', selCenter); eff.setFloat('focusId', gFocusId);
       eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
     const pMesh = BABYLON.MeshBuilder.CreateSphere('aromP', {segments:3, diameter:1}, scene);
     pMesh.material=pMat; pMesh.isPickable=false; pMesh.alwaysSelectAsActiveMesh=true;
     const NP = RINGS.length*6*2;   // 6 atoms × 2 lobes (±normal)
-    const pmat=new Float32Array(NP*16), pcol=new Float32Array(NP*3), pcen=new Float32Array(NP*3), pLen=0.62, pW=0.30; let pi=0;
+    const pmat=new Float32Array(NP*16), pcol=new Float32Array(NP*3), pcen=new Float32Array(NP*3), pmid=new Float32Array(NP), pLen=0.62, pW=0.30; let pi=0;
     for(const rg of RINGS){ const N=[rg.nx,rg.ny,rg.nz], c=rg.col;
       for(let a=0;a<6;a++){ const ax=rg.ats[a*3], ay=rg.ats[a*3+1], az=rg.ats[a*3+2];
         for(const s of [1,-1]){ cylTo(ax,ay,az, ax+N[0]*pLen*s, ay+N[1]*pLen*s, az+N[2]*pLen*s, pmat, pi*16, pW);
-          pcol[pi*3]=c[0];pcol[pi*3+1]=c[1];pcol[pi*3+2]=c[2]; pcen[pi*3]=ax;pcen[pi*3+1]=ay;pcen[pi*3+2]=az; pi++; } }
+          pcol[pi*3]=c[0];pcol[pi*3+1]=c[1];pcol[pi*3+2]=c[2]; pcen[pi*3]=ax;pcen[pi*3+1]=ay;pcen[pi*3+2]=az; pmid[pi]=rg.mi|0; pi++; } }
     }
-    pMesh.thinInstanceSetBuffer('matrix', pmat,16,true); pMesh.thinInstanceSetBuffer('ocol', pcol,3,true); pMesh.thinInstanceSetBuffer('ocen', pcen,3,true); pMesh.thinInstanceSetBuffer('oid', new Float32Array(NP).fill(99),1,true); pMesh.thinInstanceCount=NP;
+    pMesh.thinInstanceSetBuffer('matrix', pmat,16,true); pMesh.thinInstanceSetBuffer('ocol', pcol,3,true); pMesh.thinInstanceSetBuffer('ocen', pcen,3,true); pMesh.thinInstanceSetBuffer('oid', new Float32Array(NP).fill(99),1,true); pMesh.thinInstanceSetBuffer('modelId', pmid,1,true); pMesh.thinInstanceCount=NP;
   }
 
   /* ── Chlorophyll showcase: the SAME orbital representation as the protein
@@ -5083,6 +5123,19 @@ async function run(){
   devPanel.style.cssText = 'position:fixed;right:16px;top:56px;z-index:22;display:none;flex-direction:column;gap:7px;'
     + 'font:11px ui-monospace,monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);'
     + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;max-height:calc(100vh - 140px);overflow-y:auto;';
+  // Camera feel: max fly speed (arrow keys) and max turn rate (WASD). Both ease 0 → max over 1 s.
+  const mvRow = document.createElement('div');
+  mvRow.innerHTML = 'move speed: <b id="dev-mv-val">1.00×</b>';
+  const mvSld = document.createElement('input');
+  mvSld.type='range'; mvSld.min='5'; mvSld.max='400'; mvSld.value='100'; mvSld.style.cssText='width:100%;cursor:pointer;';
+  const mvValEl = mvRow.querySelector('#dev-mv-val');
+  mvSld.oninput = () => { gMoveSpeed = +mvSld.value/100; mvValEl.textContent = gMoveSpeed.toFixed(2)+'×'; };
+  const rtRow = document.createElement('div');
+  rtRow.innerHTML = 'turn speed: <b id="dev-rt-val">126°/s</b>';
+  const rtSld = document.createElement('input');
+  rtSld.type='range'; rtSld.min='5'; rtSld.max='400'; rtSld.value='100'; rtSld.style.cssText='width:100%;cursor:pointer;';
+  const rtValEl = rtRow.querySelector('#dev-rt-val');
+  rtSld.oninput = () => { gRotSpeed = 2.2 * (+rtSld.value/100); rtValEl.textContent = Math.round(gRotSpeed*57.3)+'°/s'; };
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
@@ -5216,7 +5269,7 @@ async function run(){
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
   const backRow = document.createElement('div'); backRow.textContent = 'renderer: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
-  devPanel.appendChild(backRow); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld); devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(mvRow); devPanel.appendChild(mvSld); devPanel.appendChild(rtRow); devPanel.appendChild(rtSld); devPanel.appendChild(coneRow); devPanel.appendChild(coneSld); devPanel.appendChild(qRow); devPanel.appendChild(qSld); devPanel.appendChild(lRow); devPanel.appendChild(lSld); devPanel.appendChild(bRow); devPanel.appendChild(bSld); devPanel.appendChild(ctRow); devPanel.appendChild(ctSld); devPanel.appendChild(cbRow); devPanel.appendChild(cbSld); devPanel.appendChild(caRow); devPanel.appendChild(caSld); devPanel.appendChild(oaRow); devPanel.appendChild(oaSld); devPanel.appendChild(coRow); devPanel.appendChild(coSld); devPanel.appendChild(crRow); devPanel.appendChild(crSld); devPanel.appendChild(clRow); devPanel.appendChild(clSld); devPanel.appendChild(fpRow); devPanel.appendChild(fpSld); devPanel.appendChild(dsRow); devPanel.appendChild(dsSld); devPanel.appendChild(dcRow); devPanel.appendChild(dcSld); devPanel.appendChild(asRow); devPanel.appendChild(asSld); devPanel.appendChild(spRow); devPanel.appendChild(spSld); devPanel.appendChild(csRow); devPanel.appendChild(csSld); devPanel.appendChild(rfRow); devPanel.appendChild(rfSld); devPanel.appendChild(fdRow); devPanel.appendChild(fdSld); devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld); devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld); devPanel.appendChild(resetRow); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
@@ -6992,7 +7045,9 @@ async function run(){
   // is fully user-controlled; selecting a cofactor never moves or re-centres it.)
   scene.onBeforeRenderObservable.add(() => {
     // Cofactor line-of-sight see-through: on when ETC mode is on or a cofactor is selected.
-    gRevealOn = (gEtc || etcSel >= 0) && etcGroups.length ? 1 : 0;
+    // ETC off means OFF: no cofactor see-through at all, not even for a still-selected cofactor. The
+    // reveal also drives the cofDepth pass below, so switching ETC off drops that whole pass too.
+    gRevealOn = gEtc && etcGroups.length ? 1 : 0;
     const _eng = scene.getEngine();
     gCofTexel.set(1/_eng.getRenderWidth(), 1/_eng.getRenderHeight());   // align depth-buffer sampling (also survives resize)
     if(gCofDisc) gCofDisc.setEnabled(gRevealOn > 0.5);                  // only run the depth pass while active
@@ -7054,7 +7109,7 @@ async function run(){
     const dist = Math.max(1, Math.abs(cam.radius));
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const cofw = (4.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // cofactor outline = 2 proton-diameters, scales with zoom like the proton outline
-    eff.setFloat('cofW', Math.max(0.6, Math.min(6.0, cofw)));
+    eff.setFloat('cofW', gOutlines ? Math.max(0.6, Math.min(6.0, cofw)) : 0.0);   // width 0 → the edge detector samples one texel → no line
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
   // RTS selection → a thick GREEN outline traced around the selected complexes (from the selMask coverage).
@@ -7068,7 +7123,7 @@ async function run(){
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const w = (20.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // THICK green ring (was 14) → clearly bolder than the narrow black
     eff.setFloat('owidth', Math.max(1.5, Math.min(22.0, w)));
-    eff.setFloat('selOn', (gSel.size || etcSel >= 0) ? 1.0 : 0.0);   // green silhouette shows for a protein selection OR a selected cofactor (the mask is fed the cofactor's atoms in rebuildSelMask)
+    eff.setFloat('selOn', (gOutlines && (gSel.size || etcSel >= 0)) ? 1.0 : 0.0);   // green silhouette shows for a protein selection OR a selected cofactor (the mask is fed the cofactor's atoms in rebuildSelMask)
     if(gSelMaskRT) eff.setTexture('selMask', gSelMaskRT);
   };
   // AO is disabled in the translucent "inside" view — it packs depth into the alpha
