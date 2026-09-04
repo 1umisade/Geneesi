@@ -2668,16 +2668,17 @@ async function run(){
   // the ramp straight back to 0, so a tap is a small nudge and a long hold is a full-speed sweep.
   let gMoveSpeed = 1.0;    // multiplier on the distance-scaled fly speed (arrow keys)
   let gRotSpeed  = 2.2;    // max yaw/pitch rate in rad/s (WASD) — 2.2 ≈ 126 deg/s
-  const RAMP_S = 1.0;      // seconds from standstill to full speed
-  let _moveRamp = 0, _rotRamp = 0;
-  const rampStep = () => Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
+  const RAMP_S = 1.0;      // seconds from the initial nudge to full speed
+  const RAMP_MIN = 0.30;   // a press starts at 30% of max, so a tap moves NOW instead of creeping from a standstill
+  let _moveRamp = RAMP_MIN, _rotRamp = RAMP_MIN;
+  const rampStep = () => (1-RAMP_MIN) * Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
   scene.onBeforeRenderObservable.add(() => {
     // Arrow keys FLY the camera (FPS-style): ↑/↓ forward/back along the view direction (move-in = zoom in),
     // ←/→ strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
     let fwd=0, strafe=0;
     if(arrowKeys.ArrowUp) fwd+=1; if(arrowKeys.ArrowDown) fwd-=1;
     if(arrowKeys.ArrowRight) strafe+=1; if(arrowKeys.ArrowLeft) strafe-=1;
-    if(!fwd && !strafe){ _moveRamp = 0; return; }
+    if(!fwd && !strafe){ _moveRamp = RAMP_MIN; return; }
     _moveRamp = Math.min(1, _moveRamp + rampStep());
     orbitLocked = false; gCamFollow = false;
     const t=cam.getTarget(), p=cam.position;
@@ -2711,7 +2712,7 @@ async function run(){
     // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
     const anyTurn = wasdKeys.a || wasdKeys.d || wasdKeys.w || wasdKeys.s;
-    if(!anyTurn){ _rotRamp = 0; return; }
+    if(!anyTurn){ _rotRamp = RAMP_MIN; return; }
     _rotRamp = Math.min(1, _rotRamp + rampStep());   // ease 0 → full turn rate over RAMP_S
     const rot = gRotSpeed * _rotRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
     let ya=0, pa=0;
