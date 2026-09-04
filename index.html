@@ -3227,7 +3227,7 @@ async function run(){
       const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
   // Membrane toggle → hide the tiled lipid bilayer for a big performance win (the cull loop + nucleon
   // pool observer read gMembrane each frame and force every membrane mesh off when it is false).
-  let gMembrane = true;    // membrane SHOWN by default (with the half-cut below → only the far leaflet renders); Kalvo button hides it
+  let gMembrane = false;   // membrane HIDDEN by default — it is much the heaviest thing in the scene; the Kalvo button brings it back instantly (it is still built during loading, just not drawn)
   { const mb = document.getElementById('membrane-btn');
     if(mb){ mb.addEventListener('click', () => { gMembrane = !gMembrane;
         mb.classList.toggle('on', !gMembrane);   // highlight the button when the membrane is HIDDEN
