@@ -2902,8 +2902,22 @@ async function run(){
   // Custom wheel + buttons route through zoomBy so they dolly through too (no flip).
   cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
   cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
+  /* Wheel zoom accelerates like the keys do: the first notch of a gesture moves 1/7 of full speed, the
+     second 2/7, up to full on the seventh. A gap longer than WHEEL_CHAIN_MS starts a fresh gesture and
+     drops back to 1/7.
+     400 ms is chosen deliberately. A wheel being rolled continuously fires every ~30-120 ms per detent
+     (a trackpad far faster), so 400 ms sits well clear of that and a sustained roll keeps building
+     instead of resetting mid-gesture. A deliberate pause between two separate nudges is rarely under
+     ~300 ms, so it still resets when the user means it to. At a typical ~80 ms per detent, full speed
+     arrives after roughly half a second of rolling. */
+  const WHEEL_CHAIN_MS = 400, WHEEL_STEPS = 7;
+  let wheelStep = 0, wheelLastT = 0;
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
+    const nowT = performance.now();
+    if(nowT - wheelLastT > WHEEL_CHAIN_MS) wheelStep = 0;   // too long a gap - this is a new gesture
+    wheelLastT = nowT;
+    if(wheelStep < WHEEL_STEPS) wheelStep++;
     // capture the floor point under the cursor → zoomBy dollies toward it (zoom-to-cursor)
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     if(Math.abs(ray.direction.z) > 1e-6){ const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; gZoomP = t>0 ? ray.origin.add(ray.direction.scale(t)) : null; }
@@ -2912,7 +2926,7 @@ async function run(){
     const mag = slow ? Math.max(fitRadius * 0.004, Math.abs(cam.radius) * 0.008)
                      : Math.max(fitRadius * 0.03,  Math.abs(cam.radius) * 0.06);
     gZoomEase = slow ? 0.05 : 0.16;   // slow mode bleeds out over many more frames
-    gZoomVel += Math.sign(e.deltaY) * mag;   // zoom speed is independent of the speed slider
+    gZoomVel += Math.sign(e.deltaY) * mag * (wheelStep / WHEEL_STEPS) * gZoomSpeed;   // ramped, and scaled by the zoom-speed slider
     showTips(); hideTipsSoon();
   }, {passive:false});
   const btnZoom = dir => { gZoomP = null; gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08); showTips(); hideTipsSoon(); };
