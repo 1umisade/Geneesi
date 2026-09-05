@@ -4662,7 +4662,7 @@ async function run(){
     // overlap heavily, so the cost is overdraw and it climbs fast with the count -- 600 of them took the
     // frame from ~3 ms to ~50 ms. 48 keeps the nearest molecules fully detailed at a cost that stays in
     // the noise, and the buffers rewritten each frame stay small (48 x 11 lobes).
-    const WCAP = 48;
+    const WCAP = NW;   // NO cap - every water inside the crisp zone gets orbitals
     const wOrbCore = { m:[], col:[], cen:[], oid:[] }, wOrbBond = { m:[], tap:[], col:[], cen:[], oid:[] };
     { const tmp = new Float32Array(16);
       const hA = [wh1[0], wh1[1], wh1[2]], hB = [wh2[0], wh2[1], wh2[2]];
