@@ -320,6 +320,25 @@ function codeOf(sybyl){
   return c;
 }
 
+/* Black-screen diagnostic. A throw during setup, a rejected promise, or a shader that fails to compile
+   are all INVISIBLE when they happen — the canvas simply stays empty and the chrome still draws, which
+   looks exactly like a black screen with nothing wrong. Put them on the page instead. */
+(function(){
+  const show = msg => { let b = document.getElementById('errbar');
+    if(!b){ b = document.createElement('div'); b.id = 'errbar';
+      b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#7a1d1d;color:#fff;'
+        + 'font:12px/1.45 ui-monospace,monospace;padding:8px 12px;white-space:pre-wrap;max-height:45vh;overflow:auto';
+      (document.body || document.documentElement).appendChild(b); }
+    if(b.textContent.length < 4000) b.textContent += (b.textContent ? String.fromCharCode(10) : '') + msg; };
+  addEventListener('error', e => show('VIRHE: ' + e.message + '   (' + String(e.filename||'').split('/').pop() + ':' + e.lineno + ')'));
+  addEventListener('unhandledrejection', e => show('VIRHE (promise): ' + ((e.reason && e.reason.message) || e.reason)));
+  const ce = console.error;
+  console.error = function(){ const t = Array.from(arguments).map(String).join(' ');
+    if(/error|fail|compil|link|shader|WebGL/i.test(t)) show('KONSOLI: ' + t.slice(0, 600));
+    return ce.apply(console, arguments); };
+  window.__showErr = show;
+})();
+
 /* The first 5 seconds belong to Mona - the real build messages are held back until then and the one
    that was current when the hush lifts is what appears. */
 let gLoadMsg = '', gLoadHush = true;
