@@ -2374,9 +2374,37 @@ async function run(){
   /* The solve that used to sit here — BG_GREEN run BACKWARDS through the grade so the sliders could not
      touch the background — is gone. The background is written straight out again, exactly as it was
      before that was added. gBgLevel is a plain multiplier on it, nothing clever. */
+  /* The grade defaults above WILL eat this background without the solve below. Its luma is 0.105, and a
+     brightness under 1 auto-raises contrast (1.44 at 0.63), which alone drags 0.105 below zero — then
+     shadows at -1 multiply what is left by about 0.2, and the dark green clamps to black.
+     So BG_GREEN is what the background must LOOK like, and what gets drawn is that colour solved
+     BACKWARDS through the grade: whatever the four sliders are set to, the background lands on the same
+     green and grading the scene no longer touches it. gBgLevel is its own multiplier on top. */
   let gBgLevel = 1.0;                       // dev slider: the background's own brightness
   const gBgRaw = BG_GREEN.clone();
-  const syncBgRaw = () => { gBgRaw.set(BG_GREEN.r*gBgLevel, BG_GREEN.g*gBgLevel, BG_GREEN.b*gBgLevel); };
+  let _bgKey = '';
+  const _ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x-e0)/(e1-e0))); return t*t*(3-2*t); };
+  // Exactly the maths in the bright/grade pixel shader, so the solve inverts the real thing.
+  const gradeFwd = c => {
+    const contrast = 1.0 + Math.max(0, 1 - gBright) * 1.2;
+    const o = c.map(v => ((v - 0.5)*contrast + 0.5) * gBright);
+    const luma = 0.299*o[0] + 0.587*o[1] + 0.114*o[2];
+    const g = (1 + gHi*_ss(0.5, 1.0, luma)) * (1 + gSh*(1 - _ss(0.0, 0.5, luma)));
+    return o.map(v => Math.min(1, Math.max(0, (luma + (v - luma)*gSat) * g)));
+  };
+  /* Damped fixed point. The grade is monotone in its input, so nudging the input by the output error
+     converges in a few dozen steps. Pinned to [0,1] because the scene target cannot hold more, so an
+     extreme grade that simply cannot reach the target settles on the closest it can get. Re-solved only
+     when one of the five values actually changes. */
+  const syncBgRaw = () => {
+    const key = gBright+'|'+gSat+'|'+gHi+'|'+gSh+'|'+gBgLevel;
+    if(key === _bgKey) return; _bgKey = key;
+    const tgt = [BG_GREEN.r*gBgLevel, BG_GREEN.g*gBgLevel, BG_GREEN.b*gBgLevel];
+    const x = tgt.slice();
+    for(let it=0; it<80; it++){ const got = gradeFwd(x);
+      for(let k=0;k<3;k++) x[k] = Math.min(1, Math.max(0, x[k] + (tgt[k] - got[k])*0.5)); }
+    gBgRaw.set(x[0], x[1], x[2]);
+  };
   const bgMat = new BABYLON.ShaderMaterial('bgMat', scene, 'bg', { attributes:['position'], uniforms:['cBg','focusAmt','focusDark'] });
   bgMat.backFaceCulling = false;
   bgMat.onBindObservable.add(()=>{ const eff=bgMat.getEffect(); if(!eff) return; syncBgRaw(); eff.setColor3('cBg', gBgRaw); eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusDark', gFocusDark); });
@@ -3296,11 +3324,11 @@ async function run(){
   const BUBBLE_R = 49.5;      // camera reveal-sphere radius (Å) — atoms within it go translucent
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
-  let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
+  let gBright = 0.63;         // global brightness multiplier (dev "lighting" slider → brightness post-process)
   let gZoomPull = 1.0;        // how far the view slides toward the cursor when wheel-zooming (0 = straight in, 1 = cursor stays pinned). Dev slider.
-  let gSat = 1.0;             // saturation, dev slider
-  let gHi = 0.0;              // highlight gain (bright end only), dev slider
-  let gSh = 0.0;              // shadow gain (dark end only), dev slider
+  let gSat = 1.66;            // saturation, dev slider
+  let gHi = 1.0;              // highlight gain (bright end only), dev slider
+  let gSh = -1.0;             // shadow gain (dark end only), dev slider
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
   let gConeTip = 0.12;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
@@ -6004,10 +6032,10 @@ async function run(){
     return { row, sld };
   };
   const zpG = mkGrade('zp','zoomin kohdistus', 0, 100, 100, v=>v+'%', v=>{ gZoomPull = v/100; });
-  const brG = mkGrade('br','kirkkaus',       20, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
-  const saG = mkGrade('sa','kylläisyys',    0, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
-  const hiG = mkGrade('hi','huippuvalot',  -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
-  const shG = mkGrade('sh','varjot',       -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gSh = v/100; });
+  const brG = mkGrade('br','kirkkaus',       20, 250,  63, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
+  const saG = mkGrade('sa','kylläisyys',    0, 250, 166, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
+  const hiG = mkGrade('hi','huippuvalot',  -100, 100, 100, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
+  const shG = mkGrade('sh','varjot',       -100, 100,-100, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gSh = v/100; });
   const bgG = mkGrade('bg','taustan kirkkaus', 0, 300, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBgLevel = v/100; });
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
