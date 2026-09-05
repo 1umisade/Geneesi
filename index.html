@@ -316,9 +316,32 @@ function codeOf(sybyl){
   return c;
 }
 
-const setLbl = t => { const e = document.getElementById('load-lbl'); if(e) e.textContent = t; };
-const setBar = v => { const e = document.getElementById('load-bar');
-  if(e) e.style.transform = 'scaleX(' + Math.max(0, Math.min(1, v/100)) + ')'; };
+/* The first 5 seconds belong to Mona - the real build messages are held back until then and the one
+   that was current when the hush lifts is what appears. */
+let gLoadMsg = '', gLoadHush = true;
+const paintLbl = () => { const e = document.getElementById('load-lbl'); if(e) e.textContent = gLoadHush ? 'Hys! Mona nukkuu.' : gLoadMsg; };
+const setLbl = t => { gLoadMsg = t; paintLbl(); };
+setTimeout(() => { gLoadHush = false; paintLbl(); }, 5000);
+paintLbl();
+/* The bar NEVER stalls. Each progress mark restarts a slow linear GLIDE from wherever the bar has got
+   to, aimed most of the way to full but never at it — and because that glide is a CSS transition the
+   compositor owns, it keeps moving even while a build step has the main thread locked solid, which no
+   JS timer or rAF loop can do. Only the final mark actually fills it.
+   (Call sites pass either a fraction or a percent — both are accepted.) */
+let gBarMark = 0, gBarDone = false;
+const barNow = e => { try { return new DOMMatrixReadOnly(getComputedStyle(e).transform).a; } catch(_){ return gBarMark; } };
+const setBar = v => {
+  const f = Math.max(0, Math.min(1, v > 1 ? v/100 : v));
+  const e = document.getElementById('load-bar'); if(!e || gBarDone) return;
+  if(f >= 1){ gBarDone = true; e.style.transition = 'transform .4s ease-out'; e.style.transform = 'scaleX(1)'; return; }
+  gBarMark = Math.max(f, barNow(e));           // never step BACKWARD past where the glide already reached
+  e.style.transition = 'none';                  // pin it there…
+  e.style.transform = 'scaleX(' + gBarMark.toFixed(4) + ')';
+  void e.offsetWidth;                           // …commit that before starting the next glide
+  e.style.transition = 'transform 45s linear';
+  e.style.transform = 'scaleX(' + (gBarMark + (0.96 - gBarMark)*0.7).toFixed(4) + ')';
+};
+setBar(0);   // start gliding the moment the page opens
 const yield_ = () => new Promise(r => setTimeout(r, 0));
 
 /* ── Goodsell-style muted palette, coloured by molecular component ─────── */
@@ -1837,6 +1860,7 @@ uniform float rimLo;  // rim band start (higher = thinner)
 uniform float rimHi;  // rim band end
 uniform float rimW;   // stroke width in fwidth units (hover = thin, selection = thick)
 uniform float solidDepth;   // 1 = keep the (invisible) interior so the WHOLE front hemisphere writes depth → clean molecule silhouette
+uniform float glowAmt;      // 0 = a plain stroke. Above 0, a soft wide halo bleeds off it - the selection glow
 varying vec3 vVP;
 varying vec3 vN;
 void main(void){
@@ -1844,6 +1868,10 @@ void main(void){
   float f = 1.0 - max(dot(N, V), 0.0);             // 0 face-on … 1 at the silhouette (front faces only)
   float w = fwidth(f);                             // screen-space gradient → normalise the band to a constant pixel width
   float a = 1.0 - smoothstep(0.0, w*rimW, abs(f - rimLo));   // even stroke along the f=rimLo contour
+  if(glowAmt > 0.001){                             // same contour, ~4x wider and squared -> a soft falloff either side
+    float h = 1.0 - smoothstep(0.0, w*rimW*3.6, abs(f - rimLo));
+    a = max(a, h*h*glowAmt);
+  }
   if(solidDepth < 0.5 && a < 0.04) discard;        // atoms: rim-only. Molecules: keep the interior (alpha≈0) so it writes depth and hides rims behind it.
   gl_FragColor = vec4(oc, a);
 }`;
@@ -2080,19 +2108,26 @@ uniform sampler2D selMask;
 uniform vec2 texel;
 uniform float owidth;
 uniform float selOn;
+uniform float glowT;   // seconds, for the slow breathing pulse of the glow
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
   if(selOn < 0.5){ gl_FragColor = vec4(scene, 1.0); return; }
-  float c = texture2D(selMask, vUV).r, gmn=c, gmx=c, bmn=c, bmx=c;
+  float c = texture2D(selMask, vUV).r, gmn=c, gmx=c, bA=0.0, bB=0.0;
   for(int i=0;i<16;i++){ float a = float(i) * 0.3926991; vec2 u = vec2(cos(a), sin(a)) * texel;
-    float sg = texture2D(selMask, vUV + u*owidth).r;         gmn=min(gmn,sg); gmx=max(gmx,sg);   // THICK band → green
-    float sb = texture2D(selMask, vUV + u*(owidth*0.34)).r;  bmn=min(bmn,sb); bmx=max(bmx,sb);   // NARROW band → black
+    float sg = texture2D(selMask, vUV + u*owidth).r; gmn=min(gmn,sg); gmx=max(gmx,sg);   // THICK band -> the ring
+    bA += texture2D(selMask, vUV + u*(owidth*2.0)).r;    // two blurred copies of the coverage, near and far
+    bB += texture2D(selMask, vUV + u*(owidth*4.5)).r;
   }
-  float green = smoothstep(0.15, 0.6, gmx - gmn);   // thick green ring straddling the coverage edge
-  float black = smoothstep(0.15, 0.6, bmx - bmn);   // narrow black ring - same mask, so equally smooth
-  vec3 col = mix(scene, vec3(0.16, 1.0, 0.34), green);   // green first (thicker, underneath)
-  col = mix(col, vec3(0.03), black);                     // black ON TOP (narrower)
-  gl_FragColor = vec4(col, 1.0);
+  float ring = smoothstep(0.15, 0.6, gmx - gmn);   // thick green ring straddling the coverage edge
+  // Outward glow - the blurred coverage, kept OUTSIDE the shape so it reads as light spilling off the
+  // ring instead of a wash over the protein. The narrow black band that used to sit on top is gone,
+  // so green is now the only selection colour.
+  float halo = max(bA*0.0625*0.90, bB*0.0625*0.55) * (1.0 - c);
+  float pulse = 0.72 + 0.28*sin(glowT*2.1);
+  vec3 GC = vec3(0.16, 1.0, 0.34);
+  vec3 col = scene + GC * halo * halo * 1.25 * pulse;
+  col = mix(col, GC, ring);
+  gl_FragColor = vec4(min(col, vec3(1.0)), 1.0);
 }`;
 
 /* ── Static dark-green background ──────────────────────────────────────────
@@ -2169,11 +2204,10 @@ async function run(){
   const FILES = ['PSII.mol2','photosystem_I.mol2','cytochrome_b6f.mol2','ATP_synthase.mol2','NDH-1.mol2',
     'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','plastocyanin.mol2','PGR5.mol2',
     'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2','chlorophyll.mol2','quinone.mol2','nadph.mol2'];
-  const barEl = document.getElementById('load-bar');
   setLbl('Haetaan tylakoidimalleja…');
   const mols = [];
   for(let i=0;i<FILES.length;i++){ const fn=FILES[i];
-    setLbl(`Haetaan ${fn}…`); setBar((i/FILES.length)*45);
+    setLbl(`Haetaan ${fn}…`); setBar((i/FILES.length)*28);
     try{
       const res = await fetch('./'+fn);
       if(!res.ok){ console.warn('skip (HTTP '+res.status+')', fn); continue; }
@@ -2190,7 +2224,7 @@ async function run(){
     await yield_();
   }
   if(mols.length === 0) throw new Error('No models loaded — are the .mol2 files next to index.html?');
-  setLbl('Sijoitellaan komplekseja…'); await yield_();
+  setLbl('Sijoitellaan komplekseja…'); setBar(0.32); await yield_();
   const psii = mols.find(m => m.cfg && m.cfg.match==='3jcu') || mols[0];
   const chl = null;   // chlorophyll is now a normal model (chlorophyll.mol2), not a runtime-extracted showcase — every `if(chl)`/`m===chl` guard below no-ops
   // A REALISTIC thylakoid lipid mixture rather than one species tiled everywhere. Weights are the
@@ -2221,7 +2255,6 @@ async function run(){
         m.x[k]=w.x+cx; m.y[k]=w.y+cy; m.z[k]=w.z+cz; } } }
 
   // Centre each model, then offset it to its target membrane position.
-  if(barEl){ barEl.style.transition = 'transform 6s cubic-bezier(0.15,0.75,0.2,1)'; barEl.style.transform = 'scaleX(0.9)'; }
   const box = [];
   for(const m of mols){
     let miX=Infinity,miY=Infinity,miZ=Infinity,maX=-Infinity,maY=-Infinity,maZ=-Infinity;
@@ -2372,6 +2405,7 @@ async function run(){
   let gZoomEase = 0.16;   // per-frame bleed of gZoomVel (small → slower, smoother arrival). Middle-held wheel drops it.
   let gFocusRadiusObs = null;   // while a focus swivel runs, pins cam.radius so the centering never changes zoom
   let gFocusDim = false;        // F held → grayscale everything except the current selection (its EXACT silhouette stays colour)
+  let gSelVigAmt = 0;           // eased 0→1 while anything is selected → the vignette closes in on it
   let gFocusDimAmt = 0;         // eased 0→1 so the grayscale fades in/out smoothly
   let gFocusMode = 0;           // 0 = none (grayscale ALL) · 1 = a point (atom, view-space centre+radius) · 2 = a model set · 3 = a cofactor group
   let gFocusGroup = -1;         // mode 3: the cofactor group index whose overlay atoms keep their colour
@@ -2921,7 +2955,7 @@ async function run(){
           if(mol){ selectMolecule(mol, e.shiftKey); }
           else if(rtsDownModel >= 0){   // a click on a protein complex → select it (Shift adds / toggles)
             if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
-            else { gSel.clear(); gSelMol.clear(); gSel.add(rtsDownModel); }
+            else { gSel.clear(); gSelMol.clear(); gSel.add(rtsDownModel); focusOnModel(rtsDownModel); }   // a fresh pick centres the camera on it
             updateSelectionUI();
           } else {   // click on empty → deselect EVERYTHING (move order is on RIGHT-click)
             gSel.clear(); gSelMol.clear(); updateSelectionUI();
@@ -3011,7 +3045,7 @@ async function run(){
   dir.intensity = 0.45;   // gentle form; AO + rim carry the shading
 
   /* Allocate instance buffers + build geometry */
-  setLbl(`Rakennetaan ${mols.length} mallia…`); await yield_();
+  setLbl(`Rakennetaan ${mols.length} mallia…`); setBar(0.38); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
   const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [], cofBuf = [], resBuf = [],
@@ -3339,6 +3373,7 @@ async function run(){
      every complex. setDevMode(false) also drops any live model selection. Wired up after the model
      selection code exists (see applyDevMode below). */
   let gDev = false;
+  let gDevPanelEl = null, gDevTopSet = false;   // the slider panel, and whether its top has been dropped below the camera readout yet
   let applyDevMode = () => {};   // real implementation installed once deselectModel + labels exist
   { const devBtn = document.getElementById('dev-btn');
     if(devBtn) devBtn.addEventListener('click', () => { gDev = !gDev;
@@ -3551,7 +3586,7 @@ async function run(){
   // from selCenter (which the shaders test per-atom) so selecting a model can't tint a stray atom.
   const orbitCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);
   const gPsiiOffset = new BABYLON.Vector3(0, 0, 0);        // whole-PSII drag offset (moved via the macromolecule gizmo)
-  setLbl('Siirretään näytönohjaimelle…'); await yield_();
+  setLbl('Siirretään näytönohjaimelle…'); setBar(0.46); await yield_();
   /* ── Spatial culling ──────────────────────────────────────────────────────
      Bin every inner-core instance (nucleons, orbitals, bonds, lone pairs) into a
      3-D grid of cells. Each frame only the handful of cells the camera bubble
@@ -4824,6 +4859,19 @@ async function run(){
       () => { if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; } cam.radius = R; });   // done → stop pinning, land at the exact zoom we started with
     gFocusRadiusObs = scene.onBeforeRenderObservable.add(() => { cam.radius = R; });   // hold zoom constant for the ~0.23 s swivel (radius only — never touches alpha/beta, so it can't fight rotation)
   };
+  // A fresh single selection gently swings the camera onto it, zoom untouched — the same easing an atom
+  // pick already used, so every kind of selection now behaves the same way. Shift-adding to a selection
+  // and box-select deliberately do NOT move the camera.
+  const _selCtr = new BABYLON.Vector3();
+  // Held back a beat, because the first click of a DOUBLE-click also lands here: swinging the camera
+  // straight away would drag the target out from under the second click. An atom / cofactor pick
+  // cancels it (cancelSelFocus below), so only a click that stays a single click moves the camera.
+  let gSelFocusTimer = null;
+  const cancelSelFocus = () => { clearTimeout(gSelFocusTimer); gSelFocusTimer = null; };
+  const focusOnSelection = (x, y, z) => { cancelSelFocus();
+    gSelFocusTimer = setTimeout(() => focusCameraOn(_selCtr.set(x, y, z)), 280); };
+  const focusOnModel = mi => { const md = mInfo[mi]; if(!md) return;
+    focusOnSelection(md.cx + gModelOff[mi*3], md.cy + gModelOff[mi*3+1], md.cz + gModelOff[mi*3+2]); };
   // Double-click focus that ALSO points the camera parallel to the membrane: centres on `center` AND snaps
   // the orientation back to the default framing (alpha/beta = CAM_DEF), where world-X (the membrane axis)
   // runs horizontally — the clean side-on view. All four properties animate together, target created FIRST so
@@ -5124,7 +5172,12 @@ async function run(){
         camcoordsEl.innerHTML = Math.round(scene.getEngine().getFps())+' fps'
           +'<br>sij. '+p.x.toFixed(0)+', '+p.y.toFixed(0)+', '+p.z.toFixed(0)
           +'<br>α '+(cam.alpha*DEG).toFixed(1)+'°  β '+(cam.beta*DEG).toFixed(1)+'°'
-          +'<br>et. '+Math.abs(cam.radius).toFixed(0); }
+          +'<br>et. '+Math.abs(cam.radius).toFixed(0);
+        // Drop the dev slider panel below this readout — both are pinned right:16px, so the panel's own
+        // top ran straight through it. Measured AFTER the text above is in place (an empty readout has
+        // almost no height) and only once per dev-mode enable, never every frame.
+        if(gDevPanelEl && !gDevTopSet){ const r = camcoordsEl.getBoundingClientRect();
+          if(r.height > 20){ gDevPanelEl.style.top = Math.round(r.bottom + 10) + 'px'; gDevTopSet = true; } } }
       else camcoordsEl.style.display='none'; }
     if(gMacroSel && !wholeInView()) deselectMacro();   // zoomed back in → drop the macromolecule selection, atoms become selectable
 
@@ -5247,19 +5300,24 @@ async function run(){
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
   const mkOutlineMat = (nm, col, rimLo, rimHi, rimW) => {
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
-      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth','selDelta']
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth','selDelta','glowAmt']
     });
     mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi); mat.setFloat('rimW', rimW || 2.6); mat.setFloat('solidDepth', 0.0);
     mat.setVector3('selDelta', BABYLON.Vector3.Zero());
     mat.alpha = 0.999; mat.backFaceCulling = true; mat.needDepthPrePass = false;   // cull backs → ONE contour per lobe (not a front+back pair)
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
-    mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
+    mat.glow = 0;   // >0 → the stroke gets a soft halo that breathes (set on the selection materials only)
+    mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return; eff.setFloat('uT', gWaveT);
+      eff.setFloat('glowAmt', mat.glow ? mat.glow*(0.72 + 0.28*Math.sin(performance.now()*0.0021)) : 0); });   // shake with the orbitals, breathe with the glow
     return mat;
   };
   const SAGE = new BABYLON.Color3(0.60,0.72,0.53);                                              // muted sage green — the one selection colour, everywhere
   const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66, 2.6);            // hover = thin white, hugs the lobe edge
   const selMat = mkOutlineMat('selMat', new BABYLON.Color3(0.11, 0.48, 0.16), 0.85, 0.66, 8.0);   // cofactor selection outline (etcSelOut) = clear green
-  const flashMat = mkOutlineMat('flashMat', new BABYLON.Color3(0.05,0.30,0.08), 0.80, 0.66, 12.0);   // atom-select FLASH: thick dark green
+  // Atom selection = the SAME bright green as the protein/cofactor ring the seloutline pass draws
+  // (0.16, 1.0, 0.34). The old 0.05/0.30/0.08 was so dark it read as a black stroke.
+  const flashMat = mkOutlineMat('flashMat', new BABYLON.Color3(0.16,1.0,0.34), 0.80, 0.66, 12.0);   // atom selection: thick green, glowing
+  flashMat.glow = 0.55;
   // Cofactor (whole-molecule) outlines stay rim-only; a separate depth-only MASK (see etcSelMask below)
   // makes them show only the molecule's OUTER silhouette, never the interior atoms' rims.
   const hlMatMol = mkOutlineMat('hlMatMol', new BABYLON.Color3(1,1,1), 0.85, 0.66, 6.0);   // cofactor HOVER outline = white
@@ -5369,11 +5427,11 @@ async function run(){
   const flashOutline = () => {
     clearTimeout(flashTimer);
     selOut.material = flashMat;
-    const seq = [true,false,true,false,true,false];   // three on-flashes
+    const seq = [true,false,true,false,true];   // three on-flashes, then it STAYS on
     let i = 0;
     const tick = () => { selOut.setEnabled(seq[i]); i++;
       if(i < seq.length) flashTimer = setTimeout(tick, 175);
-      else { selOut.setEnabled(false); flashTimer = null; } };
+      else { selOut.setEnabled(true); flashTimer = null; } };   // the green glow marks the selection for as long as it lasts
     tick();
   };
 
@@ -5934,13 +5992,14 @@ async function run(){
   const fdSld = document.createElement('input'); fdSld.type='range'; fdSld.min='0'; fdSld.max='100'; fdSld.value='0'; fdSld.style.cssText='width:100%;cursor:pointer;';
   const fdValEl = fdRow.querySelector('#dev-fd-val');
   fdSld.oninput = () => { gFocusDark = +fdSld.value/100; fdValEl.textContent = gFocusDark.toFixed(2); };
-  // F vignette STRENGTH: how dark the screen edges go while F is held (0 = off … 1 = black corners).
-  const fvStrRow = document.createElement('div'); fvStrRow.innerHTML = 'F-vinjetti voimakkuus: <b id="dev-fvs-val">0.55</b>';
+  // Vignette STRENGTH: how dark the screen edges go (0 = off … 1 = black corners). Governs BOTH the
+  // F-hold darkening and the vignette that closes in whenever something is selected.
+  const fvStrRow = document.createElement('div'); fvStrRow.innerHTML = 'vinjetti voimakkuus: <b id="dev-fvs-val">0.55</b>';
   const fvStrSld = document.createElement('input'); fvStrSld.type='range'; fvStrSld.min='0'; fvStrSld.max='100'; fvStrSld.value='55'; fvStrSld.style.cssText='width:100%;cursor:pointer;';
   const fvStrVal = fvStrRow.querySelector('#dev-fvs-val');
   fvStrSld.oninput = () => { gFVigStr = +fvStrSld.value/100; fvStrVal.textContent = gFVigStr.toFixed(2); updateFVig(); };
-  // F vignette REACH: how far the darkening bleeds inward from the edges (% of the radius toward centre).
-  const fvRchRow = document.createElement('div'); fvRchRow.innerHTML = 'F-vinjetti kantama: <b id="dev-fvr-val">45</b>';
+  // Vignette REACH: how far the darkening bleeds inward from the edges (% of the radius toward centre).
+  const fvRchRow = document.createElement('div'); fvRchRow.innerHTML = 'vinjetti kantama: <b id="dev-fvr-val">45</b>';
   const fvRchSld = document.createElement('input'); fvRchSld.type='range'; fvRchSld.min='0'; fvRchSld.max='90'; fvRchSld.value='45'; fvRchSld.style.cssText='width:100%;cursor:pointer;';
   const fvRchVal = fvRchRow.querySelector('#dev-fvr-val');
   fvRchSld.oninput = () => { gFVigReach = +fvRchSld.value; fvRchVal.textContent = String(gFVigReach); updateFVig(); };
@@ -5992,8 +6051,15 @@ async function run(){
   devPanel.appendChild(saG.row); devPanel.appendChild(saG.sld);
   devPanel.appendChild(hiG.row); devPanel.appendChild(hiG.sld);
   devPanel.appendChild(shG.row); devPanel.appendChild(shG.sld);
+  devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld);   // both vignettes (F-hold and selection)
+  devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld);
   devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
+  // The camera readout (#camcoords) is pinned to the same right:16px as this panel, so its fixed top of
+  // 56px ran the sliders straight through the readout. The render loop measures the readout and drops
+  // this panel below it — done there because the readout only gets a box once dev mode paints a frame.
+  gDevPanelEl = devPanel;   // the render loop drops its top below the camera readout once that has a box
+
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
     const p = cam.position, t = cam.getTarget();
@@ -6011,6 +6077,7 @@ async function run(){
   });
   // Turning dev mode OFF drops any live complex selection and hides every dev label + the dev panel.
   applyDevMode = () => { devPanel.style.display = gDev ? 'flex' : 'none';
+    gDevTopSet = false;   // re-measure the readout next frame (its height can differ between sessions)
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
@@ -6098,6 +6165,7 @@ async function run(){
   const COF_CID = { 7: 156620228 };                                    // 7 = chlorophyll a (PubChem link + skeletal fallback)
   const showEtcSel = gi => {
     etcSel = gi;
+    cancelSelFocus();   // a cofactor pick does its own framing (focusAlongMembrane below)
     if(gi >= 0 && (gSel.size || gSelMol.size)){ gSel.clear(); gSelMol.clear(); updateSelectionUI(); }   // picking a cofactor drops any protein/molecule RTS selection, so the thick green silhouette (driven by gSel) stops wrapping the HOST PROTEIN and the cofactor's own green outline is what shows
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
     if(gi < 0 || !etcGroupPos){ modelLabel.style.display='none'; return; }
@@ -6385,6 +6453,7 @@ async function run(){
   // Add / toggle a spawned molecule into the selection (plain tap replaces, Shift-tap toggles).
   const selectMolecule = (mol, add) => { if(!add){ gSel.clear(); gSelMol.clear(); }   // a fresh molecule pick drops the protein selection too
     if(gSelMol.has(mol)) gSelMol.delete(mol); else gSelMol.add(mol);
+    if(!add && gSelMol.has(mol)) focusOnSelection(mol.cx, mol.cy, FLOOR_Z);   // centre the camera on it, gently
     updateSelectionUI(); };
   let dragAtom = -1;   // index of the spawned atom being left-dragged (or -1)
   // Move a dragged spawned atom to where the cursor ray meets the z-plane.
@@ -7089,7 +7158,10 @@ async function run(){
     // ── Info module: relocated to the RIGHT, stacked directly ABOVE the spawn (element) module, vertical,
     //    matched to its width. Holds the selection / atom / protein / cofactor cards (one visible at a time).
     gInfoRight = document.createElement('div'); gInfoRight.id = 'info-right';
-    gInfoRight.style.cssText = 'position:fixed;right:12px;bottom:calc(25vh + 16px);width:300px;max-height:66vh;z-index:11;box-sizing:border-box;'
+    // The card EXPANDS to fit all of its content rather than scrolling inside a 66vh box — it is allowed
+    // to run down over the console (see the sync below), and only falls back to scrolling if it is taller
+    // than the whole window.
+    gInfoRight.style.cssText = 'position:fixed;right:12px;bottom:calc(25vh + 16px);width:300px;max-height:calc(100vh - 24px);z-index:11;box-sizing:border-box;'
       + 'display:none;flex-direction:column;align-items:stretch;gap:8px;padding:11px 12px;overflow:auto;'
       + 'font-family:"Courier New",monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);pointer-events:auto;';
     document.body.appendChild(gInfoRight);
@@ -7306,7 +7378,12 @@ async function run(){
   const buildOrb = atom => {
     const e = atom.e, col = info(e).c;
     const n = fillOutline(prevOrbBuf, atom, false);            // every lobe (ignore any orbital-isolate)
-    const cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
+    // Centre on where the lobes ACTUALLY are. fillOutline hands them back at the atom's render position,
+    // so subtracting the baked centre instead left the whole cloud sitting `world - center` off the
+    // origin — up to 135 units for a flattened model. maxR then framed that offset rather than the atom
+    // and the render came out a speck in the middle of an empty canvas.
+    const rc = atom.world || atom.center;
+    const cx=rc.x, cy=rc.y, cz=rc.z;
     const oc = new Float32Array(n*3), cen = new Float32Array(n*3), oid = new Float32Array(n);
     let maxR = 0.6;
     for(let i=0;i<n;i++){ const o=i*16;
@@ -7432,7 +7509,11 @@ async function run(){
     gInfoRight.appendChild(cofInfoPanel);
     // Show the info module frame only while one of its cards is visible; hide it (no empty box) otherwise.
     const cards = [selPanel, document.getElementById('center-atom'), document.getElementById('center-protein'), cofInfoPanel].filter(Boolean);
-    const sync = () => { let any=false; for(const el of cards){ const d=el.style.display; if(d && d!=='none'){ any=true; break; } } gInfoRight.style.display = any ? 'flex' : 'none'; };
+    const sync = () => { let any=false; for(const el of cards){ const d=el.style.display; if(d && d!=='none'){ any=true; break; } } gInfoRight.style.display = any ? 'flex' : 'none';
+      if(!any) return;
+      // Taller than the room above the console → slide it down over the console so the whole card shows.
+      requestAnimationFrame(() => { const room = window.innerHeight*0.75 - 28;
+        gInfoRight.style.bottom = (gInfoRight.scrollHeight > room) ? '12px' : 'calc(25vh + 16px)'; }); };
     const mo = new MutationObserver(sync); for(const el of cards) mo.observe(el, {attributes:true, attributeFilter:['style']}); sync(); }
 
   // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
@@ -7704,12 +7785,14 @@ async function run(){
     const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
     nucViz.style.cssText = 'width:82px;height:82px;flex:0 0 auto;';
     const Nn = Math.max(0, info(e).n - Z);
-    const protonLbl = document.createElement('div'); protonLbl.textContent = Z + ' protonia';
-    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:1 1 0;';
-    const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + ' neutronia' : '';   // hide neutrons when there are none (H)
-    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:1 1 0;';
+    // Finnish partitive only from two up - one proton is "1 protoni", not "1 protonia". nowrap + auto
+    // basis so the count and the word stay on ONE line instead of the narrow column breaking them apart.
+    const protonLbl = document.createElement('div'); protonLbl.textContent = Z + (Z === 1 ? ' protoni' : ' protonia');
+    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:0 0 auto;white-space:nowrap;';
+    const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + (Nn === 1 ? ' neutroni' : ' neutronia') : '';   // hide neutrons when there are none (H)
+    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:0 0 auto;white-space:nowrap;';
     const nucRow = document.createElement('div');
-    nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;width:100%;margin-top:2px;flex:0 0 auto;';
+    nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:2px;flex:0 0 auto;';
     nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
     // Vertical stack in the narrow right-side info module: name → 3D orbital render → orbital table → nucleus row.
     grid.style.margin = '0 auto';   // centre the table in the column
@@ -7738,6 +7821,7 @@ async function run(){
     modelLabel.style.display = 'none'; highlightModel(-1); };
   const centerOnAtom = (a) => {
     if(!a) a = pickAtom(); if(!a) return;
+    cancelSelFocus();   // this double-click's first click queued a swing onto the protein — drop it
     const w = a.world || a.center;  // WORLD (rendered) position — selCenter matches the flattened vWCen, and the camera swivels to where the atom actually is
     selCenter.copyFrom(w);          // marks the selected atom (shader compares this to the flattened atom centre)
     orbitCenter.copyFrom(w);        // …and becomes the camera pivot
@@ -7846,7 +7930,8 @@ async function run(){
     }
   });
 
-  if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
+  // The bar used to be filled right here, with most of the build still to come. It is driven by setBar
+  // and its own creep clock now, and only ever reaches the end at "Valmis".
   // NOTE: the loading screen is dismissed AFTER the shader pre-compile pass below, once the whole
   // post-process chain exists — see "Esikäännetään varjostimia" near the end of setup.
 
@@ -7866,7 +7951,7 @@ async function run(){
   };
   let _ppOn = true;   // are the two outline passes currently attached to the camera?
   // RTS selection → a thick GREEN outline traced around the selected complexes (from the selMask coverage).
-  const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn'], ['selMask'], 1.0, cam);
+  const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn','glowT'], ['selMask'], 1.0, cam);
   selOutline.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     // Width scales with zoom EXACTLY like the black cofactor/protein outline (a FIXED world size, and the
@@ -7876,6 +7961,7 @@ async function run(){
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const w = (20.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // THICK green ring (was 14) → clearly bolder than the narrow black
     eff.setFloat('owidth', Math.max(1.5, Math.min(22.0, w)));
+    eff.setFloat('glowT', performance.now()*0.001);
     eff.setFloat('selOn', (gOutlines && (gSel.size || etcSel >= 0)) ? 1.0 : 0.0);   // green silhouette shows for a protein selection OR a selected cofactor (the mask is fed the cofactor's atoms in rebuildSelMask)
     if(gSelMaskRT) eff.setTexture('selMask', gSelMaskRT);
   };
@@ -8003,7 +8089,11 @@ void main(void){
   // view-space centre+radius; mode 2 = a set of whole models (their atoms keep colour → exact silhouette).
   scene.onBeforeRenderObservable.add(() => {
     gFocusDimAmt += ((gFocusDim ? 1 : 0) - gFocusDimAmt) * 0.16;
-    fVig.style.opacity = gFocusDimAmt.toFixed(3);   // darkening vignette fades in/out with F
+    // A selection also pulls the vignette up to full — same gradient, same dev sliders as F, so the
+    // two are tuned together and the stronger of the pair wins.
+    const anySel = !!(selAtom || etcSel >= 0 || gSel.size || gSelMol.size);
+    gSelVigAmt += ((anySel ? 1 : 0) - gSelVigAmt) * 0.09;
+    fVig.style.opacity = Math.max(gFocusDimAmt, gSelVigAmt).toFixed(3);   // darkening vignette: F, or a selection
     if(gFocusDimAmt < 0.004){ gFocusDimAmt = 0; gFocusMode = 0; return; }
     gFocusSet.fill(0); gFocusGroup = -1;
     if(etcSel >= 0){ gFocusMode = 3; gFocusGroup = etcSel; }   // a cofactor → keep EXACTLY that cofactor's overlay atoms (by group), grey the rest
@@ -8132,15 +8222,15 @@ void main(void){
      renders in under 3 ms, so the hitching was never the renderer, it was the build competing with it.
      Waiting here is the deliberate trade: a longer load for a scene that is smooth once you are in it. */
   try {
-    if(buildMembrane){ setLbl('Rakennetaan kalvoa…'); setBar(0.80); await buildMembrane(); }
-    if(buildDetail){ setLbl('Rakennetaan atomeja…'); setBar(0.90); await buildDetail(); }
+    if(buildMembrane){ setLbl('Rakennetaan kalvoa…'); setBar(0.55); await buildMembrane(); }
+    if(buildDetail){ setLbl('Rakennetaan atomeja…'); setBar(0.75); await buildDetail(); }
   } catch(err){ console.warn('background build failed:', err); }
 
   /* Now pre-compile everything that exists — including the membrane materials, which did not exist
      earlier. Each distinct material is compiled against a mesh that actually uses it, the far-LOD twins
      explicitly (the culler only assigns those later), then a few real frames are rendered so the
      post-process chain and the render targets compile too. Nothing should have to compile mid-flight. */
-  { setLbl('Esikäännetään varjostimia…'); setBar(0.97);
+  { setLbl('Esikäännetään varjostimia…'); setBar(0.90);
     const seen = new Set();
     for(const m of scene.meshes){
       const mat = m.material;
@@ -8157,7 +8247,7 @@ void main(void){
        actually drawn (its vertex-array and instance-buffer bindings are created then). With thousands of
        cells that lands as a stall the moment a lot of geometry swings into view at once — measured as a
        230 ms frame when pulling back. So draw every mesh once here, then restore what was enabled. */
-    setLbl('Lämmitetään puskureita…');
+    setLbl('Lämmitetään puskureita…'); setBar(0.95);
     const wasOn = scene.meshes.map(m => m.isEnabled());
     for(const m of scene.meshes){ try { m.setEnabled(true); } catch(_){} }
     for(let i=0;i<2;i++){ try { scene.render(); } catch(_){} }
