@@ -2110,14 +2110,18 @@ void main(void){
   float c = texture2D(selMask, vUV).r, gmn=c, gmx=c, bA=0.0, bB=0.0;
   for(int i=0;i<16;i++){ float a = float(i) * 0.3926991; vec2 u = vec2(cos(a), sin(a)) * texel;
     float sg = texture2D(selMask, vUV + u*owidth).r; gmn=min(gmn,sg); gmx=max(gmx,sg);   // THICK band -> the ring
-    bA += texture2D(selMask, vUV + u*(owidth*2.0)).r;    // two blurred copies of the coverage, near and far
+  }
+  // The two blurred copies that make the glow need far fewer directions than the ring does - 8 apiece
+  // is indistinguishable and keeps this pass at the 32 taps it cost before the glow existed.
+  for(int i=0;i<8;i++){ float a = float(i) * 0.7853982; vec2 u = vec2(cos(a), sin(a)) * texel;
+    bA += texture2D(selMask, vUV + u*(owidth*2.0)).r;
     bB += texture2D(selMask, vUV + u*(owidth*4.5)).r;
   }
   float ring = smoothstep(0.15, 0.6, gmx - gmn);   // thick green ring straddling the coverage edge
   // Outward glow - the blurred coverage, kept OUTSIDE the shape so it reads as light spilling off the
   // ring instead of a wash over the protein. The narrow black band that used to sit on top is gone,
   // so green is now the only selection colour.
-  float halo = max(bA*0.0625*0.90, bB*0.0625*0.55) * (1.0 - c);
+  float halo = max(bA*0.125*0.90, bB*0.125*0.55) * (1.0 - c);
   float pulse = 0.72 + 0.28*sin(glowT*2.1);
   vec3 GC = vec3(0.16, 1.0, 0.34);
   vec3 col = scene + GC * halo * halo * 1.25 * pulse;
@@ -2686,7 +2690,11 @@ async function run(){
   // O darkening vignette — a radial screen overlay (clear centre → dark edges) that fades in with O.
   // Strength = edge darkness, reach = how far it bleeds inward. Its opacity is driven by the O ease.
   const fVig = document.createElement('div');
-  fVig.style.cssText = 'position:fixed;inset:0;z-index:9;pointer-events:none;opacity:0';
+  // will-change keeps it on its own compositor layer, so a change of opacity is compositor work rather
+  // than a repaint of a full-viewport radial gradient. display none at rest takes it out of the frame
+  // entirely - this is browser-side cost that never shows up in a scene.render timing.
+  fVig.style.cssText = 'position:fixed;inset:0;z-index:9;pointer-events:none;opacity:0;will-change:opacity;display:none';
+  let _vigShown = 0;
   document.body.appendChild(fVig);
   const updateFVig = () => { const inner = Math.max(0, 100 - gFVigReach);   // reach 0 → dark only at the very corners, reach 90 → nearly to the centre
     fVig.style.background = 'radial-gradient(ellipse at center, rgba(0,0,0,0) '+inner+'%, rgba(0,0,0,'+gFVigStr.toFixed(3)+') 100%)'; };
@@ -5057,9 +5065,9 @@ async function run(){
     mkFree('co2', 20000, 218347, [{tag:'C', r:cR, col:[0.24,0.25,0.28], d:0},
                                   {tag:'Oa', r:oR, col:[0.52,0.55,0.60], d: 1.16},
                                   {tag:'Ob', r:oR, col:[0.52,0.55,0.60], d:-1.16}]);
-    // O2 — mint, the gas photosynthesis puts out. O=O 1.21 Å, so ±0.605 from the centre.
-    mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.30,0.80,0.62], d: 0.605},
-                                {tag:'b', r:oR, col:[0.30,0.80,0.62], d:-0.605}]);
+    // O2 — oxygen's own red, the gas photosynthesis puts out. O=O 1.21 Å, so ±0.605 from the centre.
+    mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.94,0.15,0.15], d: 0.605},
+                                {tag:'b', r:oR, col:[0.94,0.15,0.15], d:-0.605}]);
 
     /* ── Water orbitals inside the crisp zone ───────────────────────────────────────────────────────
        Every water within gCrisp gets the same orbital treatment the proteins get: core shells, the two
@@ -8190,7 +8198,12 @@ void main(void){
     // two are tuned together and the stronger of the pair wins.
     const anySel = !!(selAtom || etcSel >= 0 || gSel.size || gSelMol.size);
     gSelVigAmt += ((anySel ? 1 : 0) - gSelVigAmt) * 0.09;
-    fVig.style.opacity = Math.max(gFocusDimAmt, gSelVigAmt).toFixed(3);   // darkening vignette: F, or a selection
+    // Written only when it actually moves. Assigning style.opacity every frame invalidates the layer
+    // even when the value is identical.
+    const vigWant = Math.max(gFocusDimAmt, gSelVigAmt);   // darkening vignette: O held, or a selection
+    if(Math.abs(vigWant - _vigShown) > 0.002){ _vigShown = vigWant;
+      fVig.style.opacity = vigWant.toFixed(3);
+      fVig.style.display = vigWant < 0.004 ? 'none' : 'block'; }
     if(gFocusDimAmt < 0.004){ gFocusDimAmt = 0; gFocusMode = 0; return; }
     gFocusSet.fill(0); gFocusGroup = -1;
     if(etcSel >= 0){ gFocusMode = 3; gFocusGroup = etcSel; }   // a cofactor → keep EXACTLY that cofactor's overlay atoms (by group), grey the rest
