@@ -5148,6 +5148,7 @@ async function run(){
     const bnc=(x,lo,hi)=>{ const sp=hi-lo; let t=(x-lo)%(2*sp); if(t<0) t+=2*sp; return lo+(t<sp?t:2*sp-t); };
     const wPick=new Int32Array(WCAP), wPickD=new Float32Array(WCAP), wPos=new Float32Array(WCAP*3);
     const _wp=[0,0,0];
+    let wPartial = typeof wCoreMesh.thinInstancePartialBufferUpdate === 'function';   // see the upload below
     scene.onBeforeRenderObservable.add(()=>{
       const cp=cam.position, R=gCrisp, R2=R*R;
       /* Use the clock the SHADER will see, not the current one. gWaveT is advanced by an observer that is
@@ -5225,11 +5226,23 @@ async function run(){
       }
       /* Upload ONLY the slice actually in use. These buffers are sized for the no-cap worst case — every
          one of the 20000 molecules at once — so thinInstanceBufferUpdated was pushing about 14 MB to the
-         GPU every frame to describe the few hundred molecules that are really in the zone. */
-      if(n){ wCoreMesh.thinInstancePartialBufferUpdate('matrix', wCoreM.subarray(0, n*wCoreN*16), 0);
-             wCoreMesh.thinInstancePartialBufferUpdate('ocen',   wCoreC.subarray(0, n*wCoreN*3),  0);
-             wBondMesh.thinInstancePartialBufferUpdate('matrix', wBondM.subarray(0, n*wBondN*16), 0);
-             wBondMesh.thinInstancePartialBufferUpdate('ocen',   wBondC.subarray(0, n*wBondN*3),  0); }
+         GPU every frame to describe the few hundred molecules that are really in the zone.
+         Guarded, and it falls back to the whole-buffer upload: babylon.js is pulled UNPINNED off the CDN,
+         so the API this depends on is not guaranteed to be there in whatever build a given browser has
+         cached — and a throw in here aborts scene.render() before anything is drawn, which blanks the
+         entire canvas rather than degrading. A slow frame is a far better failure than a black screen. */
+      if(n){
+        if(wPartial){
+          try {
+            wCoreMesh.thinInstancePartialBufferUpdate('matrix', wCoreM.subarray(0, n*wCoreN*16), 0);
+            wCoreMesh.thinInstancePartialBufferUpdate('ocen',   wCoreC.subarray(0, n*wCoreN*3),  0);
+            wBondMesh.thinInstancePartialBufferUpdate('matrix', wBondM.subarray(0, n*wBondN*16), 0);
+            wBondMesh.thinInstancePartialBufferUpdate('ocen',   wBondC.subarray(0, n*wBondN*3),  0);
+          } catch(err){ wPartial = false; console.warn('partial thin-instance upload unavailable, using the full one', err); }
+        }
+        if(!wPartial){ wCoreMesh.thinInstanceBufferUpdated('matrix'); wCoreMesh.thinInstanceBufferUpdated('ocen');
+                       wBondMesh.thinInstanceBufferUpdated('matrix'); wBondMesh.thinInstanceBufferUpdated('ocen'); }
+      }
       wCoreMesh.thinInstanceCount = n*wCoreN; wBondMesh.thinInstanceCount = n*wBondN;
       wCoreMesh.setEnabled(n>0); wBondMesh.setEnabled(n>0);
     });
@@ -7326,10 +7339,10 @@ async function run(){
     gear.innerHTML = '<span style="font-size:17px">⚙️</span>';
     gear.style.cssText = 'position:fixed;left:16px;top:12px;z-index:15;' + btnCss;
     const menu = document.createElement('div'); menu.id = 'settings-menu';
-    menu.style.cssText = 'position:fixed;left:16px;top:60px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';
+    menu.style.cssText = 'position:fixed;left:16px;top:112px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';   // clears the gear AND the fullscreen button below it
     document.body.appendChild(gear); document.body.appendChild(menu);
     for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn',
-                     'memcut-btn','memonly-btn','outline-btn']){
+                     'memcut-btn','memonly-btn','outline-btn','vr-btn']){   // vr-btn too — it stays hidden until a headset is found
       const b = document.getElementById(id); if(!b) continue;
       b.style.position = 'static'; b.style.left = 'auto'; b.style.top = 'auto'; menu.appendChild(b);   // static → they stack in the menu
     }
@@ -7340,7 +7353,8 @@ async function run(){
 
   // ── Fullscreen toggle (top-right) ──
   { const fs = document.createElement('button'); fs.id = 'fs-btn'; fs.title = 'Koko näyttö';
-    fs.style.cssText = 'position:fixed;top:12px;right:16px;z-index:15;font-family:"Courier New",monospace;font-size:18px;line-height:1;'
+    // Under the gear, not opposite it — every chrome button lives in one vertical stack at top-left.
+    fs.style.cssText = 'position:fixed;top:62px;left:16px;z-index:15;font-family:"Courier New",monospace;font-size:18px;line-height:1;'
       + 'color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;box-shadow:0 4px 0 var(--brown);padding:6px 12px;user-select:none';
     const D = document, root = D.documentElement;
     const isFs = () => D.fullscreenElement || D.webkitFullscreenElement;
