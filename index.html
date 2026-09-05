@@ -121,6 +121,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
   box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#shade-btn{position:absolute;left:16px;top:396px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#shade-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#shade-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#shade-icon{font-size:15px;line-height:1}
 #particles-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #particles-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #particles-icon{font-size:15px;line-height:1}
@@ -263,6 +271,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="memcut-btn" title="Piilota kameran puoleinen kalvon puolisko (näe proteiinien läpi)"><span id="memcut-icon">◧</span><span id="memcut-label">Puolikas</span></button>
 <button id="memonly-btn" title="Näytä vain kalvoon sitoutuneet proteiinit (piilota irralliset — keventää)"><span id="memonly-icon">🧫</span><span id="memonly-label">Vain kalvo</span></button>
 <button id="outline-btn" title="Piilota mustat ja vihreät ääriviivat"><span id="outline-icon">✒️</span><span id="outline-label">Reunat</span></button>
+<button id="shade-btn" title="Näytä valaistuksen referenssitaso (vaalea levy)"><span id="shade-icon">🔆</span><span id="shade-label">Valotaso</span></button>
 <button id="particles-btn" title="Piilota vapaana lentävät molekyylit — vesi, protonit, CO₂ ja O₂ (keventää)"><span id="particles-icon">💨</span><span id="particles-label">Hiukkaset</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
@@ -665,14 +674,10 @@ void main(void){
   // BOTH the shaken point and the centre — exactly the order the orb shader uses. Doing modelXform first
   // (as before) made the nuclei shake with the flattened Z while the orbitals shook with the original Z,
   // so they waved out of phase and drifted apart. Now the nuclei ride WITH their orbitals.
-  // Outside the crisp zone the thermal shake is dropped as well as the boil - three sins per vertex,
-  // times every far atom, for motion nobody can resolve at that size. Far geometry is simply static.
-  // (This is the other half of the visible boundary: far atoms no longer drift with the near ones.)
-#ifdef CHEAP
-  vec3 wc = base;
-#else
+  // The thermal shake stays ON outside the crisp zone too - the far tier has to drift and sway exactly
+  // like the near tier, or the boundary shows up as a line between moving and frozen geometry. Only the
+  // BOIL hash (three fract/sin per vertex) is dropped out there.
   vec3 wc = shake(base);
-#endif
 #ifndef CHEAP
   if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
     float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
@@ -811,14 +816,25 @@ void main(void){
 #ifdef MEMFADE
   if(memCut.z * step(0.0,(vMemAnc - memCut.x)*memCut.y) > 0.5) discard;   // honour the membrane cross-cut
 #endif
-  // Deliberately crude. This used to reconstruct the real sphere normal, run the same half-lambert as
-  // the crisp path, ink a rim and apply the depth darkening - all so the two tiers matched seamlessly.
-  // They matched, but the far tier is the majority of the atoms on screen and none of that is legible on
-  // something a couple of pixels wide. So: one cheap linear ramp off vUV.y for a hint of roundness, and
-  // nothing else. No sqrt, no dot, no smoothstep, no rim, no depth ramp.
-  // The trade is real and visible: the crisp/cheap boundary comes BACK as a patch of slightly flatter,
-  // lighter atoms at the edge of the zone. That is the point of the exchange, not a regression.
-  vec3 colF = vColor * (0.74 + 0.26 * (0.5 - vUV.y));
+  /* Shade with the REAL sphere normal, the same half-lambert the crisp path uses, the same rim, and the
+     same depth darkening. A cheap linear ramp instead of this was tried and the boundary was glaring —
+     a hard diagonal seam between bright near atoms and dark far ones, because the crisp path applies
+     DEPTHSHADE (up to 0.55x) and the flat path did not, so the two tiers were not even the same
+     brightness. One sqrt and one dot per fragment is what buys a seamless join.
+     The real far-tier win was never the shading: it is that this path is OPAQUE with a plain depth
+     write, no gl_FragDepthEXT and no alpha blending, so the GPU can early-Z reject a far atom hidden
+     behind nearer geometry and never shade it at all. That is kept, and it does not affect appearance. */
+  float zcF = sqrt(max(0.0, 1.0 - r2));
+  vec3 nF = vec3(vUV, -zcF);
+  float ndlF = dot(nF, L) * 0.5 + 0.5;
+  vec3 colF = vColor * (0.66 + 0.34 * ndlF);
+  colF *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);
+  float rimF = smoothstep(0.86, 1.0, r2);
+  colF = mix(colF, vColor * 0.40, rimF);
+#ifdef DEPTHSHADE
+  float dtF = clamp((vWCen.z - focalD - startOff) / max(spread, 1.0), 0.0, 1.0);
+  colF *= mix(1.0, depthLo, dtF * depthK);
+#endif
 #ifdef MODELMOVE
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5) colF = mix(colF, selCol, 0.35);   // keep selection readable
 #endif
@@ -3472,6 +3488,14 @@ async function run(){
      the 20000 CO2 and the 5000 O2 — registers itself here so the Hiukkaset button can drop the lot in
      one go. gFreeOn also short-circuits the per-frame water-orbital rebuild, so switching them off
      buys back the CPU as well as the draw calls, not just the pixels. */
+  /* The pale sheet across the scene is the shading REFERENCE plane — the depth darkening is measured
+     from it, so it is useful when tuning the start/spread sliders and pure clutter the rest of the
+     time. It used to appear automatically with dev mode. Now dev mode is clean and this shows it. */
+  let gShadeOn = false;
+  { const sb = document.getElementById('shade-btn');
+    if(sb) sb.addEventListener('click', () => { gShadeOn = !gShadeOn;
+        sb.classList.toggle('on', gShadeOn);
+        if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev && gShadeOn); }); }
   const gFreeMeshes = [];
   let gFreeOn = true;   // NB: not gParticles — that name is already the game's spawned-effect list
   { const pb = document.getElementById('particles-btn');
@@ -6259,7 +6283,7 @@ async function run(){
     gDevTopSet = false;   // re-measure the readout next frame (its height can differ between sessions)
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
-    if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
+    if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev && gShadeOn);   // shading-reference plane — dev AND its own toggle
     { const rf = scene.getMeshByName('rtsFloor'); if(rf) rf.setEnabled(gDev); }   // light-green floor sheet → dev-only
     if(gCollViz) gCollViz.setEnabled(COLL_VIZ && (gDev || gCollVizHold));   // wireframe collision spheres (also on while V is held)
     { const mm = document.getElementById('rts-minimap'); if(mm) mm.style.display = gDev ? '' : 'none';
@@ -7381,7 +7405,7 @@ async function run(){
     menu.style.cssText = 'position:fixed;left:16px;top:112px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';   // clears the gear AND the fullscreen button below it
     document.body.appendChild(gear); document.body.appendChild(menu);
     for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn',
-                     'memcut-btn','memonly-btn','outline-btn','particles-btn','vr-btn']){   // vr-btn too — it stays hidden until a headset is found
+                     'memcut-btn','memonly-btn','outline-btn','particles-btn','shade-btn','vr-btn']){   // vr-btn too — it stays hidden until a headset is found
       const b = document.getElementById(id); if(!b) continue;
       b.style.position = 'static'; b.style.left = 'auto'; b.style.top = 'auto'; menu.appendChild(b);   // static → they stack in the menu
     }
