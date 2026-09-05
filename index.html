@@ -7529,6 +7529,18 @@ async function run(){
     gRevealOn = gEtc && etcGroups.length ? 1 : 0;
     const _eng = scene.getEngine();
     gCofTexel.set(1/_eng.getRenderWidth(), 1/_eng.getRenderHeight());   // align depth-buffer sampling (also survives resize)
+    /* Keep the offscreen masks in step with the main framebuffer. They are sized from getRenderWidth at
+       CREATION and never resized, so the moment the adaptive backoff dropped the resolution to save the
+       GPU, they carried on at their original size — measured 1311×1371 apiece against a 546×571 frame.
+       That is 1.80 Mpx each versus 0.31, so ~92% of the render-target cost was in the two buffers the
+       backoff could not touch, which is exactly why lowering the resolution changed nothing. */
+    { const rw = _eng.getRenderWidth(), rh = _eng.getRenderHeight();
+      if(rw !== _rtW || rh !== _rtH){ _rtW = rw; _rtH = rh;
+        const fit = (rt, f) => { if(!rt) return;
+          const w = Math.max(2, Math.ceil(rw*f)), h = Math.max(2, Math.ceil(rh*f)), sz = rt.getSize();
+          if(sz.width !== w || sz.height !== h) rt.resize({width:w, height:h}); };
+        fit(cofDepthRT, 0.34); fit(cofMaskRT, 1); fit(gSelMaskRT, 1);
+      } }
     if(gCofDisc) gCofDisc.setEnabled(gRevealOn > 0.5);                  // only run the depth pass while active
     /* Skip an off-screen pass ENTIRELY when nothing needs it. Leaving a render target in
        customRenderTargets still binds and clears a full-resolution buffer every frame even when its
@@ -7611,6 +7623,7 @@ async function run(){
     eff.setFloat('cofW', gOutlines ? Math.max(0.6, Math.min(6.0, cofw)) : 0.0);   // width 0 → the edge detector samples one texel → no line
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
+  let _rtW = 0, _rtH = 0;   // last framebuffer size the offscreen masks were fitted to
   let _ppOn = true;   // are the two outline passes currently attached to the camera?
   // RTS selection → a thick GREEN outline traced around the selected complexes (from the selMask coverage).
   const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn'], ['selMask'], 1.0, cam);
