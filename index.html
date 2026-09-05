@@ -4831,6 +4831,7 @@ async function run(){
   applyGfxMode();   // orbitals are ON by default → push the reveal params (needs REVEAL_DIST) + button label now that it exists
   const zoomEl = document.getElementById('zoomval');
   const camcoordsEl = document.getElementById('camcoords');   // dev-only camera pos/rotation readout
+  let gInstr = null;   // SceneInstrumentation, built on first use — it has a per-frame cost, so dev only
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
     // Safety reset of shared GL state before ANY group renders. The selection stencil-mask mesh
@@ -4857,8 +4858,25 @@ async function run(){
     // Dev: live camera position + rotation readout (top-right). Rotation is alpha/beta (RTS orbit angles, which
     // free mode also keeps current via setTarget); radius + mode shown too.
     if(camcoordsEl){ if(gDev){ const p=cam.position, DEG=180/Math.PI;
+        if(!gInstr){ gInstr = new BABYLON.SceneInstrumentation(scene);
+          gInstr.captureFrameTime = true; gInstr.captureActiveMeshesEvaluationTime = true; gInstr.captureRenderTime = true; }
         camcoordsEl.style.display='block';
-        camcoordsEl.innerHTML = Math.round(scene.getEngine().getFps())+' fps'
+        /* Per-frame profile, so a screenshot of this readout says WHERE a slow frame goes instead of
+           only that it is slow. cpu is the whole frame on the main thread, of which arv is Babylon
+           walking every mesh to decide what is visible and pii is the draw submission -- if cpu is far
+           above arv+pii the time is in our own per-frame observers, and if the frame is slow while
+           px is small it is not fill rate at all. */
+        // The counters read garbage until they have a full second behind them, so anything non-finite
+        // shows as a dash rather than as "113419.2 ms", which would send us chasing a number that
+        // means nothing.
+        const eng2 = scene.getEngine(), rw = eng2.getRenderWidth(), rh = eng2.getRenderHeight();
+        const ms = c => { const v = c.lastSecAverage; return (isFinite(v) && v >= 0) ? v.toFixed(1) : '–'; };
+        camcoordsEl.innerHTML = Math.round(eng2.getFps())+' fps'
+          + (gInstr ? '<br>cpu '+ms(gInstr.frameTimeCounter)+' ms'
+                    + '  arv '+ms(gInstr.activeMeshesEvaluationTimeCounter)
+                    + '  pii '+ms(gInstr.renderTimeCounter)
+                    + '<br>'+Math.round(gInstr.drawCallsCounter.lastSecAverage||0)+' piirtoa  '   // .current is 0 here — the counter resets before this observer runs+scene.getActiveMeshes().length+'/'+scene.meshes.length+' meshiä'
+                    + '<br>'+rw+'×'+rh+'  ('+((rw*rh)/1e6).toFixed(2)+' Mpx)  hsl '+eng2.getHardwareScalingLevel().toFixed(2) : '')
           +'<br>sij. '+p.x.toFixed(0)+', '+p.y.toFixed(0)+', '+p.z.toFixed(0)
           +'<br>α '+(cam.alpha*DEG).toFixed(1)+'°  β '+(cam.beta*DEG).toFixed(1)+'°'
           +'<br>et. '+Math.abs(cam.radius).toFixed(0); }
