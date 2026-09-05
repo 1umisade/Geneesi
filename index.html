@@ -17,10 +17,7 @@ body.dark-mode{
   --paper:#3a2c1c; --paper2:#2d2113; --brown:#7c5c39; --ink:#f0e2c4;
   --sage:#88a35f; --sage2:#a6bd7d; --sageink:#f1f5e2;
 }
-/* fixed, not absolute: absolute resolves inset:0 against the DOCUMENT, and while the canvas is still
-   being sized the document is larger than the window — so the overlay centred itself in that bigger
-   box and the loading screen drifted to the bottom-right of the visible page. */
-#overlay{position:fixed;inset:0;z-index:20;display:flex;
+#overlay{position:absolute;inset:0;z-index:20;display:flex;
   align-items:center;justify-content:center;background:#f2e6c9;transition:opacity .8s}
 #overlay.gone{opacity:0;pointer-events:none}
 .ptr{width:280px;height:10px;background:#e7d4ac;border:2.5px solid #4a3320;border-radius:99px;overflow:hidden}
@@ -50,9 +47,8 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 .mlbl.dev{font-size:10px;padding:1px 6px;opacity:.9;box-shadow:0 2px 0 var(--brown)}   /* dev per-model tags: a touch lighter */
 #zoomval{position:absolute;top:14px;right:16px;z-index:10;color:var(--brown);
   font-family:'Courier New',monospace;font-size:15px;font-weight:bold;pointer-events:none}
-#camcoords{position:absolute;top:14px;right:70px;z-index:23;color:var(--brown);text-align:right;line-height:1.5;
-  max-width:min(300px,60vw);white-space:normal;overflow-wrap:anywhere;
-  font-family:'Courier New',monospace;font-size:11.5px;font-weight:bold;pointer-events:none;display:none;
+#camcoords{position:absolute;top:14px;right:16px;z-index:10;color:var(--brown);text-align:right;line-height:1.45;
+  font-family:'Courier New',monospace;font-size:12px;font-weight:bold;pointer-events:none;display:none;
   background:rgba(244,236,216,.72);border:1.5px solid var(--brown);border-radius:7px;padding:3px 8px}
 #zoomtips{position:absolute;right:18px;bottom:18px;z-index:10;
   display:flex;flex-direction:column;align-items:center;gap:8px;
@@ -116,14 +112,6 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
   box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
-#particles-btn{position:absolute;left:16px;top:348px;z-index:12;touch-action:manipulation;
-  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
-  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
-  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
-  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
-#particles-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
-#particles-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
-#particles-icon{font-size:15px;line-height:1}
 #membrane-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #membrane-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #membrane-icon{font-size:15px;line-height:1}
@@ -263,10 +251,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="memcut-btn" title="Piilota kameran puoleinen kalvon puolisko (näe proteiinien läpi)"><span id="memcut-icon">◧</span><span id="memcut-label">Puolikas</span></button>
 <button id="memonly-btn" title="Näytä vain kalvoon sitoutuneet proteiinit (piilota irralliset — keventää)"><span id="memonly-icon">🧫</span><span id="memonly-label">Vain kalvo</span></button>
 <button id="outline-btn" title="Piilota mustat ja vihreät ääriviivat"><span id="outline-icon">✒️</span><span id="outline-label">Reunat</span></button>
-<button id="particles-btn" title="Piilota vapaana lentävät molekyylit — vesi, protonit, CO₂ ja O₂ (keventää)"><span id="particles-icon">💨</span><span id="particles-label">Hiukkaset</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="camcoords"></div>
+<div id="zoomtips">
+  <button class="zt" id="zoom-in" aria-label="Lähennä">+</button>
+  <button class="zt" id="zoom-out" aria-label="Loitonna">−</button>
+  <span class="ztlabel">suurenna</span>
+</div>
 <div id="speedbox" style="position:fixed; left:50%; top:12px; transform:translateX(-50%); text-align:center; z-index:10; font:11px ui-monospace,monospace; color:#6a6a5a; user-select:none;">
   <div style="margin-bottom:4px; letter-spacing:.5px;">nopeus <span id="speedval">1.0×</span></div>
   <input id="speed" type="range" min="0" max="30" value="10" style="width:130px; cursor:pointer;">
@@ -324,51 +316,9 @@ function codeOf(sybyl){
   return c;
 }
 
-/* Black-screen diagnostic. A throw during setup, a rejected promise, or a shader that fails to compile
-   are all INVISIBLE when they happen — the canvas simply stays empty and the chrome still draws, which
-   looks exactly like a black screen with nothing wrong. Put them on the page instead. */
-(function(){
-  const show = msg => { let b = document.getElementById('errbar');
-    if(!b){ b = document.createElement('div'); b.id = 'errbar';
-      b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#7a1d1d;color:#fff;'
-        + 'font:12px/1.45 ui-monospace,monospace;padding:8px 12px;white-space:pre-wrap;max-height:45vh;overflow:auto';
-      (document.body || document.documentElement).appendChild(b); }
-    if(b.textContent.length < 4000) b.textContent += (b.textContent ? String.fromCharCode(10) : '') + msg; };
-  addEventListener('error', e => show('VIRHE: ' + e.message + '   (' + String(e.filename||'').split('/').pop() + ':' + e.lineno + ')'));
-  addEventListener('unhandledrejection', e => show('VIRHE (promise): ' + ((e.reason && e.reason.message) || e.reason)));
-  const ce = console.error;
-  console.error = function(){ const t = Array.from(arguments).map(String).join(' ');
-    if(/error|fail|compil|link|shader|WebGL/i.test(t)) show('KONSOLI: ' + t.slice(0, 600));
-    return ce.apply(console, arguments); };
-  window.__showErr = show;
-})();
-
-/* The first 5 seconds belong to Mona - the real build messages are held back until then and the one
-   that was current when the hush lifts is what appears. */
-let gLoadMsg = '', gLoadHush = true;
-const paintLbl = () => { const e = document.getElementById('load-lbl'); if(e) e.textContent = gLoadHush ? 'Hys! Mona nukkuu.' : gLoadMsg; };
-const setLbl = t => { gLoadMsg = t; paintLbl(); };
-setTimeout(() => { gLoadHush = false; paintLbl(); }, 5000);
-paintLbl();
-/* The bar NEVER stalls. Each progress mark restarts a slow linear GLIDE from wherever the bar has got
-   to, aimed most of the way to full but never at it — and because that glide is a CSS transition the
-   compositor owns, it keeps moving even while a build step has the main thread locked solid, which no
-   JS timer or rAF loop can do. Only the final mark actually fills it.
-   (Call sites pass either a fraction or a percent — both are accepted.) */
-let gBarMark = 0, gBarDone = false;
-const barNow = e => { try { return new DOMMatrixReadOnly(getComputedStyle(e).transform).a; } catch(_){ return gBarMark; } };
-const setBar = v => {
-  const f = Math.max(0, Math.min(1, v > 1 ? v/100 : v));
-  const e = document.getElementById('load-bar'); if(!e || gBarDone) return;
-  if(f >= 1){ gBarDone = true; e.style.transition = 'transform .4s ease-out'; e.style.transform = 'scaleX(1)'; return; }
-  gBarMark = Math.max(f, barNow(e));           // never step BACKWARD past where the glide already reached
-  e.style.transition = 'none';                  // pin it there…
-  e.style.transform = 'scaleX(' + gBarMark.toFixed(4) + ')';
-  void e.offsetWidth;                           // …commit that before starting the next glide
-  e.style.transition = 'transform 45s linear';
-  e.style.transform = 'scaleX(' + (gBarMark + (0.96 - gBarMark)*0.7).toFixed(4) + ')';
-};
-setBar(0);   // start gliding the moment the page opens
+const setLbl = t => { const e = document.getElementById('load-lbl'); if(e) e.textContent = t; };
+const setBar = v => { const e = document.getElementById('load-bar');
+  if(e) e.style.transform = 'scaleX(' + Math.max(0, Math.min(1, v/100)) + ')'; };
 const yield_ = () => new Promise(r => setTimeout(r, 0));
 
 /* ── Goodsell-style muted palette, coloured by molecular component ─────── */
@@ -408,19 +358,6 @@ const ETC_TYRZ = 9;                                             // assigned geom
 const LIPID_RES = { LMG:1, DGD:2, SQD:3, LHG:4 };
 // Every cofactor type is one of five bright hues: RED, GREEN, CORAL, BLUE, PINK.
 const _RED=[1.00,0.16,0.16], _GRN=[0.16,0.90,0.36], _COR=[1.00,0.50,0.34], _BLU=[0.28,0.56,1.00], _PNK=[1.00,0.42,0.80];
-/* One stable colour per MOLECULE (residue instance). Hashing the id spreads neighbouring residues to
-   far-apart hues, so two chlorophylls sitting side by side never come out the same shade, while every
-   atom of one molecule shares exactly one colour - which is what makes the grouping readable. */
-function molCol(id){
-  let h = (id ^ (id >>> 16)) >>> 0;
-  h = (Math.imul(h, 2246822519) ^ (h >>> 13)) >>> 0;
-  h = (Math.imul(h, 3266489917) ^ (h >>> 16)) >>> 0;
-  const hue = (h >>> 8) / 16777216, sat = 0.55, lig = 0.62;
-  const c = (1 - Math.abs(2*lig - 1)) * sat, x = c * (1 - Math.abs(((hue*6) % 2) - 1)), m = lig - c/2;
-  const seg = Math.floor(hue*6) % 6;
-  const rgb = [[c,x,0],[x,c,0],[0,c,x],[0,x,c],[x,0,c],[c,0,x]][seg];
-  return [rgb[0]+m, rgb[1]+m, rgb[2]+m];
-}
 const ETC_COL = [ [0,0,0],   // 0 unused
   _COR,   // 1 OEC (Mn₄CaO₅)        — coral
   _PNK,   // 2 pheophytin           — pink
@@ -626,21 +563,6 @@ attribute float groupId;   // per-cofactor-atom group index → the fragment bri
 varying float vGid;
 #endif
 vec3 shake(vec3 p){ return p + 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
-#ifdef WATERBOX
-// Free water: the molecule flies at a constant velocity and reflects off the container walls. Folding
-// (start + v*t) into a TRIANGLE WAVE gives exactly that, analytically, with no state - so 20000 molecules
-// animate entirely on the GPU instead of costing a per-frame integration and a multi-megabyte re-upload.
-// The three atoms of one molecule share wOrig/wVel and add their own local offset, so it stays rigid.
-attribute vec3 wOrig;
-attribute vec3 wVel;
-uniform vec3 boxLo;
-uniform vec3 boxHi;
-float bnc(float x, float lo, float hi){
-  float s = hi - lo;
-  float t = mod(x - lo, 2.0*s);
-  return lo + (t < s ? t : 2.0*s - t);
-}
-#endif
 #ifdef MEMFADE
 // Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
 // of one upright lipid shares it and the lipid stays rigid, while lipids a tile apart are out of
@@ -651,13 +573,6 @@ vec3 memSway(vec3 b){ float ph = b.x*0.28 + b.z*0.24;
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec3 base = W[3].xyz;
-#ifdef WATERBOX
-  // The molecule centre flies and bounces, then this atom's rigid offset is added on top - so the whole
-  // molecule is displaced as one body rather than being torn apart.
-  base = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
-              bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
-              bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z)) + W[3].xyz;
-#endif
 #ifdef LIPTILE
   base += tileOff;
 #endif
@@ -665,15 +580,10 @@ void main(void){
   // BOTH the shaken point and the centre — exactly the order the orb shader uses. Doing modelXform first
   // (as before) made the nuclei shake with the flattened Z while the orbitals shook with the original Z,
   // so they waved out of phase and drifted apart. Now the nuclei ride WITH their orbitals.
-  // Outside the crisp zone the thermal shake is dropped as well as the boil - three sins per vertex,
-  // times every far atom, for motion nobody can resolve at that size. Far geometry is simply static.
-  // (This is the other half of the visible boundary: far atoms no longer drift with the near ones.)
 #ifdef CHEAP
-  vec3 wc = base;
+  vec3 wc = base;   // outside the crisp zone nothing animates - no thermal shake, no boil hash, nothing
 #else
   vec3 wc = shake(base);
-#endif
-#ifndef CHEAP
   if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
     float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
     float hy = fract(sin(dot(base, vec3(93.989, 47.271, 23.157)) + bt*2.3) * 19349.663) - 0.5;
@@ -682,7 +592,9 @@ void main(void){
   }
 #endif
 #ifdef MEMFADE
-  wc += memSway(base);   // membrane fluid sway - kept in BOTH tiers so the sheet moves as one
+#ifndef CHEAP
+  wc += memSway(base);   // membrane fluid sway - skipped outside the crisp zone (sub-pixel there anyway)
+#endif
 #ifdef LIPTILE
   vMemAnc = tileOff.z;   // pooled nucleons: the tile origin IS the lipid anchor (one tile per mesh)
 #else
@@ -714,10 +626,7 @@ void main(void){
 #endif
 #ifdef MODELMOVE
 #ifndef NUCLEON
-  // colour-by-model tints atoms - but NEVER the nuclei (protons red / neutrons grey always), and never
-  // an instance that carries its own identity colour (alpha 1), which is how each distinct molecule
-  // keeps its own hue instead of being flattened into its host protein's pastel.
-  if(colorMode > 0.5 && instanceColor.a < 0.5) vColor = modelCol[int(modelId + 0.5)];
+  if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];   // colour-by-model tints atoms — but NEVER the nuclei (protons red / neutrons grey always)
 #endif
   vMid = modelId;
 #endif
@@ -780,7 +689,7 @@ uniform float hlBright;    // its brightness multiplier (1.0 = normal, 1.25 = ho
 #endif
 uniform float selModel;    // index of the SELECTED complex (−1 = none) → its atoms get a sage rim
 uniform vec3 selCol;       // that rim's colour (sage)
-uniform float focusAmt;    // O: 0 = off, 1 = full grayscale of everything OUTSIDE the selection
+uniform float focusAmt;    // F: 0 = off, 1 = full grayscale of everything OUTSIDE the selection
 uniform float focusMode;   // 0 = grayscale all, 1 = keep colour near focusCenterV, 2 = keep colour where focusSet[model]=1
 uniform vec3 focusCenterV; // point-selection centre (view space)
 uniform float focusR;      // point-selection radius
@@ -811,14 +720,7 @@ void main(void){
 #ifdef MEMFADE
   if(memCut.z * step(0.0,(vMemAnc - memCut.x)*memCut.y) > 0.5) discard;   // honour the membrane cross-cut
 #endif
-  // Deliberately crude. This used to reconstruct the real sphere normal, run the same half-lambert as
-  // the crisp path, ink a rim and apply the depth darkening - all so the two tiers matched seamlessly.
-  // They matched, but the far tier is the majority of the atoms on screen and none of that is legible on
-  // something a couple of pixels wide. So: one cheap linear ramp off vUV.y for a hint of roundness, and
-  // nothing else. No sqrt, no dot, no smoothstep, no rim, no depth ramp.
-  // The trade is real and visible: the crisp/cheap boundary comes BACK as a patch of slightly flatter,
-  // lighter atoms at the edge of the zone. That is the point of the exchange, not a regression.
-  vec3 colF = vColor * (0.74 + 0.26 * (0.5 - vUV.y));
+  vec3 colF = vColor * (0.72 - 0.22 * vUV.y);
 #ifdef MODELMOVE
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5) colF = mix(colF, selCol, 0.35);   // keep selection readable
 #endif
@@ -880,7 +782,7 @@ void main(void){
   float ndl = dot(n, L) * 0.5 + 0.5;        // soft half-lambert (matte)
   vec3 col = vColor * (0.66 + 0.34 * ndl);
   col *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);              // subtle self-shade
-  if(focusAmt > 0.001){   // O: grayscale this fragment unless it is part of the selection → the coloured region is the EXACT silhouette
+  if(focusAmt > 0.001){   // F: grayscale this fragment unless it is part of the selection → the coloured region is the EXACT silhouette
     bool fsel;
     if(focusMode > 2.5){   // mode 3 = a cofactor GROUP: only the overlay atoms tagged with that group keep colour
 #ifdef ETCHL
@@ -1223,7 +1125,7 @@ varying vec3 vBcol;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 uniform float selModel;   // index of the SELECTED complex (-1 = none)
 uniform vec3 selCol;      // sage rim colour
-uniform float focusAmt;   // O: grayscale everything OUTSIDE the selection (its exact silhouette stays colour)
+uniform float focusAmt;   // F: grayscale everything OUTSIDE the selection (its exact silhouette stays colour)
 uniform float focusMode;  // 0 = grayscale all, 1 = keep near focusCenterV, 2 = keep where focusSet[model]=1
 uniform vec3 focusCenterV;
 uniform float focusR;
@@ -1308,7 +1210,7 @@ void main(void){
 #else
   if(drawElec > 0.5) electrons(c, nElec, efac);
 #endif
-  if(focusAmt > 0.001){   // O: grayscale unless this lobe belongs to the selection → exact silhouette
+  if(focusAmt > 0.001){   // F: grayscale unless this lobe belongs to the selection → exact silhouette
     bool fsel = (focusMode > 1.5) ? (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5)
               : (focusMode > 0.5) ? (distance(vViewPos, focusCenterV) < focusR) : false;
     if(!fsel){ float fg = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(fg) * (1.0 - focusDark), focusAmt); } }
@@ -1480,7 +1382,7 @@ varying float vMemAnc;
 const vec3 L = normalize(vec3(0.82, 0.42, -0.38));
 uniform float selModel;   // index of the SELECTED complex (-1 = none)
 uniform vec3 selCol;      // sage rim colour
-uniform float focusAmt;   // O: grayscale everything OUTSIDE the selection (its exact silhouette stays colour)
+uniform float focusAmt;   // F: grayscale everything OUTSIDE the selection (its exact silhouette stays colour)
 uniform float focusMode;  // 0 = grayscale all, 1 = keep near focusCenterV, 2 = keep where focusSet[model]=1
 uniform vec3 focusCenterV;
 uniform float focusR;
@@ -1572,7 +1474,7 @@ void main(void){
 #else
   if(drawElec > 0.5) electrons(c, ne, efac);
 #endif
-  if(focusAmt > 0.001){   // O: grayscale unless this lobe belongs to the selection → exact silhouette
+  if(focusAmt > 0.001){   // F: grayscale unless this lobe belongs to the selection → exact silhouette
     bool fsel = (focusMode > 1.5) ? (vMid >= 0.0 && focusSet[int(vMid + 0.5)] > 0.5)
               : (focusMode > 0.5) ? (distance(vViewPos, focusCenterV) < focusR) : false;
     if(!fsel){ float fg = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(fg) * (1.0 - focusDark), focusAmt); } }
@@ -1823,17 +1725,12 @@ attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float uT;          // thermal-shake time (matches the orbital shake so the outline follows)
-uniform vec3 selDelta;     // how far fillOutline already shifted these lobes off their BAKED spot
 varying vec3 vVP;
 varying vec3 vN;
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  // Sample the shake at the lobe's PRE-transform centre - the exact point the orb shader samples. These
-  // lobes were already moved to where the atom renders (fillOutline adds the model shift), so sampling
-  // at their moved centre put the outline on a different phase from the very orbitals it traces and the
-  // two wobbled apart. Subtracting the same shift back out puts both on one phase.
-  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz - selDelta);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
 #ifdef MEMFADE
   vMemW = wp.xyz;
 #endif
@@ -1853,7 +1750,6 @@ uniform float rimLo;  // rim band start (higher = thinner)
 uniform float rimHi;  // rim band end
 uniform float rimW;   // stroke width in fwidth units (hover = thin, selection = thick)
 uniform float solidDepth;   // 1 = keep the (invisible) interior so the WHOLE front hemisphere writes depth → clean molecule silhouette
-uniform float glowAmt;      // 0 = a plain stroke. Above 0, a soft wide halo bleeds off it - the selection glow
 varying vec3 vVP;
 varying vec3 vN;
 void main(void){
@@ -1861,10 +1757,6 @@ void main(void){
   float f = 1.0 - max(dot(N, V), 0.0);             // 0 face-on … 1 at the silhouette (front faces only)
   float w = fwidth(f);                             // screen-space gradient → normalise the band to a constant pixel width
   float a = 1.0 - smoothstep(0.0, w*rimW, abs(f - rimLo));   // even stroke along the f=rimLo contour
-  if(glowAmt > 0.001){                             // same contour, ~4x wider and squared -> a soft falloff either side
-    float h = 1.0 - smoothstep(0.0, w*rimW*3.6, abs(f - rimLo));
-    a = max(a, h*h*glowAmt);
-  }
   if(solidDepth < 0.5 && a < 0.04) discard;        // atoms: rim-only. Molecules: keep the interior (alpha≈0) so it writes depth and hides rims behind it.
   gl_FragColor = vec4(oc, a);
 }`;
@@ -1883,11 +1775,10 @@ attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float uT;
-uniform vec3 selDelta;   // see the hlo shader - keeps the mask on the outline's phase
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz - selDelta);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
   gl_Position = projection * view * wp;
 }`;
 BABYLON.Effect.ShadersStore['maskFragmentShader'] = `
@@ -2101,30 +1992,19 @@ uniform sampler2D selMask;
 uniform vec2 texel;
 uniform float owidth;
 uniform float selOn;
-uniform float glowT;   // seconds, for the slow breathing pulse of the glow
 void main(void){
   vec3 scene = texture2D(textureSampler, vUV).rgb;
   if(selOn < 0.5){ gl_FragColor = vec4(scene, 1.0); return; }
-  float c = texture2D(selMask, vUV).r, gmn=c, gmx=c, bA=0.0, bB=0.0;
+  float c = texture2D(selMask, vUV).r, gmn=c, gmx=c, bmn=c, bmx=c;
   for(int i=0;i<16;i++){ float a = float(i) * 0.3926991; vec2 u = vec2(cos(a), sin(a)) * texel;
-    float sg = texture2D(selMask, vUV + u*owidth).r; gmn=min(gmn,sg); gmx=max(gmx,sg);   // THICK band -> the ring
+    float sg = texture2D(selMask, vUV + u*owidth).r;         gmn=min(gmn,sg); gmx=max(gmx,sg);   // THICK band → green
+    float sb = texture2D(selMask, vUV + u*(owidth*0.34)).r;  bmn=min(bmn,sb); bmx=max(bmx,sb);   // NARROW band → black
   }
-  // The two blurred copies that make the glow need far fewer directions than the ring does - 8 apiece
-  // is indistinguishable and keeps this pass at the 32 taps it cost before the glow existed.
-  for(int i=0;i<8;i++){ float a = float(i) * 0.7853982; vec2 u = vec2(cos(a), sin(a)) * texel;
-    bA += texture2D(selMask, vUV + u*(owidth*2.0)).r;
-    bB += texture2D(selMask, vUV + u*(owidth*4.5)).r;
-  }
-  float ring = smoothstep(0.15, 0.6, gmx - gmn);   // thick green ring straddling the coverage edge
-  // Outward glow - the blurred coverage, kept OUTSIDE the shape so it reads as light spilling off the
-  // ring instead of a wash over the protein. The narrow black band that used to sit on top is gone,
-  // so green is now the only selection colour.
-  float halo = max(bA*0.125*0.90, bB*0.125*0.55) * (1.0 - c);
-  float pulse = 0.72 + 0.28*sin(glowT*2.1);
-  vec3 GC = vec3(0.16, 1.0, 0.34);
-  vec3 col = scene + GC * halo * halo * 1.25 * pulse;
-  col = mix(col, GC, ring);
-  gl_FragColor = vec4(min(col, vec3(1.0)), 1.0);
+  float green = smoothstep(0.15, 0.6, gmx - gmn);   // thick green ring straddling the coverage edge
+  float black = smoothstep(0.15, 0.6, bmx - bmn);   // narrow black ring - same mask, so equally smooth
+  vec3 col = mix(scene, vec3(0.16, 1.0, 0.34), green);   // green first (thicker, underneath)
+  col = mix(col, vec3(0.03), black);                     // black ON TOP (narrower)
+  gl_FragColor = vec4(col, 1.0);
 }`;
 
 /* ── Static dark-green background ──────────────────────────────────────────
@@ -2137,7 +2017,7 @@ void main(void){ gl_Position = vec4(position.xy, 0.99995, 1.0); }`;
 BABYLON.Effect.ShadersStore['bgFragmentShader'] = `
 precision highp float;
 uniform vec3 cBg;   // flat background colour
-uniform float focusAmt;   // O: fade the background to grayscale too
+uniform float focusAmt;   // F: fade the background to grayscale too
 uniform float focusDark;  // …and darken it with the environment
 void main(void){ vec3 c = cBg;
   if(focusAmt > 0.001){ float g = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(g) * (1.0 - focusDark), focusAmt); }
@@ -2151,18 +2031,9 @@ varying vec2 vUV;
 uniform sampler2D textureSampler;
 uniform float bright;
 uniform float contrast;
-uniform float sat;      // 0 = greyscale, 1 = untouched, >1 = punchier
-uniform float hi;       // -1..1 on the bright end only
-uniform float sh;       // -1..1 on the dark end only
 void main(void){ vec4 t = texture2D(textureSampler, vUV);
   vec3 c = (t.rgb - 0.5) * contrast + 0.5;   // contrast around mid-grey — raised as it dims so it does not wash out
   c *= bright;                                // then the overall level
-  float luma = dot(c, vec3(0.299, 0.587, 0.114));
-  c = mix(vec3(luma), c, sat);                // saturation, pivoting on luminance so brightness is unchanged
-  // Highlights and shadows are weighted by luminance, so each end moves on its own and the midtones
-  // stay put. Both are gains rather than offsets, which keeps neutral at exactly 0.
-  c *= 1.0 + hi * smoothstep(0.5, 1.0, luma);
-  c *= 1.0 + sh * (1.0 - smoothstep(0.0, 0.5, luma));
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), t.a); }`;
 
 let engine = null;
@@ -2201,10 +2072,11 @@ async function run(){
   const FILES = ['PSII.mol2','photosystem_I.mol2','cytochrome_b6f.mol2','ATP_synthase.mol2','NDH-1.mol2',
     'ferredoxin.mol2','FNR.mol2','RuBisCO.mol2','plastocyanin.mol2','PGR5.mol2',
     'PGRL1.mol2','PPH1.mol2','STN7.mol2','Violaxanthin_de-epoxidase.mol2','Zeaxanthin_epoxidase.mol2','chlorophyll.mol2','quinone.mol2','nadph.mol2'];
+  const barEl = document.getElementById('load-bar');
   setLbl('Haetaan tylakoidimalleja…');
   const mols = [];
   for(let i=0;i<FILES.length;i++){ const fn=FILES[i];
-    setLbl(`Haetaan ${fn}…`); setBar((i/FILES.length)*28);
+    setLbl(`Haetaan ${fn}…`); setBar((i/FILES.length)*45);
     try{
       const res = await fetch('./'+fn);
       if(!res.ok){ console.warn('skip (HTTP '+res.status+')', fn); continue; }
@@ -2221,7 +2093,7 @@ async function run(){
     await yield_();
   }
   if(mols.length === 0) throw new Error('No models loaded — are the .mol2 files next to index.html?');
-  setLbl('Sijoitellaan komplekseja…'); setBar(0.32); await yield_();
+  setLbl('Sijoitellaan komplekseja…'); await yield_();
   const psii = mols.find(m => m.cfg && m.cfg.match==='3jcu') || mols[0];
   const chl = null;   // chlorophyll is now a normal model (chlorophyll.mol2), not a runtime-extracted showcase — every `if(chl)`/`m===chl` guard below no-ops
   // A REALISTIC thylakoid lipid mixture rather than one species tiled everywhere. Weights are the
@@ -2252,6 +2124,7 @@ async function run(){
         m.x[k]=w.x+cx; m.y[k]=w.y+cy; m.z[k]=w.z+cz; } } }
 
   // Centre each model, then offset it to its target membrane position.
+  if(barEl){ barEl.style.transition = 'transform 6s cubic-bezier(0.15,0.75,0.2,1)'; barEl.style.transform = 'scaleX(0.9)'; }
   const box = [];
   for(const m of mols){
     let miX=Infinity,miY=Infinity,miZ=Infinity,maX=-Infinity,maY=-Infinity,maZ=-Infinity;
@@ -2303,39 +2176,13 @@ async function run(){
   // invisible on WebGPU, so it was never usable here.
   const gBackend = 'WebGL';
   engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
-  /* A browser that has fallen back to a software rasteriser looks identical and is simply slow, so
-     make it readable rather than something to infer from frame times. */
-  let gRenderer = '?';
-  try { const g = engine._gl; const dbg = g.getExtension('WEBGL_debug_renderer_info');
-    gRenderer = String(g.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : g.RENDERER) || '?');
-  } catch(_){}
-  const gSoftware = /llvmpipe|softpipe|swiftshader|software|basic render|generic render/i.test(gRenderer);
   engine.enableOfflineSupport = false;   // perf: skip the .manifest network probe per scene file
   // Supersample: render at higher internal res so the shader-drawn sphere edges /
   // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
   // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
-  /* hardwareScalingLevel is a LINEAR divisor, so cost is its square: at 0.4 the scene draws 6.25× the
-     window's pixels and every full-screen post-process allocates a target that size. Derived from
-     devicePixelRatio alone it was unbounded — dpr is read ONCE at load and changes with browser zoom and
-     with which monitor the window is on, so the same file could render 2.2× or 6.2× the pixels between
-     two loads, and a maximised window on a scaled 4K display asked for 8640×4500, past the 8192 that
-     MAX_RENDERBUFFER_SIZE commonly reports (targets then fail to allocate and the canvas goes black). */
-  const SS_MIN = 0.4, SS_MAX = 1.6;                     // floor = max supersample (2.5× linear)
-  const PIX_BUDGET = 4.0e6;                             // pixels per full-screen pass, whatever the window size
-  let gMaxDim = 8192;
-  try { const g = engine._gl;
-    gMaxDim = Math.min(g.getParameter(g.MAX_RENDERBUFFER_SIZE), g.getParameter(g.MAX_TEXTURE_SIZE)) || 8192;
-  } catch(_){}
-  const chooseScale = () => {
-    const cv = engine.getRenderingCanvas();
-    const w = cv.clientWidth || window.innerWidth || 1280, h = cv.clientHeight || window.innerHeight || 720;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2), lim = gMaxDim * 0.92;
-    return Math.min(SS_MAX, Math.max(Math.max(SS_MIN, 1/(dpr*1.5)), w/lim, h/lim, Math.sqrt((w*h)/PIX_BUDGET)));
-  };
-  engine.setHardwareScalingLevel(chooseScale());
-  // Only ever REDUCE the pixel count on resize, so this cannot undo the adaptive backoff below.
-  window.addEventListener('resize', () => { const sc2 = chooseScale();
-    if(sc2 > engine.getHardwareScalingLevel() + 1e-3) engine.setHardwareScalingLevel(sc2); });
+  const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));   // crisp supersample (quality over FPS)
   const scene = new BABYLON.Scene(engine);
   scene.skipPointerMovePicking = true;   // perf: we never auto-pick on pointer-move (all picking is done manually in our own handlers)
   scene.clearColor = new BABYLON.Color4(0.055,0.135,0.082,1);   // static dark green (matches the bg quad)
@@ -2364,16 +2211,10 @@ async function run(){
   applyTheme();
   // Wobbly light-green gradient background: a full-screen quad at the far plane (depth-written at
   // z≈1, LESS test) so every atom draws over it no matter the render order. Drifts slowly via uT.
-  const BG_GREEN = new BABYLON.Color3(0.055, 0.135, 0.082);   // static dark green — the colour it must READ as on screen
-  /* The solve that used to sit here — BG_GREEN run BACKWARDS through the grade so the sliders could not
-     touch the background — is gone. The background is written straight out again, exactly as it was
-     before that was added. gBgLevel is a plain multiplier on it, nothing clever. */
-  let gBgLevel = 1.0;                       // dev slider: the background's own brightness
-  const gBgRaw = BG_GREEN.clone();
-  const syncBgRaw = () => { gBgRaw.set(BG_GREEN.r*gBgLevel, BG_GREEN.g*gBgLevel, BG_GREEN.b*gBgLevel); };
+  const BG_GREEN = new BABYLON.Color3(0.055, 0.135, 0.082);   // static dark green
   const bgMat = new BABYLON.ShaderMaterial('bgMat', scene, 'bg', { attributes:['position'], uniforms:['cBg','focusAmt','focusDark'] });
   bgMat.backFaceCulling = false;
-  bgMat.onBindObservable.add(()=>{ const eff=bgMat.getEffect(); if(!eff) return; syncBgRaw(); eff.setColor3('cBg', gBgRaw); eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusDark', gFocusDark); });
+  bgMat.onBindObservable.add(()=>{ const eff=bgMat.getEffect(); if(!eff) return; eff.setColor3('cBg', BG_GREEN); eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusDark', gFocusDark); });
   const bgQuad = BABYLON.MeshBuilder.CreatePlane('bgQuad', {size:2}, scene);
   bgQuad.material = bgMat; bgQuad.isPickable = false; bgQuad.alwaysSelectAsActiveMesh = true;
   bgQuad.renderingGroupId = 0; bgQuad.infiniteDistance = true;   // stays behind everything
@@ -2433,8 +2274,7 @@ async function run(){
   let gZoomVel = 0;   // pending zoom (accumulated from wheel/buttons) → applied smoothly over frames
   let gZoomEase = 0.16;   // per-frame bleed of gZoomVel (small → slower, smoother arrival). Middle-held wheel drops it.
   let gFocusRadiusObs = null;   // while a focus swivel runs, pins cam.radius so the centering never changes zoom
-  let gFocusDim = false;        // O held → grayscale everything except the current selection (its EXACT silhouette stays colour)
-  let gSelVigAmt = 0;           // eased 0→1 while anything is selected → the vignette closes in on it
+  let gFocusDim = false;        // F held → grayscale everything except the current selection (its EXACT silhouette stays colour)
   let gFocusDimAmt = 0;         // eased 0→1 so the grayscale fades in/out smoothly
   let gFocusMode = 0;           // 0 = none (grayscale ALL) · 1 = a point (atom, view-space centre+radius) · 2 = a model set · 3 = a cofactor group
   let gFocusGroup = -1;         // mode 3: the cofactor group index whose overlay atoms keep their colour
@@ -2442,9 +2282,9 @@ async function run(){
   const gFocusCenterV = new BABYLON.Vector3(); // …the same, transformed to VIEW space each frame (the shaders test against this)
   let gDimRadius = 20;          // point-selection radius (world units)
   const gFocusSet = new Float32Array(24);      // mode 2: 1 = this model index is in the F selection (the shaders keep its atoms coloured)
-  let gFocusDark = 0.0;         // O: how much the grayscale (non-selection) environment darkens (0 = just grey, 1 = to black). Dev slider.
-  let gFVigStr = 0.55;          // O: vignette edge darkness (0 = off, 1 = black corners). Dev slider.
-  let gFVigReach = 45;          // O: how far the vignette reaches inward from the edges, % of the radius. Dev slider.
+  let gFocusDark = 0.0;         // F: how much the grayscale (non-selection) environment darkens (0 = just grey, 1 = to black). Dev slider.
+  let gFVigStr = 0.55;          // F: vignette edge darkness (0 = off, 1 = black corners). Dev slider.
+  let gFVigReach = 45;          // F: how far the vignette reaches inward from the edges, % of the radius. Dev slider.
   const bindFocus = eff => { eff.setFloat('focusAmt', gFocusDimAmt); eff.setFloat('focusMode', gFocusMode); eff.setVector3('focusCenterV', gFocusCenterV); eff.setFloat('focusR', gDimRadius); eff.setArray('focusSet', gFocusSet); eff.setFloat('focusGroup', gFocusGroup); eff.setFloat('focusDark', gFocusDark); };
   let gShortcuts = null;        // dev-mode keyboard-shortcut cheatsheet panel
   let gZoomP = null;  // world point under the cursor to zoom TOWARD (null → zoom to the viewport centre)
@@ -2476,13 +2316,7 @@ async function run(){
       // that world point fixed by shifting the pivot the same fraction the distance changed - target = P + f*(target - P).
       const zp = sc || gZoomP;
       if(zp){ const f = newR / oldR;
-        // Full strength keeps zp exactly pinned on screen. gZoomPull scales only the CURSOR pull - a
-        // selection still gets followed exactly, since that is the point of having selected it.
-        const pull = sc ? 1.0 : gZoomPull;
-        const tx = zp.x + f*(cam.target.x-zp.x), ty = zp.y + f*(cam.target.y-zp.y), tz = zp.z + f*(cam.target.z-zp.z);
-        cam.target.set(cam.target.x + (tx-cam.target.x)*pull,
-                       cam.target.y + (ty-cam.target.y)*pull,
-                       cam.target.z + (tz-cam.target.z)*pull); }
+        cam.target.set(zp.x + f*(cam.target.x-zp.x), zp.y + f*(cam.target.y-zp.y), zp.z + f*(cam.target.z-zp.z)); }
       cam.radius = newR;
     }
   };
@@ -2687,14 +2521,10 @@ async function run(){
       if(!panCursorOn){ panCursor.style.display = 'block'; document.documentElement.classList.add('panning'); panCursorOn = true; } }
     else if(panCursorOn){ panCursor.style.display = 'none'; document.documentElement.classList.remove('panning'); panCursorOn = false; }
   };
-  // O darkening vignette — a radial screen overlay (clear centre → dark edges) that fades in with O.
-  // Strength = edge darkness, reach = how far it bleeds inward. Its opacity is driven by the O ease.
+  // F darkening vignette — a radial screen overlay (clear centre → dark edges) that fades in with F.
+  // Strength = edge darkness, reach = how far it bleeds inward. Its opacity is driven by the F ease.
   const fVig = document.createElement('div');
-  // will-change keeps it on its own compositor layer, so a change of opacity is compositor work rather
-  // than a repaint of a full-viewport radial gradient. display none at rest takes it out of the frame
-  // entirely - this is browser-side cost that never shows up in a scene.render timing.
-  fVig.style.cssText = 'position:fixed;inset:0;z-index:9;pointer-events:none;opacity:0;will-change:opacity;display:none';
-  let _vigShown = 0;
+  fVig.style.cssText = 'position:fixed;inset:0;z-index:9;pointer-events:none;opacity:0';
   document.body.appendChild(fVig);
   const updateFVig = () => { const inner = Math.max(0, 100 - gFVigReach);   // reach 0 → dark only at the very corners, reach 90 → nearly to the centre
     fVig.style.background = 'radial-gradient(ellipse at center, rgba(0,0,0,0) '+inner+'%, rgba(0,0,0,'+gFVigStr.toFixed(3)+') 100%)'; };
@@ -2863,35 +2693,25 @@ async function run(){
   // Camera feel, tunable from the dev panel. Each is a MAX rate that the camera eases up to: hold a key
   // and the speed ramps 0 → max over RAMP_S seconds, then holds. Releasing every key of that kind drops
   // the ramp straight back to 0, so a tap is a small nudge and a long hold is a full-speed sweep.
-  let gPanSpeed  = 1.0;    // multiplier on the pan speed (W/A/S/D - screen-space pan)
-  let gZoomSpeed = 1.0;    // multiplier on the zoom speed (I/O - in and out along the view)
+  let gMoveSpeed = 1.0;    // multiplier on the distance-scaled fly speed (arrow keys)
   let gRotSpeed  = 2.2;    // max yaw/pitch rate in rad/s (WASD) — 2.2 ≈ 126 deg/s
-  const RAMP_S = 7.0;      // seconds from the initial nudge to full speed
+  const RAMP_S = 3.0;      // seconds from the initial nudge to full speed
   const RAMP_MIN = 0.10;   // a press starts at 10% of max, so a tap still nudges instead of creeping from a standstill
   let _moveRamp = RAMP_MIN, _rotRamp = RAMP_MIN;
   const rampStep = () => (1-RAMP_MIN) * Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
   scene.onBeforeRenderObservable.add(() => {
-    // WASD FLIES the camera (FPS-style): W/S forward/back along the view direction (moving in = zooming in),
-    // A/D strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
-    let fwd=0, strafe=0, vert=0;
-    if(wasdKeys.e) fwd+=1; if(wasdKeys.q) fwd-=1;          // E / Q → in / out along the view direction (zoom)
-    if(wasdKeys.d) strafe+=1; if(wasdKeys.a) strafe-=1;    // A / D → strafe left / right
-    if(wasdKeys.w) vert+=1; if(wasdKeys.s) vert-=1;        // W / S → straight up / down the WORLD vertical
-    if(!fwd && !strafe && !vert){ _moveRamp = RAMP_MIN; return; }
+    // Arrow keys FLY the camera (FPS-style): ↑/↓ forward/back along the view direction (move-in = zoom in),
+    // ←/→ strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
+    let fwd=0, strafe=0;
+    if(arrowKeys.ArrowUp) fwd+=1; if(arrowKeys.ArrowDown) fwd-=1;
+    if(arrowKeys.ArrowRight) strafe+=1; if(arrowKeys.ArrowLeft) strafe-=1;
+    if(!fwd && !strafe){ _moveRamp = RAMP_MIN; return; }
     _moveRamp = Math.min(1, _moveRamp + rampStep());
     orbitLocked = false; gCamFollow = false;
     const t=cam.getTarget(), p=cam.position;
     const F=cam.getDirection(BABYLON.Axis.Z), R=cam.getDirection(BABYLON.Axis.X);   // camera's OWN forward + right (screen-relative → stay consistent even when flipped upside-down)
-    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
-    const spP = sp * gPanSpeed, spZ = sp * gZoomSpeed;   // pan and zoom are tuned separately
-    // Vertical is the camera's OWN up, i.e. straight up ON SCREEN. A fixed world axis does not work here:
-    // the arrow-key free look rewrites cam.upVector, so after looking around "world up" is no longer the
-    // up you see — and the membrane's normal is Y while the floor's is Z, so neither axis is reliably
-    // "up" anyway. Screen-up is the one direction that always matches what the key is asking for.
-    const U=cam.getDirection(BABYLON.Axis.Y);
-    const mx=F.x*fwd*spZ+(R.x*strafe+U.x*vert)*spP,
-          my=F.y*fwd*spZ+(R.y*strafe+U.y*vert)*spP,
-          mz=F.z*fwd*spZ+(R.z*strafe+U.z*vert)*spP;
+    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * gMoveSpeed * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
+    const mx=(F.x*fwd+R.x*strafe)*sp, my=(F.y*fwd+R.y*strafe)*sp, mz=(F.z*fwd+R.z*strafe)*sp;
     p.x+=mx; p.y+=my; p.z+=mz;
     cam.setTarget(new BABYLON.Vector3(t.x+mx, t.y+my, t.z+mz));   // shift target the SAME amount → pure translation, no rotation
   });
@@ -2901,10 +2721,10 @@ async function run(){
   // grabbing the mouse does). (S also stops selected molecules — that binding is a no-op with nothing selected.)
   const wasdKeys = Object.create(null);
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-    const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'||k==='q'||k==='e'||k==='r'||k==='f'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
-  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'||k==='q'||k==='e'||k==='r'||k==='f') wasdKeys[k]=false; });
-  // The ARROW KEYS are a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
-  // This is a VR HEADSET head-turn, not an FPS body-spin. Left/right yaw about the camera's OWN up and up/down
+    const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
+  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
+  // WASD is a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
+  // This is a VR HEADSET head-turn, not an FPS body-spin. A/D yaw about the camera's OWN up and W/S
   // pitch about its OWN right, so the gaze always sweeps along the screen's own axes: whatever sits at
   // the left edge comes to the centre when you press A, at ANY head angle — including looking straight
   // down at the membrane. (Yawing about the WORLD vertical instead is the FPS behaviour, and it
@@ -2918,16 +2738,14 @@ async function run(){
   scene.onBeforeRenderObservable.add(() => {
     // ~126 deg/s, and the frame-time cap is 120 ms (not 50) so a LOW frame rate (heavy membrane) can't throttle
     // the turn speed down to a crawl — it keeps turning at a steady rate for as long as the key is held.
-    const anyTurn = arrowKeys.ArrowLeft || arrowKeys.ArrowRight || arrowKeys.ArrowUp || arrowKeys.ArrowDown
-                 || wasdKeys.r || wasdKeys.f;
+    const anyTurn = wasdKeys.a || wasdKeys.d || wasdKeys.w || wasdKeys.s;
     if(!anyTurn){ _rotRamp = RAMP_MIN; return; }
     _rotRamp = Math.min(1, _rotRamp + rampStep());   // ease 0 → full turn rate over RAMP_S
     const rot = gRotSpeed * _rotRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
-    let ya=0, pa=0, ra=0;
-    if(arrowKeys.ArrowLeft) ya -= rot; if(arrowKeys.ArrowRight) ya += rot;   // ← / → → yaw (look left / right), continuous while held
-    if(arrowKeys.ArrowUp) pa += rot; if(arrowKeys.ArrowDown) pa -= rot;      // ↑ / ↓ → pitch (hold ↑ → backflip)
-    if(wasdKeys.r) ra += rot; if(wasdKeys.f) ra -= rot;                      // R / F → roll (tilt the horizon left / right)
-    if(!ya && !pa && !ra) return;
+    let ya=0, pa=0;
+    if(wasdKeys.a) ya -= rot; if(wasdKeys.d) ya += rot;   // A / D → yaw (look left / right), continuous while held
+    if(wasdKeys.w) pa += rot; if(wasdKeys.s) pa -= rot;   // W / S → pitch (hold W → backflip)
+    if(!ya && !pa) return;
     const pos = cam.position, t = cam.getTarget();
     _flF.set(t.x-pos.x, t.y-pos.y, t.z-pos.z); const dist=_flF.length()||50; _flF.scaleInPlace(1/dist);   // forward
     cam.getDirectionToRef(BABYLON.Axis.Y, _flU); _flU.normalize();                                          // the camera's REAL screen-up
@@ -2935,9 +2753,7 @@ async function run(){
     // screen-LEFT, not its right — it is anti-parallel to the camera's local +X. The pitch sign below is
     // set to match that, and A/D are signed for it too. Do not "correct" this to look right-handed.
     BABYLON.Vector3.CrossToRef(_flF, _flU, _flR); _flR.normalize();                                        // = screen LEFT (see above)
-    const q = BABYLON.Quaternion.RotationAxis(_flU, ya)
-      .multiply(BABYLON.Quaternion.RotationAxis(_flR, pa))
-      .multiply(BABYLON.Quaternion.RotationAxis(_flF, ra));   // roll about the VIEW axis - tips the horizon, gaze unchanged
+    const q = BABYLON.Quaternion.RotationAxis(_flU, ya).multiply(BABYLON.Quaternion.RotationAxis(_flR, pa));
     BABYLON.Matrix.FromQuaternionToRef(q, _flM);
     const nF = BABYLON.Vector3.TransformCoordinates(_flF, _flM), nU = BABYLON.Vector3.TransformCoordinates(_flU, _flM); nU.normalize();
     cam.upVector.copyFrom(nU);
@@ -2988,15 +2804,9 @@ async function run(){
           if(mol){ selectMolecule(mol, e.shiftKey); }
           else if(rtsDownModel >= 0){   // a click on a protein complex → select it (Shift adds / toggles)
             if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
-            else { gSel.clear(); gSelMol.clear(); gSel.add(rtsDownModel); focusOnModel(rtsDownModel); }   // a fresh pick centres the camera on it
+            else { gSel.clear(); gSelMol.clear(); gSel.add(rtsDownModel); }
             updateSelectionUI();
-          } else {   // click on empty → deselect EVERYTHING (move order is on RIGHT-click)
-            gSel.clear(); gSelMol.clear(); updateSelectionUI();
-            // ...including the atom and cofactor selections. Clearing only the RTS set left a selected
-            // atom outlined with its info card open, so a single click looked like it had done nothing.
-            if(selAtom) clearAtomSel();
-            if(etcSel >= 0) showEtcSel(-1);
-          } }
+          } else { gSel.clear(); gSelMol.clear(); updateSelectionUI(); } }             // click on empty → deselect (move order is on RIGHT-click)
         return;
       }
       if(e.button === 0 && spawnEl){   // armed element + tap → drop an atom (anywhere; right-click disarms, double-click still selects)
@@ -3034,22 +2844,8 @@ async function run(){
   // Custom wheel + buttons route through zoomBy so they dolly through too (no flip).
   cam.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
   cam.inputs.removeByType('ArcRotateCameraMouseWheelInput');
-  /* Wheel zoom accelerates like the keys do: the first notch of a gesture moves 1/7 of full speed, the
-     second 2/7, up to full on the seventh. A gap longer than WHEEL_CHAIN_MS starts a fresh gesture and
-     drops back to 1/7.
-     400 ms is chosen deliberately. A wheel being rolled continuously fires every ~30-120 ms per detent
-     (a trackpad far faster), so 400 ms sits well clear of that and a sustained roll keeps building
-     instead of resetting mid-gesture. A deliberate pause between two separate nudges is rarely under
-     ~300 ms, so it still resets when the user means it to. At a typical ~80 ms per detent, full speed
-     arrives after roughly half a second of rolling. */
-  const WHEEL_CHAIN_MS = 400, WHEEL_STEPS = 7;
-  let wheelStep = 0, wheelLastT = 0;
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
-    const nowT = performance.now();
-    if(nowT - wheelLastT > WHEEL_CHAIN_MS) wheelStep = 0;   // too long a gap - this is a new gesture
-    wheelLastT = nowT;
-    if(wheelStep < WHEEL_STEPS) wheelStep++;
     // capture the floor point under the cursor → zoomBy dollies toward it (zoom-to-cursor)
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), cam);
     if(Math.abs(ray.direction.z) > 1e-6){ const t=(FLOOR_Z - ray.origin.z)/ray.direction.z; gZoomP = t>0 ? ray.origin.add(ray.direction.scale(t)) : null; }
@@ -3058,9 +2854,12 @@ async function run(){
     const mag = slow ? Math.max(fitRadius * 0.004, Math.abs(cam.radius) * 0.008)
                      : Math.max(fitRadius * 0.03,  Math.abs(cam.radius) * 0.06);
     gZoomEase = slow ? 0.05 : 0.16;   // slow mode bleeds out over many more frames
-    gZoomVel += Math.sign(e.deltaY) * mag * (wheelStep / WHEEL_STEPS) * gZoomSpeed;   // ramped, and scaled by the zoom-speed slider
+    gZoomVel += Math.sign(e.deltaY) * mag;   // zoom speed is independent of the speed slider
     showTips(); hideTipsSoon();
   }, {passive:false});
+  const btnZoom = dir => { gZoomP = null; gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08); showTips(); hideTipsSoon(); };
+  document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
+  document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
   // Smooth (inertial) zoom: bleed the accumulated velocity out over several frames, each step routed
   // through zoomBy so the per-object slow-down keeps easing the arrival. Total travel = the impulse.
   scene.onBeforeRenderObservable.add(() => {
@@ -3075,7 +2874,7 @@ async function run(){
   dir.intensity = 0.45;   // gentle form; AO + rim carry the shading
 
   /* Allocate instance buffers + build geometry */
-  setLbl(`Rakennetaan ${mols.length} mallia…`); setBar(0.38); await yield_();
+  setLbl(`Rakennetaan ${mols.length} mallia…`); await yield_();
   const LP = {N:1, O:2, S:2, P:1, CL:3};          // lone pairs per element (non-bonding orbitals)
   const lonePairs = e => LP[EL_LIST[e]] || 0;
   const sphBuf = [], cylBuf = [], wBuf = [], knobBuf = [], cylAtBuf = [], cylOidBuf = [], cenBuf = [], lpBuf = [], lpCenBuf = [], lpOidBuf = [], colBuf = [], cofBuf = [], resBuf = [],
@@ -3291,10 +3090,6 @@ async function run(){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
-  let gZoomPull = 1.0;        // how far the view slides toward the cursor when wheel-zooming (0 = straight in, 1 = cursor stays pinned). Dev slider.
-  let gSat = 1.0;             // saturation, dev slider
-  let gHi = 0.0;              // highlight gain (bright end only), dev slider
-  let gSh = 0.0;              // shadow gain (dark end only), dev slider
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
   let gConeTip = 0.12;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
@@ -3403,7 +3198,6 @@ async function run(){
      every complex. setDevMode(false) also drops any live model selection. Wired up after the model
      selection code exists (see applyDevMode below). */
   let gDev = false;
-  let gDevPanelEl = null, gDevTopSet = false;   // the slider panel, and whether its top has been dropped below the camera readout yet
   let applyDevMode = () => {};   // real implementation installed once deselectModel + labels exist
   { const devBtn = document.getElementById('dev-btn');
     if(devBtn) devBtn.addEventListener('click', () => { gDev = !gDev;
@@ -3434,17 +3228,6 @@ async function run(){
       const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
   // Membrane toggle → hide the tiled lipid bilayer for a big performance win (the cull loop + nucleon
   // pool observer read gMembrane each frame and force every membrane mesh off when it is false).
-  /* Every free-flying molecule in the box — the 20000 waters and their orbitals, the 20000 protons,
-     the 20000 CO2 and the 5000 O2 — registers itself here so the Hiukkaset button can drop the lot in
-     one go. gFreeOn also short-circuits the per-frame water-orbital rebuild, so switching them off
-     buys back the CPU as well as the draw calls, not just the pixels. */
-  const gFreeMeshes = [];
-  let gFreeOn = true;   // NB: not gParticles — that name is already the game's spawned-effect list
-  { const pb = document.getElementById('particles-btn');
-    if(pb) pb.addEventListener('click', () => { gFreeOn = !gFreeOn;
-        pb.classList.toggle('on', !gFreeOn);   // highlighted while they are HIDDEN, like the Kalvo button
-        const lab=document.getElementById('particles-label'); if(lab) lab.textContent = gFreeOn ? 'Hiukkaset' : 'Hiukkaset pois';
-        for(const m of gFreeMeshes) m.setEnabled(gFreeOn); }); }
   let gMembrane = false;   // membrane HIDDEN by default — it is much the heaviest thing in the scene; the Kalvo button brings it back instantly (it is still built during loading, just not drawn)
   { const mb = document.getElementById('membrane-btn');
     if(mb){ mb.addEventListener('click', () => { gMembrane = !gMembrane;
@@ -3627,7 +3410,7 @@ async function run(){
   // from selCenter (which the shaders test per-atom) so selecting a model can't tint a stray atom.
   const orbitCenter = new BABYLON.Vector3(1e6, 1e6, 1e6);
   const gPsiiOffset = new BABYLON.Vector3(0, 0, 0);        // whole-PSII drag offset (moved via the macromolecule gizmo)
-  setLbl('Siirretään näytönohjaimelle…'); setBar(0.46); await yield_();
+  setLbl('Siirretään näytönohjaimelle…'); await yield_();
   /* ── Spatial culling ──────────────────────────────────────────────────────
      Bin every inner-core instance (nucleons, orbitals, bonds, lone pairs) into a
      3-D grid of cells. Each frame only the handful of cells the camera bubble
@@ -3739,13 +3522,7 @@ async function run(){
     const sb=sphBuf[e], ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e], rs=resBuf[e];
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
-      pushN(c.sphM, sb, a*16, 16);
-      // A cofactor / bound molecule gets ONE colour of its own, keyed on its residue instance, so every
-      // atom of that molecule matches and the neighbouring one differs. Alpha 1 marks it as carrying its
-      // own identity, which stops colour-by-model overwriting it in the shader.
-      if(cf && cf[a]){ const mc=molCol(rs[a]); c.sphC.push(mc[0],mc[1],mc[2],1); }
-      else c.sphC.push(ec[0],ec[1],ec[2],0);
-      c.sphR.push(vr);
+      pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
       if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); etcEl.push(e); etcIdx.push(a); }   // cofactor → overlay, coloured by type, slightly enlarged to pop (etcEl/etcIdx = element + its orbBuf index for the info panel)
     }
     await yield_();
@@ -3802,24 +3579,20 @@ async function run(){
   };
   const vdwFarMat = mkFar('vdwLODfar',
     ['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    ['macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','focalD','depthK','depthLo','startOff','spread'],
-    ['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define CHEAP','#define DEPTHSHADE']);
+    ['macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
+    ['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define CHEAP']);
   vdwFarMat.setFloat('selModel', -1);
   vdwFarMat.onBindObservable.add(()=>{ const eff=vdwFarMat.getEffect(); if(!eff)return;
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
-    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo);
-    eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread);
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
   const vdwStaticFarMat = mkFar('vdwLODsfar',
     ['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    ['memCut','focalD','depthK','depthLo','startOff','spread'],
-    ['#define IMPRAD','#define MEMFADE','#define CHEAP','#define DEPTHSHADE']);
+    ['memCut'],
+    ['#define IMPRAD','#define MEMFADE','#define CHEAP']);
   vdwStaticFarMat.onBindObservable.add(()=>{ const eff=vdwStaticFarMat.getEffect(); if(!eff)return;
     eff.setFloat('uT',gWaveT); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
-    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo);
-    eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread);
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
   /* Warm the far shaders up ONCE, on the first frame where a mesh of each kind exists. Without this the
@@ -4123,15 +3896,6 @@ async function run(){
      screen-door reveal band). Orbitals render for cells near the camera; far cells simply aren't
      drawn (rather than falling back to a vdW sphere). */
 
-  /* ── Per-protein collision shells ────────────────────────────────────────────────────────────────
-     A real shape derived from the spatial data, not a bounding box. Every atom is bucketed by its
-     DIRECTION from the model centroid, and each bucket keeps the furthest point that atom's vdW sphere
-     reaches. That is one pass over the atoms per model, and it leaves a spherical height-field: a radius
-     per direction that touches the outermost atom on that bearing — the surface atoms, connected.
-     Empty buckets (bearings no atom happened to fall on) are filled from their neighbours, then one
-     dilation pass guarantees the shell never cuts inside an atom it is meant to contain.
-     Star-shaped, so a deep concavity is bridged rather than followed — the usual trade for a collision
-     proxy, and it stays a closed watertight surface. Dev-only. */
   /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
      torus mesh; the shader shows it only inside the reveal-bubble. */
@@ -4732,7 +4496,7 @@ async function run(){
   // beta≈0.62 rad off straight-down at radius 1184 — same zoom scale as before, now tilted like an RTS.
   const CAM_DEF_TGT = new BABYLON.Vector3(50, -6, 0), CAM_DEF_POS = new BABYLON.Vector3(50, -693.6, 963.7);
   let CAM_DEF_ALPHA = 0, CAM_DEF_BETA = 0;   // filled in from the derived angles right after the first resetView() (used by viewPerp)
-  const resetView = () => { scene.stopAnimation(cam);   // I → restore the default starting view
+  const resetView = () => { scene.stopAnimation(cam);   // R → restore the default starting view
     if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; }
     cam.upVector.set(0, 0, 1);   // undo any WASD arcball roll → the default view is level again
     cam.setTarget(CAM_DEF_TGT.clone()); cam.setPosition(CAM_DEF_POS.clone());
@@ -4754,19 +4518,6 @@ async function run(){
       () => { if(gFocusRadiusObs){ scene.onBeforeRenderObservable.remove(gFocusRadiusObs); gFocusRadiusObs = null; } cam.radius = R; });   // done → stop pinning, land at the exact zoom we started with
     gFocusRadiusObs = scene.onBeforeRenderObservable.add(() => { cam.radius = R; });   // hold zoom constant for the ~0.23 s swivel (radius only — never touches alpha/beta, so it can't fight rotation)
   };
-  // A fresh single selection gently swings the camera onto it, zoom untouched — the same easing an atom
-  // pick already used, so every kind of selection now behaves the same way. Shift-adding to a selection
-  // and box-select deliberately do NOT move the camera.
-  const _selCtr = new BABYLON.Vector3();
-  // Held back a beat, because the first click of a DOUBLE-click also lands here: swinging the camera
-  // straight away would drag the target out from under the second click. An atom / cofactor pick
-  // cancels it (cancelSelFocus below), so only a click that stays a single click moves the camera.
-  let gSelFocusTimer = null;
-  const cancelSelFocus = () => { clearTimeout(gSelFocusTimer); gSelFocusTimer = null; };
-  const focusOnSelection = (x, y, z) => { cancelSelFocus();
-    gSelFocusTimer = setTimeout(() => focusCameraOn(_selCtr.set(x, y, z)), 280); };
-  const focusOnModel = mi => { const md = mInfo[mi]; if(!md) return;
-    focusOnSelection(md.cx + gModelOff[mi*3], md.cy + gModelOff[mi*3+1], md.cz + gModelOff[mi*3+2]); };
   // Double-click focus that ALSO points the camera parallel to the membrane: centres on `center` AND snaps
   // the orientation back to the default framing (alpha/beta = CAM_DEF), where world-X (the membrane axis)
   // runs horizontally — the clean side-on view. All four properties animate together, target created FIRST so
@@ -4816,13 +4567,11 @@ async function run(){
     gSpawnPlaneZ = gcz;
     gSpawnBounds = {x0:gcx-iw, x1:gcx+iw, y0:gcy-ih, y1:gcy+ih};
 
-    const NW=20000, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };   // free-floating water filling the container box
+    const NW=0, rnd=x=>{ const v=Math.sin(x*127.1)*43758.5453; return v-Math.floor(v); };   // free-floating water removed from the thylakoid scene
     const wc=new Float32Array(NW*3), wv=new Float32Array(NW*3), wh1=new Float32Array(NW*3), wh2=new Float32Array(NW*3);
     for(let i=0;i<NW;i++){
-      // Seed each axis from its OWN stream (i*3+n, not i+n) — with i+n consecutive molecules share draws
-      // (molecule i's Y is molecule i+1's X), which reads as diagonal banding once there are thousands.
-      wc[i*3]=x0+rnd(i*3+1)*bw; wc[i*3+1]=y0+rnd(i*3+2)*bh; wc[i*3+2]=z0+rnd(i*3+3)*bd;
-      const sp=28+rnd(i*5+7)*40, th=rnd(i*5+4)*6.283, ph=Math.acos(2*rnd(i*5+5)-1);
+      wc[i*3]=x0+rnd(i+1)*bw; wc[i*3+1]=y0+rnd(i+2)*bh; wc[i*3+2]=z0+rnd(i+3)*bd;
+      const sp=28+rnd(i+7)*40, th=rnd(i+4)*6.283, ph=Math.acos(2*rnd(i+5)-1);
       wv[i*3]=sp*Math.sin(ph)*Math.cos(th); wv[i*3+1]=sp*Math.cos(ph); wv[i*3+2]=sp*Math.sin(ph)*Math.sin(th);
       // two O–H bonds (0.96 Å, 104.5°) in a random orientation
       let ux=rnd(i*7+1)*2-1, uy=rnd(i*7+2)*2-1, uz=rnd(i*7+3)*2-1; const ul=Math.hypot(ux,uy,uz)||1; ux/=ul;uy/=ul;uz/=ul;
@@ -4833,279 +4582,32 @@ async function run(){
       wh2[i*3]=oh*(ux*ca-qx*sa); wh2[i*3+1]=oh*(uy*ca-qy*sa); wh2[i*3+2]=oh*(uz*ca-qz*sa);
     }
     const codeO=codeOf('O'), codeH=codeOf('H');
-    /* Everything below is uploaded ONCE. The molecules fly and bounce entirely in the vertex shader
-       (see WATERBOX), driven by the existing uT clock — which is already advanced by dt × gSpeed, so the
-       speed slider still governs them. Integrating 20000 molecules on the CPU and re-uploading their
-       60000 matrices every frame cost ~8 ms per frame, which is most of the frame budget. */
-    const oR = info(codeO).vr*FILL_SCALE;
-    const bLo = new BABYLON.Vector3(x0+oR, y0+oR, z0+oR), bHi = new BABYLON.Vector3(x1-oR, y1-oR, z1-oR);
-    // solid = never turn to glass. The reveal bubble is what makes the water go clear so its orbitals
-    // show; the other species have no orbitals, so their bubble radius is pinned to 0 and they stay
-    // opaque at every distance. (isShell must stay 1 either way — with isShell 0 the alpha is scaled BY
-    // the reveal, so the sphere would be invisible everywhere except inside the crisp zone.)
-    const wMat=(rad, solid)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
-        attributes:['position','instanceColor','wOrig','wVel','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi'],
-        defines:['#define WATERBOX'] });
-      // isShell = 1 so the sphere turns to GLASS inside the reveal radius, exactly as the protein vdW does
-      // — otherwise the orbitals built below are drawn correctly but sit hidden inside an opaque ball.
-      m.setFloat('radius',rad);m.setFloat('isShell',1);m.setFloat('shellMin',0.18);m.setFloat('revealFade',0.95);
-      m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.setFloat('coneCos',-1.0);m.backFaceCulling=false;
-      realAlpha(m);
-      m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT);
-        eff.setFloat('bubbleR', solid ? 0 : gCrisp);   // glass only where the orbitals are actually drawn
-        eff.setVector3('boxLo',bLo); eff.setVector3('boxHi',bHi);
-        eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
-    // `off` gives each atom its rigid offset from the molecule centre (0 for O, the two O–H vectors for H)
-    const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad,false); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
-      // Group 1, like every other vdW shell in the scene: the ORBITALS live in group 0 and are drawn
-      // first, then the glass shell blends over them. Left in group 0 the sphere and the lobes sort
-      // against each other arbitrarily, and the sphere's depth write simply rejected the lobes inside it.
-      mesh.renderingGroupId=1;
-      const cb=new Float32Array(cnt*4), mb=new Float32Array(cnt*16), og=new Float32Array(cnt*3), vl=new Float32Array(cnt*3);
-      for(let k=0;k<cnt;k++){ const i=off?(k>>1):k;                       // two H instances per molecule
-        cb[k*4]=col[0];cb[k*4+1]=col[1];cb[k*4+2]=col[2];cb[k*4+3]=0;
-        mb[k*16]=1;mb[k*16+5]=1;mb[k*16+10]=1;mb[k*16+15]=1;
-        if(off){ const h=(k&1)?wh2:wh1; mb[k*16+12]=h[i*3]; mb[k*16+13]=h[i*3+1]; mb[k*16+14]=h[i*3+2]; }
-        og[k*3]=wc[i*3]; og[k*3+1]=wc[i*3+1]; og[k*3+2]=wc[i*3+2];
-        vl[k*3]=wv[i*3]; vl[k*3+1]=wv[i*3+1]; vl[k*3+2]=wv[i*3+2]; }
-      mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
-      mesh.thinInstanceSetBuffer('matrix',mb,16,true);
-      mesh.thinInstanceSetBuffer('wOrig',og,3,true);
-      mesh.thinInstanceSetBuffer('wVel',vl,3,true);
-      mesh.thinInstanceCount=cnt; gFreeMeshes.push(mesh); return mesh; };
-    // Free water reads BLUE as a body of water, rather than by element — so it is instantly separable
-    // from the red/white oxygens dotted through the proteins. The orbitals inside still use the real
-    // element colours, so once you are close enough to see them the chemistry is still honest.
-    mkImp('wO', oR, [0.22,0.52,0.85], NW, false);
-    mkImp('wH', info(codeH).vr*FILL_SCALE, [0.62,0.82,0.97], NW*2, true);
-
-    /* ── The other three free species sharing the box ──────────────────────────────────────────────
-       Free protons, carbon dioxide and dioxygen, all flying and bouncing through the SAME analytic
-       triangle wave and the same protein-shell repulsion as the water — nothing per-frame on the CPU.
-       Each is given its own colour rather than the element palette, for the same reason the free water
-       is blue: dotted through proteins full of red oxygens and white hydrogens, honest element colours
-       would make them impossible to pick out. They carry no orbitals (a bare proton has no electrons
-       at all), so their spheres are solid rather than the water's glass. */
-    const codeC = codeOf('C');
-    // One species: `n` molecules, each a rigid set of atoms given as offsets from the molecule centre.
-    // `seed` picks an independent random stream so two species never share start points or velocities.
-    const mkFree = (nm, n, seed, atoms) => {
-      const c=new Float32Array(n*3), v=new Float32Array(n*3), ax=new Float32Array(n*3);
-      for(let i=0;i<n;i++){
-        c[i*3]=x0+rnd(seed+i*3+1)*bw; c[i*3+1]=y0+rnd(seed+i*3+2)*bh; c[i*3+2]=z0+rnd(seed+i*3+3)*bd;
-        const sp=28+rnd(seed+i*5+7)*40, th=rnd(seed+i*5+4)*6.283, ph=Math.acos(2*rnd(seed+i*5+5)-1);
-        v[i*3]=sp*Math.sin(ph)*Math.cos(th); v[i*3+1]=sp*Math.cos(ph); v[i*3+2]=sp*Math.sin(ph)*Math.sin(th);
-        // the molecule's own axis (linear species lie along it) — an independent uniform direction
-        const th2=rnd(seed+i*9+11)*6.283, ph2=Math.acos(2*rnd(seed+i*9+13)-1);
-        ax[i*3]=Math.sin(ph2)*Math.cos(th2); ax[i*3+1]=Math.cos(ph2); ax[i*3+2]=Math.sin(ph2)*Math.sin(th2);
-      }
-      for(const a of atoms){
-        const mesh=BABYLON.MeshBuilder.CreatePlane(nm+a.tag,{size:2},scene);
-        mesh.material=wMat(a.r, true); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
-        mesh.renderingGroupId=1;
-        const cb=new Float32Array(n*4), mb=new Float32Array(n*16), og=new Float32Array(n*3), vl=new Float32Array(n*3);
-        for(let i=0;i<n;i++){
-          cb[i*4]=a.col[0]; cb[i*4+1]=a.col[1]; cb[i*4+2]=a.col[2]; cb[i*4+3]=0;
-          mb[i*16]=1; mb[i*16+5]=1; mb[i*16+10]=1; mb[i*16+15]=1;
-          mb[i*16+12]=ax[i*3]*a.d; mb[i*16+13]=ax[i*3+1]*a.d; mb[i*16+14]=ax[i*3+2]*a.d;   // offset along the molecule axis
-          og[i*3]=c[i*3]; og[i*3+1]=c[i*3+1]; og[i*3+2]=c[i*3+2];
-          vl[i*3]=v[i*3]; vl[i*3+1]=v[i*3+1]; vl[i*3+2]=v[i*3+2];
-        }
-        mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
-        mesh.thinInstanceSetBuffer('matrix',mb,16,true);
-        mesh.thinInstanceSetBuffer('wOrig',og,3,true);
-        mesh.thinInstanceSetBuffer('wVel',vl,3,true);
-        mesh.thinInstanceCount=n; gFreeMeshes.push(mesh);
-      }
-    };
-    const cR = info(codeC).vr*FILL_SCALE;
-    // Free protons — crimson, and small: a bare nucleus has no electron cloud to fill a vdW sphere.
-    mkFree('p', 20000, 91731, [{tag:'H', r:info(codeH).vr*FILL_SCALE*0.42, col:[0.90,0.24,0.30], d:0}]);
-    // CO2 — charcoal carbon between two slate oxygens, C=O 1.16 Å. Reads as grey smoke against the water.
-    mkFree('co2', 20000, 218347, [{tag:'C', r:cR, col:[0.24,0.25,0.28], d:0},
-                                  {tag:'Oa', r:oR, col:[0.52,0.55,0.60], d: 1.16},
-                                  {tag:'Ob', r:oR, col:[0.52,0.55,0.60], d:-1.16}]);
-    // O2 — oxygen's own red, the gas photosynthesis puts out. O=O 1.21 Å, so ±0.605 from the centre.
-    mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.94,0.15,0.15], d: 0.605},
-                                {tag:'b', r:oR, col:[0.94,0.15,0.15], d:-0.605}]);
-
-    /* ── Water orbitals inside the crisp zone ───────────────────────────────────────────────────────
-       Every water within gCrisp gets the same orbital treatment the proteins get: core shells, the two
-       hybridised O–H sigma lobes with their back knobs, and the oxygen's two lone pairs. The lobe set is
-       built ONCE in a canonical frame (O at the origin, H's along +wh1/+wh2 of molecule 0) and then
-       instanced per molecule with that molecule's own rotation baked in, so only a small matrix buffer is
-       rewritten each frame. WCAP is the safety net the unbounded "everything in the zone" rule needs — in
-       a dense patch the in-zone count would otherwise be unbounded. */
-    // Hard ceiling on simultaneously orbital-ised molecules. These are big TRANSLUCENT shells that
-    // overlap heavily, so the cost is overdraw and it climbs fast with the count -- 600 of them took the
-    // frame from ~3 ms to ~50 ms. 48 keeps the nearest molecules fully detailed at a cost that stays in
-    // the noise, and the buffers rewritten each frame stay small (48 x 11 lobes).
-    const WCAP = NW;   // NO cap - every water inside the crisp zone gets orbitals
-    const wOrbCore = { m:[], col:[], cen:[], oid:[] }, wOrbBond = { m:[], tap:[], col:[], cen:[], oid:[] };
-    { const tmp = new Float32Array(16);
-      const hA = [wh1[0], wh1[1], wh1[2]], hB = [wh2[0], wh2[1], wh2[2]];
-      const at = [[0,0,0], hA, hB], el = [codeO, codeH, codeH];
-      const bd = [[nrm(hA), nrm(hB)], [nrm([-hA[0],-hA[1],-hA[2]])], [nrm([-hB[0],-hB[1],-hB[2]])]];
-      const pushCore = (c,cx,cy,cz,oid) => { for(let j=0;j<16;j++) wOrbCore.m.push(tmp[j]);
-        wOrbCore.col.push(c[0],c[1],c[2]); wOrbCore.cen.push(cx,cy,cz); wOrbCore.oid.push(oid); };
-      const put = (sx,sy,sz, ex,ey,ez, wid, c, cx,cy,cz, oid) => { cylTo(sx,sy,sz, ex,ey,ez, tmp, 0, wid);
-        for(let j=0;j<16;j++) wOrbBond.m.push(tmp[j]);
-        wOrbBond.tap.push(1.0); wOrbBond.col.push(c[0],c[1],c[2]); wOrbBond.cen.push(cx,cy,cz); wOrbBond.oid.push(oid); };
-      // core (non-hybridised) shells
-      for(let k=0;k<3;k++){ const e=el[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
-        const p=at[k], c=info(e).c;
-        for(const sh of cfg){ const n=sh[0], ty=sh[1], R=n*SHELL_STEP, oid=n*100+ty*10;
-          if(maxNe>1 && n===maxNe && ty<=1) continue;
-          if(ty===0){ sphereMat(p[0],p[1],p[2], R*0.72, tmp, 0); pushCore(c,p[0],p[1],p[2],oid); }
-          else for(const d of OTMPL[ty]){ cylTo(p[0],p[1],p[2], p[0]+d[0]*R,p[1]+d[1]*R,p[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,p[0],p[1],p[2],oid); } } }
-      // the two O–H sigma bonds, with the oxygen's back knob
-      const cO = info(codeO).c, cH = info(codeH).c, f = 0.62, kL = 0.24, kW = LOBE_W*0.5;
-      for(const h of [hA, hB]){
-        put(0,0,0, h[0]*f,h[1]*f,h[2]*f, LOBE_W, cO, 0,0,0, 1000);
-        put(h[0],h[1],h[2], h[0]-h[0]*f,h[1]-h[1]*f,h[2]-h[2]*f, LOBE_W, cH, h[0],h[1],h[2], 1001);
-        put(0,0,0, -h[0]*kL,-h[1]*kL,-h[2]*kL, kW, cO, 0,0,0, 1000); }
-      // the oxygen's two lone pairs, placed by the same VSEPR helper the proteins use
-      for(const d of lonePairDirs(bd[0], lonePairs(codeO)))
-        put(0,0,0, d[0]*0.75,d[1]*0.75,d[2]*0.75, LOBE_W, cO, 0,0,0, 2000);
-    }
-    const wCoreN = wOrbCore.m.length/16, wBondN = wOrbBond.m.length/16;
-    const wOrbMat = (nm, shader, attrs, extra) => {
-      const m = new BABYLON.ShaderMaterial(nm, scene, shader, { attributes:attrs,
-        uniforms:['view','projection','bubbleR','fogColor','fogStart','fogEnd','uT','nElec','selCenter','focusId','coneCos','drawElec'].concat(extra||[]) });
-      m.setFloat('bubbleR',1e9); m.setFloat('nElec',2); m.setFloat('coneCos',-1.0); m.setFloat('drawElec',1);
-      m.setVector3('selCenter', new BABYLON.Vector3(1e6,1e6,1e6)); m.setFloat('focusId',-1); m.backFaceCulling=true;
-      m.onBindObservable.add(()=>{ const eff=m.getEffect(); if(!eff) return; eff.setFloat('uT',gWaveT);
-        eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
-      return realAlpha(m);
-    };
-    const wCoreMat = wOrbMat('wOrbCore','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
-    const wBondMat = wOrbMat('wOrbBond','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']);
-    wBondMat.setFloat('nElec',1);
-    const wCoreMesh = BABYLON.MeshBuilder.CreateSphere('wOrbC',{segments:6,diameter:1},scene);
-    wCoreMesh.material=wCoreMat; wCoreMesh.isPickable=false; wCoreMesh.alwaysSelectAsActiveMesh=true;
-    const wBondMesh = BABYLON.MeshBuilder.CreateSphere('wOrbB',{segments:5,diameter:1},scene);
-    wBondMesh.material=wBondMat; wBondMesh.isPickable=false; wBondMesh.alwaysSelectAsActiveMesh=true;
-    { const cCol=new Float32Array(WCAP*wCoreN*3), cOid=new Float32Array(WCAP*wCoreN);
-      const bCol=new Float32Array(WCAP*wBondN*3), bOid=new Float32Array(WCAP*wBondN), bTap=new Float32Array(WCAP*wBondN);
-      for(let k=0;k<WCAP;k++){
-        for(let i=0;i<wCoreN;i++){ const d=(k*wCoreN+i);
-          cCol[d*3]=wOrbCore.col[i*3]; cCol[d*3+1]=wOrbCore.col[i*3+1]; cCol[d*3+2]=wOrbCore.col[i*3+2]; cOid[d]=wOrbCore.oid[i]; }
-        for(let i=0;i<wBondN;i++){ const d=(k*wBondN+i);
-          bCol[d*3]=wOrbBond.col[i*3]; bCol[d*3+1]=wOrbBond.col[i*3+1]; bCol[d*3+2]=wOrbBond.col[i*3+2];
-          bOid[d]=wOrbBond.oid[i]; bTap[d]=wOrbBond.tap[i]; } }
-      wCoreMesh.thinInstanceSetBuffer('ocol',cCol,3,true); wCoreMesh.thinInstanceSetBuffer('oid',cOid,1,true);
-      wBondMesh.thinInstanceSetBuffer('bcol',bCol,3,true); wBondMesh.thinInstanceSetBuffer('oid',bOid,1,true);
-      wBondMesh.thinInstanceSetBuffer('taper',bTap,1,true);
-    }
-    const wCoreM = new Float32Array(WCAP*wCoreN*16), wCoreC = new Float32Array(WCAP*wCoreN*3);
-    const wBondM = new Float32Array(WCAP*wBondN*16), wBondC = new Float32Array(WCAP*wBondN*3);
-    wCoreMesh.thinInstanceSetBuffer('matrix',wCoreM,16,false); wCoreMesh.thinInstanceSetBuffer('ocen',wCoreC,3,false);
-    wBondMesh.thinInstanceSetBuffer('matrix',wBondM,16,false); wBondMesh.thinInstanceSetBuffer('ocen',wBondC,3,false);
-    wCoreMesh.thinInstanceCount=0; wBondMesh.thinInstanceCount=0;
-    // Per-molecule rotation that carries the canonical template onto molecule i (its own O–H directions)
-    const cA=[wh1[0],wh1[1],wh1[2]], cB=[wh2[0],wh2[1],wh2[2]];
-    const cU=nrm(cA), cW=nrm(crs(cA,cB)), cV=crs(cW,cU);
-    const bnc=(x,lo,hi)=>{ const sp=hi-lo; let t=(x-lo)%(2*sp); if(t<0) t+=2*sp; return lo+(t<sp?t:2*sp-t); };
-    const wPick=new Int32Array(WCAP), wPickD=new Float32Array(WCAP), wPos=new Float32Array(WCAP*3);
-    const _wp=[0,0,0];
-    let wPartial = typeof wCoreMesh.thinInstancePartialBufferUpdate === 'function';   // see the upload below
-    gFreeMeshes.push(wCoreMesh, wBondMesh);
+    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{attributes:['position','instanceColor','world0','world1','world2','world3'],uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','bubbleR','protonOutline','uT','coneCos']});
+      m.setFloat('radius',rad);m.setFloat('isShell',0);m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.setFloat('coneCos',-1.0);m.backFaceCulling=false;
+      m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
+    const mkImp=(nm,rad,col,cnt)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+      const cb=new Float32Array(cnt*4); for(let i=0;i<cnt;i++){ cb[i*4]=col[0];cb[i*4+1]=col[1];cb[i*4+2]=col[2];cb[i*4+3]=0; } mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
+      const mb=new Float32Array(cnt*16); for(let i=0;i<cnt;i++){ mb[i*16]=1;mb[i*16+5]=1;mb[i*16+10]=1;mb[i*16+15]=1; } mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=cnt;
+      /* NW is 0 here (free water removed), which leaves ZERO-LENGTH instance buffers on a mesh that
+         Babylon still submits — the driver then throws GL_INVALID_OPERATION, "vertex buffer is not
+         big enough for the draw call", on every single frame for both meshes. Disable it instead. */
+      mesh.setEnabled(cnt > 0);
+      return {mesh,mb}; };
+    const oI=mkImp('wO', info(codeO).vr*FILL_SCALE, [0.94,0.15,0.15], NW);
+    const hI=mkImp('wH', info(codeH).vr*FILL_SCALE, [0.92,0.92,0.92], NW*2);
     scene.onBeforeRenderObservable.add(()=>{
-      if(!gFreeOn) return;   // Hiukkaset off → skip the whole rebuild, not just the drawing
-      const cp=cam.position, R=gCrisp, R2=R*R;
-      /* Use the clock the SHADER will see, not the current one. gWaveT is advanced by an observer that is
-         registered AFTER this one, so by the time the water spheres are drawn it has already moved on by a
-         frame. Reading gWaveT directly here left the orbitals trailing their own atoms by one frame — at
-         28-68 units/s that is about an atom radius, which is exactly what it looked like. */
-      const T = gWaveT + Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;
-      /* Take the NEAREST WCAP molecules in the zone, not the first WCAP by index — an index-ordered pick
-         would swap which molecules are detailed as they drift, making orbitals blink on and off around
-         you. Insertion into a WCAP-sized worst-first list, so no full sort of the candidates.
-         BUT that ordering only earns its keep when a cap is actually in force and some molecules have to
-         lose. With no cap every in-zone molecule is kept regardless of order, and the insertion sort that
-         maintained it degenerated to O(n^2): about a thousand molecules in the zone meant roughly half a
-         million element shifts EVERY FRAME. Measured at 9.7 ms of pure main-thread time, against 0.3 ms
-         for every other per-frame observer in the scene put together — the stutter that showed up exactly
-         when the crisp zone lit up. Uncapped now appends and the sorted path is kept for a real cap. */
-      const capped = WCAP < NW;
-      let n=0, worst=Infinity;
+      const dt=Math.min(engine.getDeltaTime(),50)*0.001*gSpeed, oR=info(codeO).vr*FILL_SCALE;
       for(let i=0;i<NW;i++){
-        const px=bnc(wc[i*3]  +wv[i*3]  *T, bLo.x, bHi.x);
-        const dx=px-cp.x; if(dx*dx>R2) continue;                       // cheap axis reject before the rest
-        const py=bnc(wc[i*3+1]+wv[i*3+1]*T, bLo.y, bHi.y);
-        const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
-        const pz=bnc(wc[i*3+2]+wv[i*3+2]*T, bLo.z, bHi.z);
-        const dz=pz-cp.z; const d2=dx*dx+dy*dy+dz*dz; if(d2>R2) continue;
-        _wp[0]=px; _wp[1]=py; _wp[2]=pz;
-        if(!capped){ wPick[n]=i; wPos[n*3]=_wp[0]; wPos[n*3+1]=_wp[1]; wPos[n*3+2]=_wp[2]; n++; continue; }
-        if(n===WCAP && d2>=worst) continue;
-        let at=n<WCAP ? n++ : WCAP-1;
-        while(at>0 && wPickD[at-1]>d2){ wPickD[at]=wPickD[at-1]; wPick[at]=wPick[at-1];
-          wPos[at*3]=wPos[(at-1)*3]; wPos[at*3+1]=wPos[(at-1)*3+1]; wPos[at*3+2]=wPos[(at-1)*3+2]; at--; }
-        wPickD[at]=d2; wPick[at]=i; wPos[at*3]=_wp[0]; wPos[at*3+1]=_wp[1]; wPos[at*3+2]=_wp[2];
-        worst=wPickD[n-1];
+        for(let a=0;a<3;a++){ const j=i*3+a; wc[j]+=wv[j]*dt;
+          const lo=[x0,y0,z0][a]+oR, hi=[x1,y1,z1][a]-oR;
+          if(wc[j]<lo){ wc[j]=lo; wv[j]=Math.abs(wv[j]); } else if(wc[j]>hi){ wc[j]=hi; wv[j]=-Math.abs(wv[j]); } }
+        const cx=wc[i*3],cy=wc[i*3+1],cz=wc[i*3+2], o=i*16;
+        oI.mb[o+12]=cx; oI.mb[o+13]=cy; oI.mb[o+14]=cz;
+        const oa=(i*2)*16, ob=(i*2+1)*16;
+        hI.mb[oa+12]=cx+wh1[i*3]; hI.mb[oa+13]=cy+wh1[i*3+1]; hI.mb[oa+14]=cz+wh1[i*3+2];
+        hI.mb[ob+12]=cx+wh2[i*3]; hI.mb[ob+13]=cy+wh2[i*3+1]; hI.mb[ob+14]=cz+wh2[i*3+2];
       }
-      for(let k=0;k<n;k++){
-        const i=wPick[k], px=wPos[k*3], py=wPos[k*3+1], pz=wPos[k*3+2];
-        /* Build this molecule's frame from its own two O–H vectors, then map canonical → molecule.
-           Written out in scalars on purpose: nrm/crs/xf all RETURN a fresh 3-element array, and xf ran
-           twice for every lobe — at a few thousand lobes a frame that was ~9000 throwaway arrays per
-           frame of pure GC pressure, in the one observer that already dominates the frame. Same maths,
-           no allocation. */
-        const a1x=wh1[i*3], a1y=wh1[i*3+1], a1z=wh1[i*3+2];
-        const a2x=wh2[i*3], a2y=wh2[i*3+1], a2z=wh2[i*3+2];
-        const ul=Math.hypot(a1x,a1y,a1z)||1e-6, ux=a1x/ul, uy=a1y/ul, uz=a1z/ul;
-        let wx=a1y*a2z-a1z*a2y, wy=a1z*a2x-a1x*a2z, wz=a1x*a2y-a1y*a2x;
-        const wl=Math.hypot(wx,wy,wz)||1e-6; wx/=wl; wy/=wl; wz/=wl;
-        const vx=wy*uz-wz*uy, vy=wz*ux-wx*uz, vz=wx*uy-wy*ux;
-        const r00=ux*cU[0]+vx*cV[0]+wx*cW[0], r01=ux*cU[1]+vx*cV[1]+wx*cW[1], r02=ux*cU[2]+vx*cV[2]+wx*cW[2];
-        const r10=uy*cU[0]+vy*cV[0]+wy*cW[0], r11=uy*cU[1]+vy*cV[1]+wy*cW[1], r12=uy*cU[2]+vy*cV[2]+wy*cW[2];
-        const r20=uz*cU[0]+vz*cV[0]+wz*cW[0], r21=uz*cU[1]+vz*cV[1]+wz*cW[1], r22=uz*cU[2]+vz*cV[2]+wz*cW[2];
-        for(let q=0;q<wCoreN;q++){ const s0=q*16, d0=(k*wCoreN+q)*16;
-          for(let c=0;c<3;c++){ const ax=wOrbCore.m[s0+c*4], ay=wOrbCore.m[s0+c*4+1], az=wOrbCore.m[s0+c*4+2];
-            wCoreM[d0+c*4]  =r00*ax+r01*ay+r02*az;
-            wCoreM[d0+c*4+1]=r10*ax+r11*ay+r12*az;
-            wCoreM[d0+c*4+2]=r20*ax+r21*ay+r22*az; wCoreM[d0+c*4+3]=0; }
-          const mx=wOrbCore.m[s0+12], my=wOrbCore.m[s0+13], mz=wOrbCore.m[s0+14];
-          wCoreM[d0+12]=r00*mx+r01*my+r02*mz+px; wCoreM[d0+13]=r10*mx+r11*my+r12*mz+py;
-          wCoreM[d0+14]=r20*mx+r21*my+r22*mz+pz; wCoreM[d0+15]=1;
-          const ex=wOrbCore.cen[q*3], ey=wOrbCore.cen[q*3+1], ez=wOrbCore.cen[q*3+2], dc=(k*wCoreN+q)*3;
-          wCoreC[dc]  =r00*ex+r01*ey+r02*ez+px; wCoreC[dc+1]=r10*ex+r11*ey+r12*ez+py;
-          wCoreC[dc+2]=r20*ex+r21*ey+r22*ez+pz; }
-        for(let q=0;q<wBondN;q++){ const s0=q*16, d0=(k*wBondN+q)*16;
-          for(let c=0;c<3;c++){ const ax=wOrbBond.m[s0+c*4], ay=wOrbBond.m[s0+c*4+1], az=wOrbBond.m[s0+c*4+2];
-            wBondM[d0+c*4]  =r00*ax+r01*ay+r02*az;
-            wBondM[d0+c*4+1]=r10*ax+r11*ay+r12*az;
-            wBondM[d0+c*4+2]=r20*ax+r21*ay+r22*az; wBondM[d0+c*4+3]=0; }
-          const mx=wOrbBond.m[s0+12], my=wOrbBond.m[s0+13], mz=wOrbBond.m[s0+14];
-          wBondM[d0+12]=r00*mx+r01*my+r02*mz+px; wBondM[d0+13]=r10*mx+r11*my+r12*mz+py;
-          wBondM[d0+14]=r20*mx+r21*my+r22*mz+pz; wBondM[d0+15]=1;
-          const ex=wOrbBond.cen[q*3], ey=wOrbBond.cen[q*3+1], ez=wOrbBond.cen[q*3+2], dc=(k*wBondN+q)*3;
-          wBondC[dc]  =r00*ex+r01*ey+r02*ez+px; wBondC[dc+1]=r10*ex+r11*ey+r12*ez+py;
-          wBondC[dc+2]=r20*ex+r21*ey+r22*ez+pz; }
-      }
-      /* Upload ONLY the slice actually in use. These buffers are sized for the no-cap worst case — every
-         one of the 20000 molecules at once — so thinInstanceBufferUpdated was pushing about 14 MB to the
-         GPU every frame to describe the few hundred molecules that are really in the zone.
-         Guarded, and it falls back to the whole-buffer upload: babylon.js is pulled UNPINNED off the CDN,
-         so the API this depends on is not guaranteed to be there in whatever build a given browser has
-         cached — and a throw in here aborts scene.render() before anything is drawn, which blanks the
-         entire canvas rather than degrading. A slow frame is a far better failure than a black screen. */
-      if(n){
-        if(wPartial){
-          try {
-            wCoreMesh.thinInstancePartialBufferUpdate('matrix', wCoreM.subarray(0, n*wCoreN*16), 0);
-            wCoreMesh.thinInstancePartialBufferUpdate('ocen',   wCoreC.subarray(0, n*wCoreN*3),  0);
-            wBondMesh.thinInstancePartialBufferUpdate('matrix', wBondM.subarray(0, n*wBondN*16), 0);
-            wBondMesh.thinInstancePartialBufferUpdate('ocen',   wBondC.subarray(0, n*wBondN*3),  0);
-          } catch(err){ wPartial = false; console.warn('partial thin-instance upload unavailable, using the full one', err); }
-        }
-        if(!wPartial){ wCoreMesh.thinInstanceBufferUpdated('matrix'); wCoreMesh.thinInstanceBufferUpdated('ocen');
-                       wBondMesh.thinInstanceBufferUpdated('matrix'); wBondMesh.thinInstanceBufferUpdated('ocen'); }
-      }
-      wCoreMesh.thinInstanceCount = n*wCoreN; wBondMesh.thinInstanceCount = n*wBondN;
-      wCoreMesh.setEnabled(n>0); wBondMesh.setEnabled(n>0);
+      oI.mesh.thinInstanceBufferUpdated('matrix'); hI.mesh.thinInstanceBufferUpdated('matrix');
     });
   }
 
@@ -5123,8 +4625,6 @@ async function run(){
   applyGfxMode();   // orbitals are ON by default → push the reveal params (needs REVEAL_DIST) + button label now that it exists
   const zoomEl = document.getElementById('zoomval');
   const camcoordsEl = document.getElementById('camcoords');   // dev-only camera pos/rotation readout
-  let gInstr = null;   // SceneInstrumentation, built on first use — it has a per-frame cost, so dev only
-  let gDraws = 0;      // draw calls, sampled AFTER the frame (the counter is zero before it)
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
     // Safety reset of shared GL state before ANY group renders. The selection stencil-mask mesh
@@ -5151,31 +4651,11 @@ async function run(){
     // Dev: live camera position + rotation readout (top-right). Rotation is alpha/beta (RTS orbit angles, which
     // free mode also keeps current via setTarget); radius + mode shown too.
     if(camcoordsEl){ if(gDev){ const p=cam.position, DEG=180/Math.PI;
-        if(!gInstr){ gInstr = new BABYLON.SceneInstrumentation(scene);
-          gInstr.captureFrameTime = true; gInstr.captureActiveMeshesEvaluationTime = true; gInstr.captureRenderTime = true;
-          scene.onAfterRenderObservable.add(() => { gDraws = gInstr.drawCallsCounter.current; }); }
         camcoordsEl.style.display='block';
-        /* Per-frame profile, so a screenshot says WHERE a slow frame goes rather than only that it is
-           slow. cpu is the whole frame on the main thread, arv is Babylon walking every mesh to decide
-           what is visible, pii is draw submission. If cpu is far above arv+pii the time is in our own
-           observers; if the frame is slow while Mpx is small it is not fill rate at all. Counters read
-           garbage until a full second has passed, so non-finite prints as a dash. */
-        const eng2 = scene.getEngine(), rw2 = eng2.getRenderWidth(), rh2 = eng2.getRenderHeight();
-        const ms = c => { const v = c.lastSecAverage; return (isFinite(v) && v >= 0) ? v.toFixed(1) : '–'; };
-        camcoordsEl.innerHTML = Math.round(eng2.getFps())+' fps  ·  cpu '+(gInstr?ms(gInstr.frameTimeCounter):'–')+' ms'
-          + (gInstr ? '<br>arv '+ms(gInstr.activeMeshesEvaluationTimeCounter)+'  ·  pii '+ms(gInstr.renderTimeCounter)
-                    + '<br>'+gDraws+' piirtoa'
-                    + '<br>'+scene.getActiveMeshes().length+'/'+scene.meshes.length+' meshiä'
-                    + '<br>'+rw2+'×'+rh2+'  '+((rw2*rh2)/1e6).toFixed(2)+' Mpx'
-                    + '<br>hsl '+eng2.getHardwareScalingLevel().toFixed(2) : '')
+        camcoordsEl.innerHTML = Math.round(scene.getEngine().getFps())+' fps'
           +'<br>sij. '+p.x.toFixed(0)+', '+p.y.toFixed(0)+', '+p.z.toFixed(0)
           +'<br>α '+(cam.alpha*DEG).toFixed(1)+'°  β '+(cam.beta*DEG).toFixed(1)+'°'
-          +'<br>et. '+Math.abs(cam.radius).toFixed(0);
-        // Drop the dev slider panel below this readout — both are pinned right:16px, so the panel's own
-        // top ran straight through it. Measured AFTER the text above is in place (an empty readout has
-        // almost no height) and only once per dev-mode enable, never every frame.
-        if(gDevPanelEl && !gDevTopSet){ const r = camcoordsEl.getBoundingClientRect();
-          if(r.height > 20){ gDevPanelEl.style.top = Math.round(r.bottom + 10) + 'px'; gDevTopSet = true; } } }
+          +'<br>et. '+Math.abs(cam.radius).toFixed(0); }
       else camcoordsEl.style.display='none'; }
     if(gMacroSel && !wholeInView()) deselectMacro();   // zoomed back in → drop the macromolecule selection, atoms become selectable
 
@@ -5284,12 +4764,10 @@ async function run(){
       const want = (dx*dx+dy*dy+dz*dz) < reach*reach;
       if(rc.on !== want){ rc.on = want; for(const m of rc.meshes) m.setEnabled(want); }
     }
-    /* 12 fps sustained for 90 frames meant anything between 13 and 40 — every case that actually feels
-       laggy — never backed off at all and simply stayed slow forever. */
-    if(engine.getFps() < 45){
-      if(++lowFrames > 40){ lowFrames = 0;
+    if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
+      if(++lowFrames > 90){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
-        if(cur < SS_MAX) engine.setHardwareScalingLevel(Math.min(cur + 0.12, SS_MAX));
+        if(cur < 1.0) engine.setHardwareScalingLevel(Math.min(cur + 0.15, 1.0));
       }
     } else lowFrames = 0;
   });
@@ -5300,24 +4778,18 @@ async function run(){
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
   const mkOutlineMat = (nm, col, rimLo, rimHi, rimW) => {
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
-      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth','selDelta','glowAmt']
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth']
     });
     mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi); mat.setFloat('rimW', rimW || 2.6); mat.setFloat('solidDepth', 0.0);
-    mat.setVector3('selDelta', BABYLON.Vector3.Zero());
     mat.alpha = 0.999; mat.backFaceCulling = true; mat.needDepthPrePass = false;   // cull backs → ONE contour per lobe (not a front+back pair)
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
-    mat.glow = 0;   // >0 → the stroke gets a soft halo that breathes (set on the selection materials only)
-    mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(!eff) return; eff.setFloat('uT', gWaveT);
-      eff.setFloat('glowAmt', mat.glow ? mat.glow*(0.72 + 0.28*Math.sin(performance.now()*0.0021)) : 0); });   // shake with the orbitals, breathe with the glow
+    mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
     return mat;
   };
   const SAGE = new BABYLON.Color3(0.60,0.72,0.53);                                              // muted sage green — the one selection colour, everywhere
   const hlMat  = mkOutlineMat('hlMat',  new BABYLON.Color3(1,1,1), 0.85, 0.66, 2.6);            // hover = thin white, hugs the lobe edge
   const selMat = mkOutlineMat('selMat', new BABYLON.Color3(0.11, 0.48, 0.16), 0.85, 0.66, 8.0);   // cofactor selection outline (etcSelOut) = clear green
-  // Atom selection = the SAME bright green as the protein/cofactor ring the seloutline pass draws
-  // (0.16, 1.0, 0.34). The old 0.05/0.30/0.08 was so dark it read as a black stroke.
-  const flashMat = mkOutlineMat('flashMat', new BABYLON.Color3(0.16,1.0,0.34), 0.80, 0.66, 12.0);   // atom selection: thick green, glowing
-  flashMat.glow = 0.55;
+  const flashMat = mkOutlineMat('flashMat', new BABYLON.Color3(0.05,0.30,0.08), 0.80, 0.66, 12.0);   // atom-select FLASH: thick dark green
   // Cofactor (whole-molecule) outlines stay rim-only; a separate depth-only MASK (see etcSelMask below)
   // makes them show only the molecule's OUTER silhouette, never the interior atoms' rims.
   const hlMatMol = mkOutlineMat('hlMatMol', new BABYLON.Color3(1,1,1), 0.85, 0.66, 6.0);   // cofactor HOVER outline = white
@@ -5402,17 +4874,13 @@ async function run(){
   selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
-  const _selD = new BABYLON.Vector3();
-  // fillOutline moves the lobes from the atom's baked spot to where it renders. Hand that same shift to
-  // the shaders so they can undo it before sampling the shake, which is what keeps the outline and the
-  // mask locked to the orbitals instead of wobbling off them.
-  const outlineDelta = (atom, out) => { const w = atom.world;
-    if(w) out.set(w.x - atom.center.x, w.y - atom.center.y, w.z - atom.center.z); else out.setAll(0);
-    return out; };
+  const _selMX = new BABYLON.Matrix(), _selLo = new BABYLON.Matrix(), _selTmp = new BABYLON.Matrix();
   const setSelOut = atom => {
     const n = fillOutline(selOutBuf, atom);
-    outlineDelta(atom, _selD);
-    flashMat.setVector3('selDelta', _selD); focusMat.setVector3('selDelta', _selD); maskMat.setVector3('selDelta', _selD);
+    if(!atom.spawn){                                            // fillOutline builds the lobes in the atom's BAKED frame; the orbitals render through gModelXform (flattened to the floor). Flatten the lobes the same way so the outline hugs the orbitals instead of sitting at the un-flattened position.
+      BABYLON.Matrix.FromArrayToRef(gModelXform, modelOf(atom.center.x, atom.center.y, atom.center.z)*16, _selMX);
+      for(let i=0;i<n;i++){ BABYLON.Matrix.FromArrayToRef(selOutBuf, i*16, _selLo); _selLo.multiplyToRef(_selMX, _selTmp); _selTmp.copyToArray(selOutBuf, i*16); }
+    }
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
@@ -5427,11 +4895,11 @@ async function run(){
   const flashOutline = () => {
     clearTimeout(flashTimer);
     selOut.material = flashMat;
-    const seq = [true,false,true,false,true];   // three on-flashes, then it STAYS on
+    const seq = [true,false,true,false,true,false];   // three on-flashes
     let i = 0;
     const tick = () => { selOut.setEnabled(seq[i]); i++;
       if(i < seq.length) flashTimer = setTimeout(tick, 175);
-      else { selOut.setEnabled(true); flashTimer = null; } };   // the green glow marks the selection for as long as it lasts
+      else { selOut.setEnabled(false); flashTimer = null; } };
     tick();
   };
 
@@ -5440,8 +4908,7 @@ async function run(){
      frontmost surface. Where another atom sits in front, the mask fails depth and the stencil
      stays 0, so the nucleus (drawn next, gated on stencil==1) is hidden there. */
   const maskMat = new BABYLON.ShaderMaterial('maskMat', scene, 'mask', {
-    attributes: ['position','world0','world1','world2','world3'], uniforms: ['view','projection','uT','selDelta'] });
-  maskMat.setVector3('selDelta', BABYLON.Vector3.Zero());
+    attributes: ['position','world0','world1','world2','world3'], uniforms: ['view','projection','uT'] });
   maskMat.backFaceCulling = true; maskMat.disableDepthWrite = true;   // test against scene depth, don't overwrite it
   maskMat.onBindObservable.add(() => { const eff=maskMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
   const selMask = BABYLON.MeshBuilder.CreateSphere('selMask', {diameter:1, segments:8}, scene);
@@ -5846,40 +5313,17 @@ async function run(){
     + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;bottom:246px;max-height:none;overflow-y:auto;';
   // Camera feel: max fly speed (arrow keys) and max turn rate (WASD). Both ease 0 → max over 1 s.
   const mvRow = document.createElement('div');
-  mvRow.innerHTML = 'panorointinopeus: <b id="dev-mv-val">1.00×</b>';
+  mvRow.innerHTML = 'move speed: <b id="dev-mv-val">1.00×</b>';
   const mvSld = document.createElement('input');
   mvSld.type='range'; mvSld.min='5'; mvSld.max='400'; mvSld.value='100'; mvSld.style.cssText='width:100%;cursor:pointer;';
   const mvValEl = mvRow.querySelector('#dev-mv-val');
-  mvSld.oninput = () => { gPanSpeed = +mvSld.value/100; mvValEl.textContent = gPanSpeed.toFixed(2)+'×'; };
-  const zmRow = document.createElement('div');
-  zmRow.innerHTML = 'zoomausnopeus: <b id="dev-zm-val">1.00×</b>';
-  const zmSld = document.createElement('input');
-  zmSld.type='range'; zmSld.min='5'; zmSld.max='400'; zmSld.value='100'; zmSld.style.cssText='width:100%;cursor:pointer;';
-  const zmValEl = zmRow.querySelector('#dev-zm-val');
-  zmSld.oninput = () => { gZoomSpeed = +zmSld.value/100; zmValEl.textContent = gZoomSpeed.toFixed(2)+'×'; };
+  mvSld.oninput = () => { gMoveSpeed = +mvSld.value/100; mvValEl.textContent = gMoveSpeed.toFixed(2)+'×'; };
   const rtRow = document.createElement('div');
-  rtRow.innerHTML = 'kääntymisnopeus: <b id="dev-rt-val">126°/s</b>';
+  rtRow.innerHTML = 'turn speed: <b id="dev-rt-val">126°/s</b>';
   const rtSld = document.createElement('input');
   rtSld.type='range'; rtSld.min='5'; rtSld.max='400'; rtSld.value='100'; rtSld.style.cssText='width:100%;cursor:pointer;';
   const rtValEl = rtRow.querySelector('#dev-rt-val');
   rtSld.oninput = () => { gRotSpeed = 2.2 * (+rtSld.value/100); rtValEl.textContent = Math.round(gRotSpeed*57.3)+'°/s'; };
-  // Colour grade: brightness, saturation, and the two ends of the tonal range independently.
-  const mkGrade = (id, label, min, max, init, fmt, apply) => {
-    const row = document.createElement('div');
-    row.innerHTML = label + ': <b id="dev-'+id+'-val">'+fmt(init)+'</b>';
-    const sld = document.createElement('input');
-    sld.type='range'; sld.min=String(min); sld.max=String(max); sld.value=String(init);
-    sld.style.cssText='width:100%;cursor:pointer;';
-    const val = row.querySelector('#dev-'+id+'-val');
-    sld.oninput = () => { const v = +sld.value; apply(v); val.textContent = fmt(v); };
-    return { row, sld };
-  };
-  const zpG = mkGrade('zp','zoomin kohdistus', 0, 100, 100, v=>v+'%', v=>{ gZoomPull = v/100; });
-  const brG = mkGrade('br','kirkkaus',       20, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
-  const saG = mkGrade('sa','kylläisyys',    0, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
-  const hiG = mkGrade('hi','huippuvalot',  -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
-  const shG = mkGrade('sh','varjot',       -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gSh = v/100; });
-  const bgG = mkGrade('bg','taustan kirkkaus', 0, 300, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBgLevel = v/100; });
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
@@ -5993,14 +5437,13 @@ async function run(){
   const fdSld = document.createElement('input'); fdSld.type='range'; fdSld.min='0'; fdSld.max='100'; fdSld.value='0'; fdSld.style.cssText='width:100%;cursor:pointer;';
   const fdValEl = fdRow.querySelector('#dev-fd-val');
   fdSld.oninput = () => { gFocusDark = +fdSld.value/100; fdValEl.textContent = gFocusDark.toFixed(2); };
-  // Vignette STRENGTH: how dark the screen edges go (0 = off … 1 = black corners). Governs BOTH the
-  // O-hold darkening and the vignette that closes in whenever something is selected.
-  const fvStrRow = document.createElement('div'); fvStrRow.innerHTML = 'vinjetti voimakkuus: <b id="dev-fvs-val">0.55</b>';
+  // F vignette STRENGTH: how dark the screen edges go while F is held (0 = off … 1 = black corners).
+  const fvStrRow = document.createElement('div'); fvStrRow.innerHTML = 'F-vinjetti voimakkuus: <b id="dev-fvs-val">0.55</b>';
   const fvStrSld = document.createElement('input'); fvStrSld.type='range'; fvStrSld.min='0'; fvStrSld.max='100'; fvStrSld.value='55'; fvStrSld.style.cssText='width:100%;cursor:pointer;';
   const fvStrVal = fvStrRow.querySelector('#dev-fvs-val');
   fvStrSld.oninput = () => { gFVigStr = +fvStrSld.value/100; fvStrVal.textContent = gFVigStr.toFixed(2); updateFVig(); };
-  // Vignette REACH: how far the darkening bleeds inward from the edges (% of the radius toward centre).
-  const fvRchRow = document.createElement('div'); fvRchRow.innerHTML = 'vinjetti kantama: <b id="dev-fvr-val">45</b>';
+  // F vignette REACH: how far the darkening bleeds inward from the edges (% of the radius toward centre).
+  const fvRchRow = document.createElement('div'); fvRchRow.innerHTML = 'F-vinjetti kantama: <b id="dev-fvr-val">45</b>';
   const fvRchSld = document.createElement('input'); fvRchSld.type='range'; fvRchSld.min='0'; fvRchSld.max='90'; fvRchSld.value='45'; fvRchSld.style.cssText='width:100%;cursor:pointer;';
   const fvRchVal = fvRchRow.querySelector('#dev-fvr-val');
   fvRchSld.oninput = () => { gFVigReach = +fvRchSld.value; fvRchVal.textContent = String(gFVigReach); updateFVig(); };
@@ -6038,50 +5481,13 @@ async function run(){
   resetBtn.onclick = () => devSliders.forEach((s, i) => { s.value = devDefaults[i]; s.dispatchEvent(new Event('input')); });
   resetRow.appendChild(resetBtn);
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
-  const backRow = document.createElement('div');
-  backRow.innerHTML = 'piirtomoottori: ' + gBackend
-    + '<br><span style="font-weight:normal;opacity:.85">' + gRenderer.slice(0, 70) + '</span>'
-    + (gSoftware ? '<br><b style="color:#a33">OHJELMISTORENDERÖINTI — ei näytönohjainta!</b>' : '');
+  const backRow = document.createElement('div'); backRow.textContent = 'piirtomoottori: ' + gBackend;   // which backend is live (WebGL only)
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
   // Only the crisp-zone slider plus the two read-outs. Every other slider object is still created
   // above (so its startup side-effects, such as the render-scale default, still run) - it is simply
   // not shown any more.
-  devPanel.appendChild(backRow); devPanel.appendChild(czRow); devPanel.appendChild(czSld);
-  devPanel.appendChild(mvRow); devPanel.appendChild(mvSld);
-  devPanel.appendChild(zmRow); devPanel.appendChild(zmSld);
-  devPanel.appendChild(rtRow); devPanel.appendChild(rtSld);
-  devPanel.appendChild(zpG.row); devPanel.appendChild(zpG.sld);
-  devPanel.appendChild(brG.row); devPanel.appendChild(brG.sld);
-  devPanel.appendChild(saG.row); devPanel.appendChild(saG.sld);
-  devPanel.appendChild(hiG.row); devPanel.appendChild(hiG.sld);
-  devPanel.appendChild(shG.row); devPanel.appendChild(shG.sld);
-  devPanel.appendChild(bgG.row); devPanel.appendChild(bgG.sld);   // the background's own level, unaffected by the grade above
-  devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld);   // both vignettes (F-hold and selection)
-  devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld);
-  // Every slider gets its own little restore button on its right-hand end — one click puts THAT one
-  // control back to the value it opened with (and re-fires its oninput, so the scene follows).
-  // Done in one sweep after the panel is filled, so a slider added later is covered automatically.
-  for(const sld of [...devPanel.querySelectorAll('input[type=range]')]){
-    const def = sld.value;
-    const line = document.createElement('div');
-    line.style.cssText = 'display:flex;align-items:center;gap:6px;';
-    sld.parentNode.insertBefore(line, sld);
-    sld.style.width = 'auto'; sld.style.flex = '1 1 auto'; sld.style.minWidth = '0';
-    line.appendChild(sld);
-    const rb = document.createElement('button'); rb.textContent = '⟲'; rb.title = 'palauta oletus';
-    rb.style.cssText = 'flex:0 0 auto;width:21px;height:19px;padding:0;line-height:1;cursor:pointer;'
-      + 'font:12px ui-monospace,monospace;color:var(--brown);background:var(--paper);'
-      + 'border:1.5px solid var(--brown);border-radius:5px;';
-    rb.onclick = () => { sld.value = def; sld.dispatchEvent(new Event('input')); };
-    line.appendChild(rb);
-  }
-  devPanel.appendChild(camRow);
+  devPanel.appendChild(backRow); devPanel.appendChild(czRow); devPanel.appendChild(czSld); devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
-  // The camera readout (#camcoords) is pinned to the same right:16px as this panel, so its fixed top of
-  // 56px ran the sliders straight through the readout. The render loop measures the readout and drops
-  // this panel below it — done there because the readout only gets a box once dev mode paints a frame.
-  gDevPanelEl = devPanel;   // the render loop drops its top below the camera readout once that has a box
-
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
     if(!gDev) return;
     const p = cam.position, t = cam.getTarget();
@@ -6099,16 +5505,11 @@ async function run(){
   });
   // Turning dev mode OFF drops any live complex selection and hides every dev label + the dev panel.
   applyDevMode = () => { devPanel.style.display = gDev ? 'flex' : 'none';
-    gDevTopSet = false;   // re-measure the readout next frame (its height can differ between sessions)
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
     { const rf = scene.getMeshByName('rtsFloor'); if(rf) rf.setEnabled(gDev); }   // light-green floor sheet → dev-only
     if(gCollViz) gCollViz.setEnabled(COLL_VIZ && (gDev || gCollVizHold));   // wireframe collision spheres (also on while V is held)
-    { const mm = document.getElementById('rts-minimap'); if(mm) mm.style.display = gDev ? '' : 'none';
-      const slot = document.getElementById('sc2-minimap-slot'); if(slot) slot.style.display = gDev ? '' : 'none'; }   // minimap AND its frame → dev-only
-    { const et = document.getElementById('eltable'); if(et) et.style.display = gDev ? '' : 'none';
-      const es = document.getElementById('sc2-elements-slot'); if(es) es.style.display = gDev ? '' : 'none'; }   // element/spawn panel → dev-only
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
@@ -6186,7 +5587,6 @@ async function run(){
   const COF_CID = { 7: 156620228 };                                    // 7 = chlorophyll a (PubChem link + skeletal fallback)
   const showEtcSel = gi => {
     etcSel = gi;
-    cancelSelFocus();   // a cofactor pick does its own framing (focusAlongMembrane below)
     if(gi >= 0 && (gSel.size || gSelMol.size)){ gSel.clear(); gSelMol.clear(); updateSelectionUI(); }   // picking a cofactor drops any protein/molecule RTS selection, so the thick green silhouette (driven by gSel) stops wrapping the HOST PROTEIN and the cofactor's own green outline is what shows
     if(updateCofInfo) updateCofInfo(gi);                       // fill / hide the cofactor info panel
     if(gi < 0 || !etcGroupPos){ modelLabel.style.display='none'; return; }
@@ -6334,7 +5734,6 @@ async function run(){
   // Hover outline — identical geometry to the selection outline (orbital + bonding lobes).
   const setHL = atom => {
     const n = fillOutline(hlBuf, atom, false);   // hover always outlines the whole atom, even when an orbital is isolated
-    hlMat.setVector3('selDelta', outlineDelta(atom, _selD));   // same phase as the orbitals it traces
     hl.thinInstanceSetBuffer('matrix', hlBuf, 16, true);
     hl.thinInstanceCount = n;
     hl.setEnabled(true);
@@ -6474,7 +5873,6 @@ async function run(){
   // Add / toggle a spawned molecule into the selection (plain tap replaces, Shift-tap toggles).
   const selectMolecule = (mol, add) => { if(!add){ gSel.clear(); gSelMol.clear(); }   // a fresh molecule pick drops the protein selection too
     if(gSelMol.has(mol)) gSelMol.delete(mol); else gSelMol.add(mol);
-    if(!add && gSelMol.has(mol)) focusOnSelection(mol.cx, mol.cy, FLOOR_Z);   // centre the camera on it, gently
     updateSelectionUI(); };
   let dragAtom = -1;   // index of the spawned atom being left-dragged (or -1)
   // Move a dragged spawned atom to where the cursor ray meets the z-plane.
@@ -7171,18 +6569,13 @@ async function run(){
       s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:'+(pad||'8px 12px')+';overflow:hidden;pointer-events:auto;'
         + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
     const left = sect(0,'auto','5px'), center = document.createElement('div'), right = sect(0,'auto'); center.id = 'sc2-center';
-    left.id = 'sc2-minimap-slot';   // the minimap's frame - hidden with it, else an empty panel is left behind
-    right.id = 'sc2-elements-slot';  // same for the element/spawn panel
     center.style.cssText = 'flex:1 0 0;pointer-events:none;';   // info module moved to the RIGHT (above the spawn module) → the centre is now a transparent spacer keeping minimap left / spawn right
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
     // ── Info module: relocated to the RIGHT, stacked directly ABOVE the spawn (element) module, vertical,
     //    matched to its width. Holds the selection / atom / protein / cofactor cards (one visible at a time).
     gInfoRight = document.createElement('div'); gInfoRight.id = 'info-right';
-    // The card EXPANDS to fit all of its content rather than scrolling inside a 66vh box — it is allowed
-    // to run down over the console (see the sync below), and only falls back to scrolling if it is taller
-    // than the whole window.
-    gInfoRight.style.cssText = 'position:fixed;right:12px;bottom:calc(25vh + 16px);width:300px;max-height:calc(100vh - 24px);z-index:11;box-sizing:border-box;'
+    gInfoRight.style.cssText = 'position:fixed;right:12px;bottom:calc(25vh + 16px);width:300px;max-height:66vh;z-index:11;box-sizing:border-box;'
       + 'display:none;flex-direction:column;align-items:stretch;gap:8px;padding:11px 12px;overflow:auto;'
       + 'font-family:"Courier New",monospace;color:var(--ink);background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);pointer-events:auto;';
     document.body.appendChild(gInfoRight);
@@ -7221,10 +6614,9 @@ async function run(){
     gear.innerHTML = '<span style="font-size:17px">⚙️</span>';
     gear.style.cssText = 'position:fixed;left:16px;top:12px;z-index:15;' + btnCss;
     const menu = document.createElement('div'); menu.id = 'settings-menu';
-    menu.style.cssText = 'position:fixed;left:16px;top:112px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';   // clears the gear AND the fullscreen button below it
+    menu.style.cssText = 'position:fixed;left:16px;top:60px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';
     document.body.appendChild(gear); document.body.appendChild(menu);
-    for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn',
-                     'memcut-btn','memonly-btn','outline-btn','particles-btn','vr-btn']){   // vr-btn too — it stays hidden until a headset is found
+    for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn']){
       const b = document.getElementById(id); if(!b) continue;
       b.style.position = 'static'; b.style.left = 'auto'; b.style.top = 'auto'; menu.appendChild(b);   // static → they stack in the menu
     }
@@ -7235,8 +6627,7 @@ async function run(){
 
   // ── Fullscreen toggle (top-right) ──
   { const fs = document.createElement('button'); fs.id = 'fs-btn'; fs.title = 'Koko näyttö';
-    // Under the gear, not opposite it — every chrome button lives in one vertical stack at top-left.
-    fs.style.cssText = 'position:fixed;top:62px;left:16px;z-index:15;font-family:"Courier New",monospace;font-size:18px;line-height:1;'
+    fs.style.cssText = 'position:fixed;top:12px;right:16px;z-index:15;font-family:"Courier New",monospace;font-size:18px;line-height:1;'
       + 'color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;box-shadow:0 4px 0 var(--brown);padding:6px 12px;user-select:none';
     const D = document, root = D.documentElement;
     const isFs = () => D.fullscreenElement || D.webkitFullscreenElement;
@@ -7400,12 +6791,7 @@ async function run(){
   const buildOrb = atom => {
     const e = atom.e, col = info(e).c;
     const n = fillOutline(prevOrbBuf, atom, false);            // every lobe (ignore any orbital-isolate)
-    // Centre on where the lobes ACTUALLY are. fillOutline hands them back at the atom's render position,
-    // so subtracting the baked centre instead left the whole cloud sitting `world - center` off the
-    // origin — up to 135 units for a flattened model. maxR then framed that offset rather than the atom
-    // and the render came out a speck in the middle of an empty canvas.
-    const rc = atom.world || atom.center;
-    const cx=rc.x, cy=rc.y, cz=rc.z;
+    const cx=atom.center.x, cy=atom.center.y, cz=atom.center.z;
     const oc = new Float32Array(n*3), cen = new Float32Array(n*3), oid = new Float32Array(n);
     let maxR = 0.6;
     for(let i=0;i<n;i++){ const o=i*16;
@@ -7531,11 +6917,7 @@ async function run(){
     gInfoRight.appendChild(cofInfoPanel);
     // Show the info module frame only while one of its cards is visible; hide it (no empty box) otherwise.
     const cards = [selPanel, document.getElementById('center-atom'), document.getElementById('center-protein'), cofInfoPanel].filter(Boolean);
-    const sync = () => { let any=false; for(const el of cards){ const d=el.style.display; if(d && d!=='none'){ any=true; break; } } gInfoRight.style.display = any ? 'flex' : 'none';
-      if(!any) return;
-      // Taller than the room above the console → slide it down over the console so the whole card shows.
-      requestAnimationFrame(() => { const room = window.innerHeight*0.75 - 28;
-        gInfoRight.style.bottom = (gInfoRight.scrollHeight > room) ? '12px' : 'calc(25vh + 16px)'; }); };
+    const sync = () => { let any=false; for(const el of cards){ const d=el.style.display; if(d && d!=='none'){ any=true; break; } } gInfoRight.style.display = any ? 'flex' : 'none'; };
     const mo = new MutationObserver(sync); for(const el of cards) mo.observe(el, {attributes:true, attributeFilter:['style']}); sync(); }
 
   // 3D image: the cofactor's atoms as vdW spheres, centred at the origin, drawn by the preview camera.
@@ -7807,14 +7189,12 @@ async function run(){
     const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
     nucViz.style.cssText = 'width:82px;height:82px;flex:0 0 auto;';
     const Nn = Math.max(0, info(e).n - Z);
-    // Finnish partitive only from two up - one proton is "1 protoni", not "1 protonia". nowrap + auto
-    // basis so the count and the word stay on ONE line instead of the narrow column breaking them apart.
-    const protonLbl = document.createElement('div'); protonLbl.textContent = Z + (Z === 1 ? ' protoni' : ' protonia');
-    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:0 0 auto;white-space:nowrap;';
-    const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + (Nn === 1 ? ' neutroni' : ' neutronia') : '';   // hide neutrons when there are none (H)
-    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:0 0 auto;white-space:nowrap;';
+    const protonLbl = document.createElement('div'); protonLbl.textContent = Z + ' protonia';
+    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:1 1 0;';
+    const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + ' neutronia' : '';   // hide neutrons when there are none (H)
+    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:1 1 0;';
     const nucRow = document.createElement('div');
-    nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:2px;flex:0 0 auto;';
+    nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:12px;width:100%;margin-top:2px;flex:0 0 auto;';
     nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
     // Vertical stack in the narrow right-side info module: name → 3D orbital render → orbital table → nucleus row.
     grid.style.margin = '0 auto';   // centre the table in the column
@@ -7843,7 +7223,6 @@ async function run(){
     modelLabel.style.display = 'none'; highlightModel(-1); };
   const centerOnAtom = (a) => {
     if(!a) a = pickAtom(); if(!a) return;
-    cancelSelFocus();   // this double-click's first click queued a swing onto the protein — drop it
     const w = a.world || a.center;  // WORLD (rendered) position — selCenter matches the flattened vWCen, and the camera swivels to where the atom actually is
     selCenter.copyFrom(w);          // marks the selected atom (shader compares this to the flattened atom centre)
     orbitCenter.copyFrom(w);        // …and becomes the camera pivot
@@ -7888,18 +7267,6 @@ async function run(){
     gRevealOn = gEtc && etcGroups.length ? 1 : 0;
     const _eng = scene.getEngine();
     gCofTexel.set(1/_eng.getRenderWidth(), 1/_eng.getRenderHeight());   // align depth-buffer sampling (also survives resize)
-    /* Keep the offscreen masks in step with the main framebuffer. They are sized from getRenderWidth at
-       CREATION and never resized, so the moment the adaptive backoff dropped the resolution to save the
-       GPU they carried on at their original size — measured 1311×1371 apiece against a 546×571 frame.
-       That is 1.80 Mpx each versus 0.31, so ~92% of the render-target cost sat in the two buffers the
-       backoff could not touch, which is exactly why lowering the resolution changed nothing. */
-    { const rw = _eng.getRenderWidth(), rh = _eng.getRenderHeight();
-      if(rw !== _rtW || rh !== _rtH){ _rtW = rw; _rtH = rh;
-        const fit = (rt, f) => { if(!rt) return;
-          const w = Math.max(2, Math.ceil(rw*f)), h = Math.max(2, Math.ceil(rh*f)), sz = rt.getSize();
-          if(sz.width !== w || sz.height !== h) rt.resize({width:w, height:h}); };
-        fit(cofDepthRT, 0.34); fit(cofMaskRT, 1); fit(gSelMaskRT, 1);
-      } }
     if(gCofDisc) gCofDisc.setEnabled(gRevealOn > 0.5);                  // only run the depth pass while active
     /* Skip an off-screen pass ENTIRELY when nothing needs it. Leaving a render target in
        customRenderTargets still binds and clears a full-resolution buffer every frame even when its
@@ -7964,8 +7331,7 @@ async function run(){
     }
   });
 
-  // The bar used to be filled right here, with most of the build still to come. It is driven by setBar
-  // and its own creep clock now, and only ever reaches the end at "Valmis".
+  if(barEl){ barEl.style.transition = 'transform 0.25s ease-out'; barEl.style.transform = 'scaleX(1)'; }
   // NOTE: the loading screen is dismissed AFTER the shader pre-compile pass below, once the whole
   // post-process chain exists — see "Esikäännetään varjostimia" near the end of setup.
 
@@ -7983,10 +7349,9 @@ async function run(){
     eff.setFloat('cofW', gOutlines ? Math.max(0.6, Math.min(6.0, cofw)) : 0.0);   // width 0 → the edge detector samples one texel → no line
     if(cofMaskRT) eff.setTexture('cofMask', cofMaskRT);
   };
-  let _rtW = 0, _rtH = 0;   // last framebuffer size the offscreen masks were fitted to
   let _ppOn = true;   // are the two outline passes currently attached to the camera?
   // RTS selection → a thick GREEN outline traced around the selected complexes (from the selMask coverage).
-  const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn','glowT'], ['selMask'], 1.0, cam);
+  const selOutline = new BABYLON.PostProcess('seloutline', 'seloutline', ['texel','owidth','selOn'], ['selMask'], 1.0, cam);
   selOutline.onApply = eff => {
     eff.setFloat2('texel', 1/engine.getRenderWidth(), 1/engine.getRenderHeight());
     // Width scales with zoom EXACTLY like the black cofactor/protein outline (a FIXED world size, and the
@@ -7996,7 +7361,6 @@ async function run(){
     const pxPerWorld = engine.getRenderHeight() / (2*dist*Math.tan(cam.fov/2));
     const w = (20.0*NUCLEON_R) * pxPerWorld * (gCofLineW/2.2);   // THICK green ring (was 14) → clearly bolder than the narrow black
     eff.setFloat('owidth', Math.max(1.5, Math.min(22.0, w)));
-    eff.setFloat('glowT', performance.now()*0.001);
     eff.setFloat('selOn', (gOutlines && (gSel.size || etcSel >= 0)) ? 1.0 : 0.0);   // green silhouette shows for a protein selection OR a selected cofactor (the mask is fed the cofactor's atoms in rebuildSelMask)
     if(gSelMaskRT) eff.setTexture('selMask', gSelMaskRT);
   };
@@ -8005,14 +7369,9 @@ async function run(){
   // FXAA + supersampling still smooth the edges.
   new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);
   // Global brightness (dev "lighting" slider) — a simple per-pixel multiply on the finished frame.
-  /* Colour grade, back BEFORE the painterly pass — where it sat until it was moved to run last.
-     Running it last graded the finished frame, which reads better, but the grade is one of the things
-     being ruled out as the cause of a black screen, so it goes back to the position it had when the
-     scene was known good. At neutral slider values this pass is an identity either way. */
-  const brightPP = new BABYLON.PostProcess('bright', 'bright', ['bright','contrast','sat','hi','sh'], null, 1.0, cam);
+  const brightPP = new BABYLON.PostProcess('bright', 'bright', ['bright','contrast'], null, 1.0, cam);
   brightPP.onApply = eff => { eff.setFloat('bright', gBright);
-    eff.setFloat('contrast', 1.0 + Math.max(0.0, 1.0 - gBright) * 1.2);   // dimmer → punchier (no wash-out)
-    eff.setFloat('sat', gSat); eff.setFloat('hi', gHi); eff.setFloat('sh', gSh); };
+    eff.setFloat('contrast', 1.0 + Math.max(0.0, 1.0 - gBright) * 1.2); };   // dimmer → punchier (no wash-out)
   // Painterly / comic-book grade — runs last, over the anti-aliased frame. Toggle with "P".
   let painterlyOn = true;
   const painterly = new BABYLON.PostProcess('painterly', 'painterly',
@@ -8071,17 +7430,11 @@ void main(void){
   { const st = document.createElement('style');
     st.textContent = 'html.cursor-idle, html.cursor-idle *{cursor:none!important}';
     document.head.appendChild(st);
-    let idleTimer = null, fsTimer = null;
-    // the floating chrome that steps aside when the mouse is still
-    const chrome = () => ['fs-btn','settings-btn','speedbox'].map(i=>document.getElementById(i)).filter(Boolean);
+    let idleTimer = null;
     const wake = () => {
       document.documentElement.classList.remove('cursor-idle');
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => document.documentElement.classList.add('cursor-idle'), 10000);
-      // the fullscreen button gets out of the way sooner than the cursor does
-      for(const el of chrome()){ el.style.transition='opacity .35s ease'; el.style.opacity='1'; el.style.pointerEvents='auto'; }
-      clearTimeout(fsTimer);
-      fsTimer = setTimeout(() => { for(const el of chrome()){ el.style.opacity='0'; el.style.pointerEvents='none'; } }, 3000);
     };
     // POINTER activity only — deliberately NOT keydown. Flying with WASD/arrows leaves the mouse still,
     // and that is exactly when the cursor should get out of the way.
@@ -8091,57 +7444,39 @@ void main(void){
   window.addEventListener('keydown', e => {
     if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;   // don't hijack typing in dev inputs
     const k = e.key;
-    if(k === 'k' || k === 'K'){   // was P - P now rolls the camera
+    if(k === 'p' || k === 'P'){
       painterlyOn = !painterlyOn;
       if(painterlyOn) cam.attachPostProcess(painterly); else cam.detachPostProcess(painterly);
     }
-    else if(k === 'i' || k === 'I'){ resetView(); }                                     // I → default starting view (R now tilts)
+    else if(k === 'r' || k === 'R'){ resetView(); }                                     // R → default starting view
     else if(k === 'h' || k === 'H'){ document.documentElement.classList.toggle('ui-hidden'); }   // H → hide/show all UI
-    else if(k === 'o' || k === 'O'){ gFocusDim = true; }                                 // O held → spotlight the selection (F now tilts)
+    else if(k === 'f' || k === 'F'){ gFocusDim = true; }                                 // F held → spotlight the selection
     else if(k === 'm' || k === 'M'){ const sp = 85;   // M → cancel any move order and (re)start drifting off along the STORED heading (random the first time)
       for(const m of gSelMol){ m.mtx = undefined; if(m.svx === undefined){ m.svx = rnd()*sp; m.svy = rnd()*sp; m.sav = rnd()*0.7; }
         m.vx = m.svx; m.vy = m.svy; m.av = m.sav; } }
-    // X, not S: S is already a camera key (W/S fly up and down), so every stop order also dropped the
-    // camera. M starts the selected molecules moving, X stops them.
-    else if(k === 'x' || k === 'X'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
-        m.mtx = undefined; m.vx = 0; m.vy = 0; m.av = 0; } }   // X → cancel the move order + stop, but keep the stored heading so M resumes the SAME direction
+    else if(k === 's' || k === 'S'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
+        m.mtx = undefined; m.vx = 0; m.vy = 0; m.av = 0; } }   // S → cancel the move order + stop, but keep the stored heading so M resumes the SAME direction
     else if(k === 'v' || k === 'V'){ gCollVizHold = true; if(COLL_VIZ && gCollViz){ gCollViz.setEnabled(true); if(gCollVizUpdate) gCollVizUpdate(); } }   // V held → reveal the collision spheres
   });
-  window.addEventListener('keyup', e => { if(e.key === 'o' || e.key === 'O') gFocusDim = false;
-    // V released → back to the dev-mode state. This used to be setEnabled(gDev), which ignored
-    // COLL_VIZ — the one place in the file that did. COLL_VIZ has been false since "collision shapes
-    // off", but pressing and releasing V while dev mode was on switched the collision spheres ON
-    // anyway, and left them on: a wireframe sphere per ETC group, rendering group 3 with
-    // depthFunction ALWAYS, so every one of them is drawn over the whole scene with no depth
-    // rejection at all, and re-uploaded each frame. V sits right next to the movement keys.
-    if(e.key === 'v' || e.key === 'V'){ gCollVizHold = false;
-      if(gCollViz) gCollViz.setEnabled(COLL_VIZ && gDev); } });
+  window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false;
+    if(e.key === 'v' || e.key === 'V'){ gCollVizHold = false; if(gCollViz) gCollViz.setEnabled(gDev); } });   // V released → back to the dev-mode state
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
   { const sc = document.createElement('div'); sc.id = 'shortcuts';
     sc.style.cssText = 'position:fixed;left:16px;bottom:calc(25vh + 22px);z-index:14;display:none;'
       + 'font-family:"Courier New",monospace;font-size:11.5px;line-height:1.75;color:var(--ink);background:var(--paper);'
       + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 13px;pointer-events:none;';
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','lähennys'],['Keskinappi + rulla','hidas lähennys'],
-      ['W / S','ylös ja alas'],['A / D','sivuaskel'],['E / Q','lähennä ja loitonna'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
-      ['Minikartan klikkaus','panoroi kohtaan'],['O (pohjassa)','himmennä muut'],['I','oletusnäkymä'],
-      ['H','piilota käyttöliittymä'],['K','maalausefekti'],['R / F','kallista vasemmalle ja oikealle'],['M','valittu molekyyli liikkeelle'],['X','pysäytä molekyylit']];
+      ['Nuolinäppäimet','panoroi'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
+      ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
+      ['H','piilota käyttöliittymä'],['P','maalausefekti'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
       + rows.map(([k,v]) => '<span style="color:var(--brown);font-weight:bold">'+k+'</span> — '+v).join('<br>');
     document.body.appendChild(sc); gShortcuts = sc; }
-  // O: ease the effect and pick WHAT stays coloured. Mode 1 = a point (atom / cofactor) tested by a
+  // F: ease the effect and pick WHAT stays coloured. Mode 1 = a point (atom / cofactor) tested by a
   // view-space centre+radius; mode 2 = a set of whole models (their atoms keep colour → exact silhouette).
   scene.onBeforeRenderObservable.add(() => {
     gFocusDimAmt += ((gFocusDim ? 1 : 0) - gFocusDimAmt) * 0.16;
-    // A selection also pulls the vignette up to full — same gradient, same dev sliders as F, so the
-    // two are tuned together and the stronger of the pair wins.
-    const anySel = !!(selAtom || etcSel >= 0 || gSel.size || gSelMol.size);
-    gSelVigAmt += ((anySel ? 1 : 0) - gSelVigAmt) * 0.09;
-    // Written only when it actually moves. Assigning style.opacity every frame invalidates the layer
-    // even when the value is identical.
-    const vigWant = Math.max(gFocusDimAmt, gSelVigAmt);   // darkening vignette: O held, or a selection
-    if(Math.abs(vigWant - _vigShown) > 0.002){ _vigShown = vigWant;
-      fVig.style.opacity = vigWant.toFixed(3);
-      fVig.style.display = vigWant < 0.004 ? 'none' : 'block'; }
+    fVig.style.opacity = gFocusDimAmt.toFixed(3);   // darkening vignette fades in/out with F
     if(gFocusDimAmt < 0.004){ gFocusDimAmt = 0; gFocusMode = 0; return; }
     gFocusSet.fill(0); gFocusGroup = -1;
     if(etcSel >= 0){ gFocusMode = 3; gFocusGroup = etcSel; }   // a cofactor → keep EXACTLY that cofactor's overlay atoms (by group), grey the rest
@@ -8270,15 +7605,15 @@ void main(void){
      renders in under 3 ms, so the hitching was never the renderer, it was the build competing with it.
      Waiting here is the deliberate trade: a longer load for a scene that is smooth once you are in it. */
   try {
-    if(buildMembrane){ setLbl('Rakennetaan kalvoa…'); setBar(0.55); await buildMembrane(); }
-    if(buildDetail){ setLbl('Rakennetaan atomeja…'); setBar(0.75); await buildDetail(); }
+    if(buildMembrane){ setLbl('Rakennetaan kalvoa…'); setBar(0.80); await buildMembrane(); }
+    if(buildDetail){ setLbl('Rakennetaan atomeja…'); setBar(0.90); await buildDetail(); }
   } catch(err){ console.warn('background build failed:', err); }
 
   /* Now pre-compile everything that exists — including the membrane materials, which did not exist
      earlier. Each distinct material is compiled against a mesh that actually uses it, the far-LOD twins
      explicitly (the culler only assigns those later), then a few real frames are rendered so the
      post-process chain and the render targets compile too. Nothing should have to compile mid-flight. */
-  { setLbl('Esikäännetään varjostimia…'); setBar(0.90);
+  { setLbl('Esikäännetään varjostimia…'); setBar(0.97);
     const seen = new Set();
     for(const m of scene.meshes){
       const mat = m.material;
@@ -8295,16 +7630,13 @@ void main(void){
        actually drawn (its vertex-array and instance-buffer bindings are created then). With thousands of
        cells that lands as a stall the moment a lot of geometry swings into view at once — measured as a
        230 ms frame when pulling back. So draw every mesh once here, then restore what was enabled. */
-    setLbl('Lämmitetään puskureita…'); setBar(0.95);
+    setLbl('Lämmitetään puskureita…');
     const wasOn = scene.meshes.map(m => m.isEnabled());
     for(const m of scene.meshes){ try { m.setEnabled(true); } catch(_){} }
     for(let i=0;i<2;i++){ try { scene.render(); } catch(_){} }
     scene.meshes.forEach((m, i) => { try { m.setEnabled(wasOn[i]); } catch(_){} });
     try { scene.render(); } catch(_){}
   }
-  // Apply the dev-only visibility ONCE now that everything it touches exists (minimap, cheatsheet,
-  // floor sheet, read-outs). It used to run only on toggle, so all of those started out visible.
-  try { applyDevMode(); } catch(_){}
   setBar(1); setLbl('Valmis');
   document.getElementById('overlay').classList.add('gone');
 }
