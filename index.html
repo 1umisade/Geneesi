@@ -749,6 +749,13 @@ void main(void){
   colF *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);
   float rimF = smoothstep(0.86, 1.0, r2);
   colF = mix(colF, vColor * 0.40, rimF);
+#ifdef DEPTHSHADE
+  // The SAME front-to-back darkening the crisp path applies. Leaving it out was the last thing making
+  // the two tiers differ: at the default settings it multiplies colour by as much as 0.55, so crisp
+  // cells came out visibly darker than their cheap neighbours and the cell grid showed as a hard patch.
+  float dtF = clamp((vWCen.z - focalD - startOff) / max(spread, 1.0), 0.0, 1.0);
+  colF *= mix(1.0, depthLo, dtF * depthK);
+#endif
 #ifdef MODELMOVE
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5) colF = mix(colF, selCol, 0.35);   // keep selection readable
 #endif
@@ -3607,20 +3614,24 @@ async function run(){
   };
   const vdwFarMat = mkFar('vdwLODfar',
     ['position','instanceColor','instR','modelId','world0','world1','world2','world3'],
-    ['macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol'],
-    ['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define CHEAP']);
+    ['macroXform','macroCenter','modelXform','modelCol','colorMode','selModel','selCol','focalD','depthK','depthLo','startOff','spread'],
+    ['#define IMPRAD','#define MACROMOVE','#define MODELMOVE','#define CHEAP','#define DEPTHSHADE']);
   vdwFarMat.setFloat('selModel', -1);
   vdwFarMat.onBindObservable.add(()=>{ const eff=vdwFarMat.getEffect(); if(!eff)return;
     eff.setFloat('uT',gWaveT); eff.setMatrices('modelXform', gModelXform); eff.setArray3('modelCol', gModelCol); eff.setFloat('colorMode', gColorMode?1:0);
     eff.setMatrix('macroXform', macroGizmoNode.getWorldMatrix()); eff.setVector3('macroCenter', psiiCenter);
     eff.setFloat('selModel', gSelModel); eff.setColor3('selCol', SAGE);
+    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo);
+    eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread);
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
   const vdwStaticFarMat = mkFar('vdwLODsfar',
     ['position','instanceColor','instR','memAnc','world0','world1','world2','world3'],
-    ['memCut'],
-    ['#define IMPRAD','#define MEMFADE','#define CHEAP']);
+    ['memCut','focalD','depthK','depthLo','startOff','spread'],
+    ['#define IMPRAD','#define MEMFADE','#define CHEAP','#define DEPTHSHADE']);
   vdwStaticFarMat.onBindObservable.add(()=>{ const eff=vdwStaticFarMat.getEffect(); if(!eff)return;
     eff.setFloat('uT',gWaveT); eff.setFloat3('memCut', gCut[0], gCut[1], gCut[2]);
+    eff.setFloat('focalD', gShadePlane); eff.setFloat('depthK', gDepthK); eff.setFloat('depthLo', gDepthLo);
+    eff.setFloat('startOff', gDepthStart); eff.setFloat('spread', gDepthSpread);
     eff.setColor3('fogColor',scene.fogColor); eff.setFloat('fogStart',scene.fogStart); eff.setFloat('fogEnd',scene.fogEnd); });
 
   /* Warm the far shaders up ONCE, on the first frame where a mesh of each kind exists. Without this the
