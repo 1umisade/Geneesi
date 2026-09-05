@@ -665,10 +665,14 @@ void main(void){
   // BOTH the shaken point and the centre — exactly the order the orb shader uses. Doing modelXform first
   // (as before) made the nuclei shake with the flattened Z while the orbitals shook with the original Z,
   // so they waved out of phase and drifted apart. Now the nuclei ride WITH their orbitals.
-  // The thermal shake stays ON outside the crisp zone too - the far tier has to drift and sway exactly
-  // like the near tier, otherwise the quality boundary shows up as a line between moving and frozen
-  // geometry. Only the BOIL hash (three fract/sin per vertex) is dropped out there.
+  // Outside the crisp zone the thermal shake is dropped as well as the boil - three sins per vertex,
+  // times every far atom, for motion nobody can resolve at that size. Far geometry is simply static.
+  // (This is the other half of the visible boundary: far atoms no longer drift with the near ones.)
+#ifdef CHEAP
+  vec3 wc = base;
+#else
   vec3 wc = shake(base);
+#endif
 #ifndef CHEAP
   if(boil > 0.001){ float bt = floor(uT * 7.0);   // stepped clock → jitter jumps ~7x/sec (hand-drawn boil, not smooth)
     float hx = fract(sin(dot(base, vec3(12.9898, 78.233, 37.719)) + bt) * 43758.5453) - 0.5;
@@ -807,23 +811,14 @@ void main(void){
 #ifdef MEMFADE
   if(memCut.z * step(0.0,(vMemAnc - memCut.x)*memCut.y) > 0.5) discard;   // honour the membrane cross-cut
 #endif
-  // Shade with the REAL sphere normal and the same half-lambert the crisp path uses, and ink the same
-  // rim. A flat fake gradient here made the far tier read as noticeably darker and flatter than the
-  // near tier, so the quality boundary showed up as visible patches. One sqrt buys a seamless match.
-  float zcF = sqrt(max(0.0, 1.0 - r2));
-  vec3 nF = vec3(vUV, -zcF);
-  float ndlF = dot(nF, L) * 0.5 + 0.5;
-  vec3 colF = vColor * (0.66 + 0.34 * ndlF);
-  colF *= 1.0 - 0.14 * smoothstep(0.55, 1.0, r2);
-  float rimF = smoothstep(0.86, 1.0, r2);
-  colF = mix(colF, vColor * 0.40, rimF);
-#ifdef DEPTHSHADE
-  // The SAME front-to-back darkening the crisp path applies. Leaving it out was the last thing making
-  // the two tiers differ: at the default settings it multiplies colour by as much as 0.55, so crisp
-  // cells came out visibly darker than their cheap neighbours and the cell grid showed as a hard patch.
-  float dtF = clamp((vWCen.z - focalD - startOff) / max(spread, 1.0), 0.0, 1.0);
-  colF *= mix(1.0, depthLo, dtF * depthK);
-#endif
+  // Deliberately crude. This used to reconstruct the real sphere normal, run the same half-lambert as
+  // the crisp path, ink a rim and apply the depth darkening - all so the two tiers matched seamlessly.
+  // They matched, but the far tier is the majority of the atoms on screen and none of that is legible on
+  // something a couple of pixels wide. So: one cheap linear ramp off vUV.y for a hint of roundness, and
+  // nothing else. No sqrt, no dot, no smoothstep, no rim, no depth ramp.
+  // The trade is real and visible: the crisp/cheap boundary comes BACK as a patch of slightly flatter,
+  // lighter atoms at the edge of the zone. That is the point of the exchange, not a regression.
+  vec3 colF = vColor * (0.74 + 0.26 * (0.5 - vUV.y));
 #ifdef MODELMOVE
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5) colF = mix(colF, selCol, 0.35);   // keep selection readable
 #endif
