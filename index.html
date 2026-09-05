@@ -17,7 +17,10 @@ body.dark-mode{
   --paper:#3a2c1c; --paper2:#2d2113; --brown:#7c5c39; --ink:#f0e2c4;
   --sage:#88a35f; --sage2:#a6bd7d; --sageink:#f1f5e2;
 }
-#overlay{position:absolute;inset:0;z-index:20;display:flex;
+/* fixed, not absolute: absolute resolves inset:0 against the document, and while the canvas is
+   still being sized the document is taller and wider than the window — so the overlay centred
+   itself in that larger box and Mona drifted down to the bottom-right of the visible page. */
+#overlay{position:fixed;inset:0;z-index:20;display:flex;
   align-items:center;justify-content:center;background:#f2e6c9;transition:opacity .8s}
 #overlay.gone{opacity:0;pointer-events:none}
 .ptr{width:280px;height:10px;background:#e7d4ac;border:2.5px solid #4a3320;border-radius:99px;overflow:hidden}
@@ -330,8 +333,13 @@ function codeOf(sybyl){
 }
 
 const setLbl = t => { const e = document.getElementById('load-lbl'); if(e) e.textContent = t; };
+/* Callers pass a MIX of units — the fetch loop sends percent (…*45) while every later step sends a
+   fraction (0.80, 0.90, 0.97, 1). Dividing everything by 100 turned 0.90 into 0.9%, so the bar sat
+   visibly empty through the whole second half of the build and the final setBar(1) filled it to 1%,
+   never to the end. Accept both: anything above 1 is a percent, anything at or below it a fraction. */
 const setBar = v => { const e = document.getElementById('load-bar');
-  if(e) e.style.transform = 'scaleX(' + Math.max(0, Math.min(1, v/100)) + ')'; };
+  const f = Math.max(0, Math.min(1, v > 1 ? v/100 : v));
+  if(e) e.style.transform = 'scaleX(' + f + ')'; };
 const yield_ = () => new Promise(r => setTimeout(r, 0));
 
 /* ── Goodsell-style muted palette, coloured by molecular component ─────── */
