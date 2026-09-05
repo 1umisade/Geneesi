@@ -2175,7 +2175,25 @@ async function run(){
   // WebGL2 engine. WebGPU was removed: the custom impostor / hand-written frag-depth shaders render
   // invisible on WebGPU, so it was never usable here.
   const gBackend = 'WebGL';
-  engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
+  /* powerPreference is the ONLY in-page way to pick the GPU on a hybrid laptop, and it is a real part
+     of the WebGL context-creation spec — Babylon forwards it straight to getContext. This machine has an
+     RTX 4080 sitting next to an Intel UHD, and with nothing pinned, Windows and NVIDIA decide which one
+     the browser gets EACH TIME the browser's GPU process starts, reading the power mode, mains/battery
+     and which display the window is on at that moment. That is why the identical file ran smoothly one
+     day and crawled the next: it was a coin flip, re-tossed at every browser launch, and losing it means
+     a 128 MB shared-memory iGPU doing work meant for a 4080.
+     Asking for high-performance removes the toss from this page's side. It is a hint, not a command — an
+     explicit OS-level preference still outranks it — but with nothing set at OS level, this decides it. */
+  const gGpuPref = (() => { try { return localStorage.getItem('geneesi-gpu') === 'low-power' ? 'low-power' : 'high-performance'; }
+    catch(_){ return 'high-performance'; } })();
+  engine = new BABYLON.Engine(canvas, true, {stencil:true, powerPreference:gGpuPref});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
+  // Read back which card the browser ACTUALLY gave us, so the button can show it rather than claim it.
+  let gRenderer = '?';
+  try { const g = engine._gl, dbg = g.getExtension('WEBGL_debug_renderer_info');
+    gRenderer = String(g.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : g.RENDERER) || '?'); } catch(_){}
+  const gGpuShort = /NVIDIA|RTX|GTX/i.test(gRenderer) ? (gRenderer.match(/RTX\s*\d+\s*\w*|GTX\s*\d+/i) || ['NVIDIA'])[0]
+                  : /Radeon|AMD/i.test(gRenderer) ? 'Radeon'
+                  : /Intel/i.test(gRenderer) ? 'Intel' : 'tuntematon';
   engine.enableOfflineSupport = false;   // perf: skip the .manifest network probe per scene file
   // Supersample: render at higher internal res so the shader-drawn sphere edges /
   // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
@@ -6611,6 +6629,22 @@ async function run(){
     const menu = document.createElement('div'); menu.id = 'settings-menu';
     menu.style.cssText = 'position:fixed;left:16px;top:60px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';
     document.body.appendChild(gear); document.body.appendChild(menu);
+    /* GPU switch. powerPreference is only read when the WebGL context is created, so this cannot flip a
+       live context — it stores the choice and reloads. Worth having as a switch rather than a hard-coded
+       value because the hint is exactly that, a hint: it tells the browser which card to hand this page
+       on a hybrid laptop, and the label shows what it actually GOT so the claim is verifiable. */
+    { const gb = document.createElement('button'); gb.id = 'gpu-btn';
+      gb.title = 'Vaihda näytönohjainta (lataa sivun uudelleen)';
+      gb.style.cssText = btnCss;
+      const paint = () => { gb.innerHTML = '<span style="font-size:15px">🎮</span>GPU: ' + gGpuShort
+        + (gGpuPref === 'low-power' ? ' <span style="opacity:.65">(säästö)</span>' : ''); };
+      paint();
+      gb.addEventListener('click', () => {
+        const next = gGpuPref === 'high-performance' ? 'low-power' : 'high-performance';
+        try { localStorage.setItem('geneesi-gpu', next); } catch(_){}
+        location.reload();   // the only way to re-pick the GPU is a fresh context
+      });
+      menu.appendChild(gb); }
     for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn']){
       const b = document.getElementById(id); if(!b) continue;
       b.style.position = 'static'; b.style.left = 'auto'; b.style.top = 'auto'; menu.appendChild(b);   // static → they stack in the menu
