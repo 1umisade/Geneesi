@@ -8108,7 +8108,14 @@ void main(void){
     else if(k === 'v' || k === 'V'){ gCollVizHold = true; if(COLL_VIZ && gCollViz){ gCollViz.setEnabled(true); if(gCollVizUpdate) gCollVizUpdate(); } }   // V held → reveal the collision spheres
   });
   window.addEventListener('keyup', e => { if(e.key === 'o' || e.key === 'O') gFocusDim = false;
-    if(e.key === 'v' || e.key === 'V'){ gCollVizHold = false; if(gCollViz) gCollViz.setEnabled(gDev); } });   // V released → back to the dev-mode state
+    // V released → back to the dev-mode state. This used to be setEnabled(gDev), which ignored
+    // COLL_VIZ — the one place in the file that did. COLL_VIZ has been false since "collision shapes
+    // off", but pressing and releasing V while dev mode was on switched the collision spheres ON
+    // anyway, and left them on: a wireframe sphere per ETC group, rendering group 3 with
+    // depthFunction ALWAYS, so every one of them is drawn over the whole scene with no depth
+    // rejection at all, and re-uploaded each frame. V sits right next to the movement keys.
+    if(e.key === 'v' || e.key === 'V'){ gCollVizHold = false;
+      if(gCollViz) gCollViz.setEnabled(COLL_VIZ && gDev); } });
   // Keyboard-shortcut cheatsheet — shown only in dev mode (wired in applyDevMode).
   { const sc = document.createElement('div'); sc.id = 'shortcuts';
     sc.style.cssText = 'position:fixed;left:16px;bottom:calc(25vh + 22px);z-index:14;display:none;'
