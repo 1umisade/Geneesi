@@ -649,6 +649,31 @@ float bnc(float x, float lo, float hi){
   float t = mod(x - lo, 2.0*s);
   return lo + (t < s ? t : 2.0*s - t);
 }
+#ifdef NSHELL
+// Protein collision shells. Each is a star-shaped radius field sampled on SH_LAT x SH_LON bearings and
+// packed into shellTex, one SH_LAT-row block per shell. A molecule whose centre lands inside a shell is
+// pushed straight back out to the surface along the bearing it came in on, so it slides around the
+// protein instead of drifting through it. Purely a function of position - no state, nothing uploaded.
+uniform sampler2D shellTex;
+uniform vec3 shellCen[NSHELL];
+uniform mat3 shellRot[NSHELL];
+uniform float shellR2[NSHELL];
+vec3 repelShells(vec3 p){
+  for(int i=0; i<NSHELL; i++){
+    vec3 d = p - shellCen[i];
+    float r2 = dot(d, d);
+    if(r2 >= shellR2[i] || r2 < 1e-8) continue;
+    float r = sqrt(r2);
+    vec3 l = shellRot[i] * d;
+    float li = clamp(floor(acos(clamp(l.z/r, -1.0, 1.0))/3.14159265*(SH_LAT-1.0) + 0.5), 0.0, SH_LAT-1.0);
+    float lo = mod(floor((atan(l.y, l.x) + 3.14159265)/6.28318531*SH_LON), SH_LON);
+    float row = float(i)*SH_LAT + li;
+    float Rs = texture2D(shellTex, vec2((lo + 0.5)/SH_LON, (row + 0.5)/(SH_LAT*float(NSHELL)))).r;
+    if(r < Rs) p += d * (Rs/r - 1.0);
+  }
+  return p;
+}
+#endif
 #endif
 #ifdef MEMFADE
 // Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
@@ -661,11 +686,15 @@ void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec3 base = W[3].xyz;
 #ifdef WATERBOX
-  // The molecule centre flies and bounces, then this atom's rigid offset is added on top - so the whole
-  // molecule is displaced as one body rather than being torn apart.
-  base = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
-              bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
-              bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z)) + W[3].xyz;
+  // Repel the molecule CENTRE, then add this atom's rigid offset - so the whole molecule is displaced as
+  // one body and is not torn apart at a shell surface.
+  vec3 wCen = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
+                   bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
+                   bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z));
+#ifdef NSHELL
+  wCen = repelShells(wCen);
+#endif
+  base = wCen + W[3].xyz;
 #endif
 #ifdef LIPTILE
   base += tileOff;
@@ -4190,6 +4219,152 @@ async function run(){
      dilation pass guarantees the shell never cuts inside an atom it is meant to contain.
      Star-shaped, so a deep concavity is bridged rather than followed — the usual trade for a collision
      proxy, and it stays a closed watertight surface. Dev-only. */
+  const gHulls = [];
+  const SH_LAT = 32, SH_LON = 64;   // ~5.6 deg bearings
+  {
+    const NLAT = SH_LAT, NLON = SH_LON;
+    const hullMat = new BABYLON.StandardMaterial('hullMat', scene);
+    hullMat.wireframe = true; hullMat.disableLighting = true; hullMat.backFaceCulling = false;
+    hullMat.emissiveColor = new BABYLON.Color3(0.25, 0.95, 0.55); hullMat.alpha = 0.55;
+    for(let mi=0; mi<mols.length; mi++){
+      const m = mols[mi];
+      if(!m || !m.na || m === chl) continue;
+      const ox=m.ox||0, oy=m.oy||0, oz=m.oz||0;
+      let cx=0, cy=0, cz=0;
+      for(let k=0;k<m.na;k++){ cx+=m.x[k]; cy+=m.y[k]; cz+=m.z[k]; }
+      cx=cx/m.na+ox; cy=cy/m.na+oy; cz=cz/m.na+oz;
+      const R = new Float32Array(NLAT*NLON);
+      for(let k=0;k<m.na;k++){
+        const dx=m.x[k]+ox-cx, dy=m.y[k]+oy-cy, dz=m.z[k]+oz-cz;
+        const r=Math.hypot(dx,dy,dz); if(r<1e-6) continue;
+        const li=Math.min(NLAT-1, Math.max(0, Math.round(Math.acos(dz/r)/Math.PI*(NLAT-1))));
+        let lo=Math.floor((Math.atan2(dy,dx)+Math.PI)/(2*Math.PI)*NLON) % NLON; if(lo<0) lo+=NLON;
+        const reach = r + info(m.el[k]).vr*FILL_SCALE;
+        const q=li*NLON+lo; if(reach > R[q]) R[q]=reach;
+      }
+      // fill bearings no atom landed on, from whatever neighbours do have a value
+      for(let pass=0; pass<6; pass++){
+        let holes=0;
+        for(let li=0; li<NLAT; li++) for(let lo=0; lo<NLON; lo++){
+          const q=li*NLON+lo; if(R[q]>0) continue;
+          let best=0;
+          for(let dl=-1; dl<=1; dl++) for(let dn=-1; dn<=1; dn++){
+            const a=li+dl; if(a<0||a>=NLAT) continue;
+            const b=((lo+dn)%NLON+NLON)%NLON;
+            const v=R[a*NLON+b]; if(v>best) best=v;
+          }
+          if(best>0) R[q]=best; else holes++;
+        }
+        if(!holes) break;
+      }
+      // Dilate over a 5x5 bearing window. An atom lands in ONE bucket but the surface between buckets
+      // has to clear it too, so each vertex takes the largest reach anywhere nearby - the shell then
+      // contains the atoms instead of cutting between them. Measured 98.2% -> 100% enclosed.
+      const D = new Float32Array(R);
+      for(let li=0; li<NLAT; li++) for(let lo=0; lo<NLON; lo++){
+        let best=0;
+        for(let dl=-2; dl<=2; dl++) for(let dn=-2; dn<=2; dn++){
+          const a=li+dl; if(a<0||a>=NLAT) continue;
+          const b=((lo+dn)%NLON+NLON)%NLON;
+          const v=R[a*NLON+b]; if(v>best) best=v;
+        }
+        D[li*NLON+lo]=best;
+      }
+      // vertices are CENTROID-RELATIVE, so the mesh can simply carry its model's transform
+      const pos=[], idx=[];
+      for(let li=0; li<NLAT; li++){
+        const phi = li/(NLAT-1)*Math.PI, sp=Math.sin(phi), cp=Math.cos(phi);
+        for(let lo=0; lo<=NLON; lo++){
+          const theta = (lo%NLON)/NLON*2*Math.PI - Math.PI, rr = D[li*NLON+(lo%NLON)];
+          pos.push(sp*Math.cos(theta)*rr, sp*Math.sin(theta)*rr, cp*rr);
+        }
+      }
+      const W=NLON+1;
+      for(let li=0; li<NLAT-1; li++) for(let lo=0; lo<NLON; lo++){
+        const a=li*W+lo, b=a+1, c=a+W, d=c+1;
+        idx.push(a,c,b, b,c,d);
+      }
+      const mesh = new BABYLON.Mesh('hull'+mi, scene);
+      const vd = new BABYLON.VertexData(); vd.positions = pos; vd.indices = idx;
+      vd.normals = []; BABYLON.VertexData.ComputeNormals(pos, idx, vd.normals);
+      vd.applyToMesh(mesh);
+      mesh.material = hullMat; mesh.isPickable = false; mesh.alwaysSelectAsActiveMesh = true;
+      mesh.setEnabled(false);
+      let maxR = 0; for(let q=0;q<D.length;q++) if(D[q] > maxR) maxR = D[q];
+      gHulls.push({ mesh, mi, c:new BABYLON.Vector3(cx,cy,cz), D, maxR });
+    }
+    // carry each shell on its model's transform, so a dragged or flattened model keeps its shell
+    const _hp=new BABYLON.Vector3(), _hq=new BABYLON.Quaternion(), _hs=new BABYLON.Vector3(), _hm=new BABYLON.Matrix();
+    scene.onBeforeRenderObservable.add(()=>{
+      if(!gHulls.length || !gHulls[0].mesh.isEnabled()) return;
+      for(const h of gHulls){
+        BABYLON.Matrix.FromArrayToRef(gModelXform, h.mi*16, _hm);
+        _hm.decompose(_hs, _hq, _hp);
+        const c=BABYLON.Vector3.TransformCoordinates(h.c, _hm);
+        h.mesh.position.copyFrom(c);
+        if(!h.mesh.rotationQuaternion) h.mesh.rotationQuaternion = new BABYLON.Quaternion();
+        h.mesh.rotationQuaternion.copyFrom(_hq);
+        h.mesh.scaling.copyFrom(_hs);
+      }
+    });
+  }
+
+  /* ── Free water vs. the protein collision shells ─────────────────────────────────────────────
+     The same star-shaped radius field the dev-mode shells draw is packed into a float texture, one
+     NLAT-row block per shell, and the water vertex shader pushes any molecule whose centre falls
+     inside a shell back out to its surface along the bearing it entered on. It is a pure function of
+     the ballistic position, so it needs no state and no per-frame upload — which is the only way it
+     can run for 20000 molecules — and the JS mirror below reproduces it bit-for-bit so the crisp-zone
+     orbitals stay locked to their own atoms.
+     Being stateless it EXCLUDES rather than bounces: water slides around a protein instead of
+     rebounding off it. A real reflection would need per-molecule velocity state on the CPU. */
+  const NSH = gHulls.length;
+  let gShellTex = null;
+  const gShellCen = new Float32Array(Math.max(1, NSH)*3);    // shell centre in WORLD space
+  const gShellRot = new Float32Array(Math.max(1, NSH)*9);    // world → model rotation (gModelXform is rigid)
+  const gShellR2  = new Float32Array(Math.max(1, NSH));      // furthest reach², for the early-out
+  if(NSH){
+    const tex = new Float32Array(SH_LON * SH_LAT * NSH * 4);
+    for(let s=0;s<NSH;s++){ const D=gHulls[s].D;
+      for(let li=0; li<SH_LAT; li++) for(let lo=0; lo<SH_LON; lo++)
+        tex[((s*SH_LAT + li)*SH_LON + lo)*4] = D[li*SH_LON + lo];
+    }
+    gShellTex = new BABYLON.RawTexture(tex, SH_LON, SH_LAT*NSH, BABYLON.Constants.TEXTUREFORMAT_RGBA,
+      scene, false, false, BABYLON.Texture.NEAREST_SAMPLINGMODE, BABYLON.Constants.TEXTURETYPE_FLOAT);
+    gShellTex.wrapU = gShellTex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+    const _sm = new BABYLON.Matrix(), _si = new BABYLON.Matrix(), _sc = new BABYLON.Vector3();
+    const placeShells = () => {
+      for(let s=0;s<NSH;s++){ const h=gHulls[s];
+        BABYLON.Matrix.FromArrayToRef(gModelXform, h.mi*16, _sm);
+        BABYLON.Vector3.TransformCoordinatesToRef(h.c, _sm, _sc);
+        gShellCen[s*3]=_sc.x; gShellCen[s*3+1]=_sc.y; gShellCen[s*3+2]=_sc.z;
+        _sm.invertToRef(_si); const q=_si.m, o=s*9;
+        gShellRot[o]=q[0]; gShellRot[o+1]=q[1]; gShellRot[o+2]=q[2];
+        gShellRot[o+3]=q[4]; gShellRot[o+4]=q[5]; gShellRot[o+5]=q[6];
+        gShellRot[o+6]=q[8]; gShellRot[o+7]=q[9]; gShellRot[o+8]=q[10];
+        gShellR2[s]=h.maxR*h.maxR;
+      }
+    };
+    placeShells();
+    scene.onBeforeRenderObservable.add(placeShells);   // a dragged or flattened model carries its shell
+  }
+  /* CPU mirror of the shader's repel(): same bearing rounding, same push. Mutates p in place. */
+  const repelShells = p => {
+    for(let s=0;s<NSH;s++){
+      const dx=p[0]-gShellCen[s*3], dy=p[1]-gShellCen[s*3+1], dz=p[2]-gShellCen[s*3+2];
+      const r2=dx*dx+dy*dy+dz*dz;
+      if(r2 >= gShellR2[s] || r2 < 1e-8) continue;
+      const r=Math.sqrt(r2), o=s*9;
+      const lx=gShellRot[o]*dx+gShellRot[o+3]*dy+gShellRot[o+6]*dz;
+      const ly=gShellRot[o+1]*dx+gShellRot[o+4]*dy+gShellRot[o+7]*dz;
+      const lz=gShellRot[o+2]*dx+gShellRot[o+5]*dy+gShellRot[o+8]*dz;
+      const li=Math.min(SH_LAT-1, Math.max(0, Math.round(Math.acos(Math.max(-1,Math.min(1,lz/r)))/Math.PI*(SH_LAT-1))));
+      let lo=Math.floor((Math.atan2(ly,lx)+Math.PI)/(2*Math.PI)*SH_LON); lo=((lo%SH_LON)+SH_LON)%SH_LON;
+      const Rs=gHulls[s].D[li*SH_LON+lo];
+      if(r < Rs){ const k=Rs/r - 1.0; p[0]+=dx*k; p[1]+=dy*k; p[2]+=dz*k; }
+    }
+  };
+
   /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
      torus mesh; the shader shows it only inside the reveal-bubble. */
@@ -4903,8 +5078,10 @@ async function run(){
     // the reveal, so the sphere would be invisible everywhere except inside the crisp zone.)
     const wMat=(rad, solid)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
         attributes:['position','instanceColor','wOrig','wVel','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi'],
-        defines:['#define WATERBOX'] });
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi','shellCen','shellRot','shellR2'],
+        samplers:['shellTex'],
+        defines: NSH ? ['#define WATERBOX', '#define NSHELL '+NSH, '#define SH_LAT '+SH_LAT+'.0', '#define SH_LON '+SH_LON+'.0']
+                     : ['#define WATERBOX'] });
       // isShell = 1 so the sphere turns to GLASS inside the reveal radius, exactly as the protein vdW does
       // — otherwise the orbitals built below are drawn correctly but sit hidden inside an opaque ball.
       m.setFloat('radius',rad);m.setFloat('isShell',1);m.setFloat('shellMin',0.18);m.setFloat('revealFade',0.95);
@@ -4913,6 +5090,8 @@ async function run(){
       m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT);
         eff.setFloat('bubbleR', solid ? 0 : gCrisp);   // glass only where the orbitals are actually drawn
         eff.setVector3('boxLo',bLo); eff.setVector3('boxHi',bHi);
+        if(NSH){ eff.setTexture('shellTex', gShellTex); eff.setArray3('shellCen', gShellCen);
+                 eff.setMatrix3x3('shellRot', gShellRot); eff.setFloatArray('shellR2', gShellR2); }
         eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
     // `off` gives each atom its rigid offset from the molecule centre (0 for O, the two O–H vectors for H)
     const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad,false); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
@@ -5096,7 +5275,8 @@ async function run(){
         const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
         const pz=bnc(wc[i*3+2]+wv[i*3+2]*T, bLo.z, bHi.z);
         const dz=pz-cp.z; const d2=dx*dx+dy*dy+dz*dz; if(d2>R2) continue;
-        _wp[0]=px; _wp[1]=py; _wp[2]=pz;
+        // the shader repels the molecule centre, so this mirror must too or the lobes leave their atoms
+        _wp[0]=px; _wp[1]=py; _wp[2]=pz; repelShells(_wp);
         if(!capped){ wPick[n]=i; wPos[n*3]=_wp[0]; wPos[n*3+1]=_wp[1]; wPos[n*3+2]=_wp[2]; n++; continue; }
         if(n===WCAP && d2>=worst) continue;
         let at=n<WCAP ? n++ : WCAP-1;
@@ -5230,7 +5410,7 @@ async function run(){
       const bM=new Float32Array(CAP*bondN*16), bC=new Float32Array(CAP*bondN*3);
       cMesh.thinInstanceSetBuffer('matrix',cM,16,false); cMesh.thinInstanceSetBuffer('ocen',cC,3,false);
       bMesh.thinInstanceSetBuffer('matrix',bM,16,false); bMesh.thinInstanceSetBuffer('ocen',bC,3,false);
-      const pick=new Int32Array(CAP), pos=new Float32Array(CAP*3);
+      const pick=new Int32Array(CAP), pos=new Float32Array(CAP*3), _lp=[0,0,0];
       scene.onBeforeRenderObservable.add(()=>{
         if(!gFreeOn){ cMesh.setEnabled(false); bMesh.setEnabled(false); return; }
         const cp=cam.position, R=gCrisp, R2=R*R;
@@ -5243,7 +5423,8 @@ async function run(){
           const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
           const pz=bnc(F.c[i*3+2]+F.v[i*3+2]*T, bLo.z, bHi.z);
           const dz=pz-cp.z; if(dx*dx+dy*dy+dz*dz>R2) continue;
-          pick[n]=i; pos[n*3]=px; pos[n*3+1]=py; pos[n*3+2]=pz; n++;
+          _lp[0]=px; _lp[1]=py; _lp[2]=pz; repelShells(_lp);   // same mirror, same reason
+          pick[n]=i; pos[n*3]=_lp[0]; pos[n*3+1]=_lp[1]; pos[n*3+2]=_lp[2]; n++;
         }
         for(let k=0;k<n;k++){
           const i=pick[k], px=pos[k*3], py=pos[k*3+1], pz=pos[k*3+2];
@@ -6283,6 +6464,7 @@ async function run(){
     gDevTopSet = false;   // re-measure the readout next frame (its height can differ between sessions)
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
+    for(const h of gHulls) h.mesh.setEnabled(gDev);   // per-protein collision shells -> dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev && gShadeOn);   // shading-reference plane — dev AND its own toggle
     { const rf = scene.getMeshByName('rtsFloor'); if(rf) rf.setEnabled(gDev); }   // light-green floor sheet → dev-only
     if(gCollViz) gCollViz.setEnabled(COLL_VIZ && (gDev || gCollVizHold));   // wireframe collision spheres (also on while V is held)
