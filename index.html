@@ -590,6 +590,31 @@ float bnc(float x, float lo, float hi){
   float t = mod(x - lo, 2.0*s);
   return lo + (t < s ? t : 2.0*s - t);
 }
+#ifdef NSHELL
+// Protein collision shells. Each is a star-shaped radius field sampled on SH_LAT x SH_LON bearings and
+// packed into shellTex, one SH_LAT-row block per shell. A molecule whose centre lands inside a shell is
+// pushed straight back out to the surface along the bearing it came in on, so it slides around the
+// protein instead of drifting through it. Purely a function of position - no state, nothing uploaded.
+uniform sampler2D shellTex;
+uniform vec3 shellCen[NSHELL];
+uniform mat3 shellRot[NSHELL];
+uniform float shellR2[NSHELL];
+vec3 repelShells(vec3 p){
+  for(int i=0; i<NSHELL; i++){
+    vec3 d = p - shellCen[i];
+    float r2 = dot(d, d);
+    if(r2 >= shellR2[i] || r2 < 1e-8) continue;
+    float r = sqrt(r2);
+    vec3 l = shellRot[i] * d;
+    float li = clamp(floor(acos(clamp(l.z/r, -1.0, 1.0))/3.14159265*(SH_LAT-1.0) + 0.5), 0.0, SH_LAT-1.0);
+    float lo = mod(floor((atan(l.y, l.x) + 3.14159265)/6.28318531*SH_LON), SH_LON);
+    float row = float(i)*SH_LAT + li;
+    float Rs = texture2D(shellTex, vec2((lo + 0.5)/SH_LON, (row + 0.5)/(SH_LAT*float(NSHELL)))).r;
+    if(r < Rs) p += d * (Rs/r - 1.0);
+  }
+  return p;
+}
+#endif
 #endif
 #ifdef MEMFADE
 // Membrane-only fluid sway. The phase is taken from the IN-PLANE position (x,z) alone, so every atom
@@ -602,9 +627,15 @@ void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
   vec3 base = W[3].xyz;
 #ifdef WATERBOX
-  base = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
-              bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
-              bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z)) + W[3].xyz;
+  // Repel the molecule CENTRE, then add this atom's rigid offset - so the whole H2O is displaced as one
+  // body and does not get torn apart at a shell surface.
+  vec3 wCen = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
+                   bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
+                   bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z));
+#ifdef NSHELL
+  wCen = repelShells(wCen);
+#endif
+  base = wCen + W[3].xyz;
 #endif
 #ifdef LIPTILE
   base += tileOff;
@@ -1776,12 +1807,17 @@ attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float uT;          // thermal-shake time (matches the orbital shake so the outline follows)
+uniform vec3 selDelta;     // how far fillOutline already shifted these lobes off their BAKED spot
 varying vec3 vVP;
 varying vec3 vN;
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  // Sample the shake at the lobe's PRE-transform centre - the exact point the orb shader samples. These
+  // lobes were already moved to where the atom renders (fillOutline adds the model shift), so sampling
+  // at their moved centre put the outline on a different phase from the very orbitals it traces and the
+  // two wobbled apart. Subtracting the same shift back out puts both on one phase.
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz - selDelta);
 #ifdef MEMFADE
   vMemW = wp.xyz;
 #endif
@@ -1826,10 +1862,11 @@ attribute vec4 world3;
 uniform mat4 view;
 uniform mat4 projection;
 uniform float uT;
+uniform vec3 selDelta;   // see the hlo shader - keeps the mask on the outline's phase
 vec3 shakeOff(vec3 p){ return 0.12*vec3(sin(uT*1.3+p.x*0.12+p.y*0.08), sin(uT*1.1+p.y*0.12+p.z*0.08), sin(uT*1.6+p.z*0.12+p.x*0.08)); }
 void main(void){
   mat4 W = mat4(world0, world1, world2, world3);
-  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz);
+  vec4 wp = W * vec4(position, 1.0); wp.xyz += shakeOff(W[3].xyz - selDelta);
   gl_Position = projection * view * wp;
 }`;
 BABYLON.Effect.ShadersStore['maskFragmentShader'] = `
@@ -2886,7 +2923,13 @@ async function run(){
             if(e.shiftKey){ if(gSel.has(rtsDownModel)) gSel.delete(rtsDownModel); else gSel.add(rtsDownModel); }
             else { gSel.clear(); gSelMol.clear(); gSel.add(rtsDownModel); }
             updateSelectionUI();
-          } else { gSel.clear(); gSelMol.clear(); updateSelectionUI(); } }             // click on empty → deselect (move order is on RIGHT-click)
+          } else {   // click on empty → deselect EVERYTHING (move order is on RIGHT-click)
+            gSel.clear(); gSelMol.clear(); updateSelectionUI();
+            // ...including the atom and cofactor selections. Clearing only the RTS set left a selected
+            // atom outlined with its info card open, so a single click looked like it had done nothing.
+            if(selAtom) clearAtomSel();
+            if(etcSel >= 0) showEtcSel(-1);
+          } }
         return;
       }
       if(e.button === 0 && spawnEl){   // armed element + tap → drop an atom (anywhere; right-click disarms, double-click still selects)
@@ -4014,8 +4057,9 @@ async function run(){
      Star-shaped, so a deep concavity is bridged rather than followed — the usual trade for a collision
      proxy, and it stays a closed watertight surface. Dev-only. */
   const gHulls = [];
+  const SH_LAT = 32, SH_LON = 64;   // ~5.6 deg bearings
   {
-    const NLAT = 32, NLON = 64;   // ~5.6 deg bearings
+    const NLAT = SH_LAT, NLON = SH_LON;
     const hullMat = new BABYLON.StandardMaterial('hullMat', scene);
     hullMat.wireframe = true; hullMat.disableLighting = true; hullMat.backFaceCulling = false;
     hullMat.emissiveColor = new BABYLON.Color3(0.25, 0.95, 0.55); hullMat.alpha = 0.55;
@@ -4083,7 +4127,8 @@ async function run(){
       vd.applyToMesh(mesh);
       mesh.material = hullMat; mesh.isPickable = false; mesh.alwaysSelectAsActiveMesh = true;
       mesh.setEnabled(false);
-      gHulls.push({ mesh, mi, c:new BABYLON.Vector3(cx,cy,cz) });
+      let maxR = 0; for(let q=0;q<D.length;q++) if(D[q] > maxR) maxR = D[q];
+      gHulls.push({ mesh, mi, c:new BABYLON.Vector3(cx,cy,cz), D, maxR });
     }
     // carry each shell on its model's transform, so a dragged or flattened model keeps its shell
     const _hp=new BABYLON.Vector3(), _hq=new BABYLON.Quaternion(), _hs=new BABYLON.Vector3(), _hm=new BABYLON.Matrix();
@@ -4100,6 +4145,62 @@ async function run(){
       }
     });
   }
+
+  /* ── Free water vs. the protein collision shells ─────────────────────────────────────────────
+     The same star-shaped radius field the dev-mode shells draw is packed into a float texture, one
+     NLAT-row block per shell, and the water vertex shader pushes any molecule whose centre falls
+     inside a shell back out to its surface along the bearing it entered on. It is a pure function of
+     the ballistic position, so it needs no state and no per-frame upload — which is the only way it
+     can run for 20000 molecules — and the JS mirror below reproduces it bit-for-bit so the crisp-zone
+     orbitals stay locked to their own atoms.
+     Being stateless it EXCLUDES rather than bounces: water slides around a protein instead of
+     rebounding off it. A real reflection would need per-molecule velocity state on the CPU. */
+  const NSH = gHulls.length;
+  let gShellTex = null;
+  const gShellCen = new Float32Array(Math.max(1, NSH)*3);    // shell centre in WORLD space
+  const gShellRot = new Float32Array(Math.max(1, NSH)*9);    // world → model rotation (gModelXform is rigid)
+  const gShellR2  = new Float32Array(Math.max(1, NSH));      // furthest reach², for the early-out
+  if(NSH){
+    const tex = new Float32Array(SH_LON * SH_LAT * NSH * 4);
+    for(let s=0;s<NSH;s++){ const D=gHulls[s].D;
+      for(let li=0; li<SH_LAT; li++) for(let lo=0; lo<SH_LON; lo++)
+        tex[((s*SH_LAT + li)*SH_LON + lo)*4] = D[li*SH_LON + lo];
+    }
+    gShellTex = new BABYLON.RawTexture(tex, SH_LON, SH_LAT*NSH, BABYLON.Constants.TEXTUREFORMAT_RGBA,
+      scene, false, false, BABYLON.Texture.NEAREST_SAMPLINGMODE, BABYLON.Constants.TEXTURETYPE_FLOAT);
+    gShellTex.wrapU = gShellTex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+    const _sm = new BABYLON.Matrix(), _si = new BABYLON.Matrix(), _sc = new BABYLON.Vector3();
+    const placeShells = () => {
+      for(let s=0;s<NSH;s++){ const h=gHulls[s];
+        BABYLON.Matrix.FromArrayToRef(gModelXform, h.mi*16, _sm);
+        BABYLON.Vector3.TransformCoordinatesToRef(h.c, _sm, _sc);
+        gShellCen[s*3]=_sc.x; gShellCen[s*3+1]=_sc.y; gShellCen[s*3+2]=_sc.z;
+        _sm.invertToRef(_si); const q=_si.m, o=s*9;
+        gShellRot[o]=q[0]; gShellRot[o+1]=q[1]; gShellRot[o+2]=q[2];
+        gShellRot[o+3]=q[4]; gShellRot[o+4]=q[5]; gShellRot[o+5]=q[6];
+        gShellRot[o+6]=q[8]; gShellRot[o+7]=q[9]; gShellRot[o+8]=q[10];
+        gShellR2[s]=h.maxR*h.maxR;
+      }
+    };
+    placeShells();
+    scene.onBeforeRenderObservable.add(placeShells);   // a dragged or flattened model carries its shell
+  }
+  /* CPU mirror of the shader's repel(): same bearing rounding, same push. Mutates p in place. */
+  const repelShells = p => {
+    for(let s=0;s<NSH;s++){
+      const dx=p[0]-gShellCen[s*3], dy=p[1]-gShellCen[s*3+1], dz=p[2]-gShellCen[s*3+2];
+      const r2=dx*dx+dy*dy+dz*dz;
+      if(r2 >= gShellR2[s] || r2 < 1e-8) continue;
+      const r=Math.sqrt(r2), o=s*9;
+      const lx=gShellRot[o]*dx+gShellRot[o+3]*dy+gShellRot[o+6]*dz;
+      const ly=gShellRot[o+1]*dx+gShellRot[o+4]*dy+gShellRot[o+7]*dz;
+      const lz=gShellRot[o+2]*dx+gShellRot[o+5]*dy+gShellRot[o+8]*dz;
+      const li=Math.min(SH_LAT-1, Math.max(0, Math.round(Math.acos(Math.max(-1,Math.min(1,lz/r)))/Math.PI*(SH_LAT-1))));
+      let lo=Math.floor((Math.atan2(ly,lx)+Math.PI)/(2*Math.PI)*SH_LON); lo=((lo%SH_LON)+SH_LON)%SH_LON;
+      const Rs=gHulls[s].D[li*SH_LON+lo];
+      if(r < Rs){ const k=Rs/r - 1.0; p[0]+=dx*k; p[1]+=dy*k; p[2]+=dz*k; }
+    }
+  };
 
   /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
@@ -4797,8 +4898,10 @@ async function run(){
     const bLo = new BABYLON.Vector3(x0+oR, y0+oR, z0+oR), bHi = new BABYLON.Vector3(x1-oR, y1-oR, z1-oR);
     const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
         attributes:['position','instanceColor','wOrig','wVel','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi'],
-        defines:['#define WATERBOX'] });
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi','shellCen','shellRot','shellR2'],
+        samplers:['shellTex'],
+        defines: NSH ? ['#define WATERBOX', '#define NSHELL '+NSH, '#define SH_LAT '+SH_LAT+'.0', '#define SH_LON '+SH_LON+'.0']
+                     : ['#define WATERBOX'] });
       // isShell = 1 so the sphere turns to GLASS inside the reveal radius, exactly as the protein vdW does
       // — otherwise the orbitals built below are drawn correctly but sit hidden inside an opaque ball.
       m.setFloat('radius',rad);m.setFloat('isShell',1);m.setFloat('shellMin',0.18);m.setFloat('revealFade',0.95);
@@ -4807,6 +4910,8 @@ async function run(){
       m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT);
         eff.setFloat('bubbleR', gCrisp);   // glass only where the orbitals are actually drawn
         eff.setVector3('boxLo',bLo); eff.setVector3('boxHi',bHi);
+        if(NSH){ eff.setTexture('shellTex', gShellTex); eff.setArray3('shellCen', gShellCen);
+                 eff.setMatrix3x3('shellRot', gShellRot); eff.setFloatArray('shellR2', gShellR2); }
         eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
     // `off` gives each atom its rigid offset from the molecule centre (0 for O, the two O–H vectors for H)
     const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
@@ -4910,6 +5015,7 @@ async function run(){
     const cU=nrm(cA), cW=nrm(crs(cA,cB)), cV=crs(cW,cU);
     const bnc=(x,lo,hi)=>{ const sp=hi-lo; let t=(x-lo)%(2*sp); if(t<0) t+=2*sp; return lo+(t<sp?t:2*sp-t); };
     const wPick=new Int32Array(WCAP), wPickD=new Float32Array(WCAP), wPos=new Float32Array(WCAP*3);
+    const _wp=[0,0,0];
     scene.onBeforeRenderObservable.add(()=>{
       const cp=cam.position, R=gCrisp, R2=R*R;
       /* Use the clock the SHADER will see, not the current one. gWaveT is advanced by an observer that is
@@ -4928,11 +5034,14 @@ async function run(){
         const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
         const pz=bnc(wc[i*3+2]+wv[i*3+2]*T, bLo.z, bHi.z);
         const dz=pz-cp.z; const d2=dx*dx+dy*dy+dz*dz; if(d2>R2) continue;
+        // The zone pick uses the BALLISTIC position (cheap, and the shells only shift it by a molecule or
+        // two at the boundary); the repel is applied to the few survivors below, matching the shader.
+        _wp[0]=px; _wp[1]=py; _wp[2]=pz; repelShells(_wp);
         if(n===WCAP && d2>=worst) continue;
         let at=n<WCAP ? n++ : WCAP-1;
         while(at>0 && wPickD[at-1]>d2){ wPickD[at]=wPickD[at-1]; wPick[at]=wPick[at-1];
           wPos[at*3]=wPos[(at-1)*3]; wPos[at*3+1]=wPos[(at-1)*3+1]; wPos[at*3+2]=wPos[(at-1)*3+2]; at--; }
-        wPickD[at]=d2; wPick[at]=i; wPos[at*3]=px; wPos[at*3+1]=py; wPos[at*3+2]=pz;
+        wPickD[at]=d2; wPick[at]=i; wPos[at*3]=_wp[0]; wPos[at*3+1]=_wp[1]; wPos[at*3+2]=_wp[2];
         worst=wPickD[n-1];
       }
       for(let k=0;k<n;k++){
@@ -5138,9 +5247,10 @@ async function run(){
   // Bright white Fresnel-rim outline around EACH nucleon of the hovered/clicked atom.
   const mkOutlineMat = (nm, col, rimLo, rimHi, rimW) => {
     const mat = new BABYLON.ShaderMaterial(nm, scene, 'hlo', {
-      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth']
+      attributes: ['position','normal','world0','world1','world2','world3'], uniforms: ['view','projection','oc','rimLo','rimHi','rimW','uT','solidDepth','selDelta']
     });
     mat.setColor3('oc', col); mat.setFloat('rimLo', rimLo); mat.setFloat('rimHi', rimHi); mat.setFloat('rimW', rimW || 2.6); mat.setFloat('solidDepth', 0.0);
+    mat.setVector3('selDelta', BABYLON.Vector3.Zero());
     mat.alpha = 0.999; mat.backFaceCulling = true; mat.needDepthPrePass = false;   // cull backs → ONE contour per lobe (not a front+back pair)
     mat.disableDepthWrite = true;   // lobes don't occlude each other → EVERY orbital's rim shows
     mat.onBindObservable.add(() => { const eff=mat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });   // shake with the orbitals
@@ -5234,13 +5344,17 @@ async function run(){
   selOut.renderingGroupId = 3;                                 // same topmost group as the hover outline
   selOut.alwaysSelectAsActiveMesh = true;
   const selOutBuf = new Float32Array(160*16);   // atomic orbital lobes + bonding lobes
-  const _selMX = new BABYLON.Matrix(), _selLo = new BABYLON.Matrix(), _selTmp = new BABYLON.Matrix();
+  const _selD = new BABYLON.Vector3();
+  // fillOutline moves the lobes from the atom's baked spot to where it renders. Hand that same shift to
+  // the shaders so they can undo it before sampling the shake, which is what keeps the outline and the
+  // mask locked to the orbitals instead of wobbling off them.
+  const outlineDelta = (atom, out) => { const w = atom.world;
+    if(w) out.set(w.x - atom.center.x, w.y - atom.center.y, w.z - atom.center.z); else out.setAll(0);
+    return out; };
   const setSelOut = atom => {
     const n = fillOutline(selOutBuf, atom);
-    if(!atom.spawn){                                            // fillOutline builds the lobes in the atom's BAKED frame; the orbitals render through gModelXform (flattened to the floor). Flatten the lobes the same way so the outline hugs the orbitals instead of sitting at the un-flattened position.
-      BABYLON.Matrix.FromArrayToRef(gModelXform, modelOf(atom.center.x, atom.center.y, atom.center.z)*16, _selMX);
-      for(let i=0;i<n;i++){ BABYLON.Matrix.FromArrayToRef(selOutBuf, i*16, _selLo); _selLo.multiplyToRef(_selMX, _selTmp); _selTmp.copyToArray(selOutBuf, i*16); }
-    }
+    outlineDelta(atom, _selD);
+    flashMat.setVector3('selDelta', _selD); focusMat.setVector3('selDelta', _selD); maskMat.setVector3('selDelta', _selD);
     selOut.thinInstanceSetBuffer('matrix', selOutBuf, 16, true);
     selOut.thinInstanceCount = n;
     selOut.setEnabled(true);
@@ -5268,7 +5382,8 @@ async function run(){
      frontmost surface. Where another atom sits in front, the mask fails depth and the stencil
      stays 0, so the nucleus (drawn next, gated on stencil==1) is hidden there. */
   const maskMat = new BABYLON.ShaderMaterial('maskMat', scene, 'mask', {
-    attributes: ['position','world0','world1','world2','world3'], uniforms: ['view','projection','uT'] });
+    attributes: ['position','world0','world1','world2','world3'], uniforms: ['view','projection','uT','selDelta'] });
+  maskMat.setVector3('selDelta', BABYLON.Vector3.Zero());
   maskMat.backFaceCulling = true; maskMat.disableDepthWrite = true;   // test against scene depth, don't overwrite it
   maskMat.onBindObservable.add(() => { const eff=maskMat.getEffect(); if(eff) eff.setFloat('uT', gWaveT); });
   const selMask = BABYLON.MeshBuilder.CreateSphere('selMask', {diameter:1, segments:8}, scene);
@@ -6130,6 +6245,7 @@ async function run(){
   // Hover outline — identical geometry to the selection outline (orbital + bonding lobes).
   const setHL = atom => {
     const n = fillOutline(hlBuf, atom, false);   // hover always outlines the whole atom, even when an orbital is isolated
+    hlMat.setVector3('selDelta', outlineDelta(atom, _selD));   // same phase as the orbitals it traces
     hl.thinInstanceSetBuffer('matrix', hlBuf, 16, true);
     hl.thinInstanceCount = n;
     hl.setEnabled(true);
