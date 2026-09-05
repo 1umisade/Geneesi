@@ -762,7 +762,7 @@ void main(void){
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
 #ifdef COFHIDE
   // Line of sight to the ETC cofactors: an atom IN FRONT of a cofactor goes see-through so the cofactor
-  // behind shows through. cofClear flags it here - the fill/outline opacity + outline colour apply below.
+  // behind shows through. cofClear flags it here; the fill/outline opacity + outline colour apply below.
   float cofClear = 0.0;
   if(cofHideOn > 0.5){
     vec4 cClip = projection * vec4(vCenterV, 1.0);
@@ -4587,12 +4587,7 @@ async function run(){
       m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT); eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
     const mkImp=(nm,rad,col,cnt)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
       const cb=new Float32Array(cnt*4); for(let i=0;i<cnt;i++){ cb[i*4]=col[0];cb[i*4+1]=col[1];cb[i*4+2]=col[2];cb[i*4+3]=0; } mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
-      const mb=new Float32Array(cnt*16); for(let i=0;i<cnt;i++){ mb[i*16]=1;mb[i*16+5]=1;mb[i*16+10]=1;mb[i*16+15]=1; } mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=cnt;
-      /* NW is 0 here (free water removed), which leaves ZERO-LENGTH instance buffers on a mesh that
-         Babylon still submits — the driver then throws GL_INVALID_OPERATION, "vertex buffer is not
-         big enough for the draw call", on every single frame for both meshes. Disable it instead. */
-      mesh.setEnabled(cnt > 0);
-      return {mesh,mb}; };
+      const mb=new Float32Array(cnt*16); for(let i=0;i<cnt;i++){ mb[i*16]=1;mb[i*16+5]=1;mb[i*16+10]=1;mb[i*16+15]=1; } mesh.thinInstanceSetBuffer('matrix',mb,16,false); mesh.thinInstanceCount=cnt; return {mesh,mb}; };
     const oI=mkImp('wO', info(codeO).vr*FILL_SCALE, [0.94,0.15,0.15], NW);
     const hI=mkImp('wH', info(codeH).vr*FILL_SCALE, [0.92,0.92,0.92], NW*2);
     scene.onBeforeRenderObservable.add(()=>{
