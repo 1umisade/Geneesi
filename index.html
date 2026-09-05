@@ -862,7 +862,7 @@ void main(void){
   alpha *= 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r2);          // anti-aliased silhouette (soft coverage at the disc edge)
 #ifdef COFHIDE
   // Line of sight to the ETC cofactors: an atom IN FRONT of a cofactor goes see-through so the cofactor
-  // behind shows through. cofClear flags it here; the fill/outline opacity + outline colour apply below.
+  // behind shows through. cofClear flags it here - the fill/outline opacity + outline colour apply below.
   float cofClear = 0.0;
   if(cofHideOn > 0.5){
     vec4 cClip = projection * vec4(vCenterV, 1.0);
@@ -8130,8 +8130,10 @@ void main(void){
     else if(k === 'm' || k === 'M'){ const sp = 85;   // M → cancel any move order and (re)start drifting off along the STORED heading (random the first time)
       for(const m of gSelMol){ m.mtx = undefined; if(m.svx === undefined){ m.svx = rnd()*sp; m.svy = rnd()*sp; m.sav = rnd()*0.7; }
         m.vx = m.svx; m.vy = m.svy; m.av = m.sav; } }
-    else if(k === 's' || k === 'S'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
-        m.mtx = undefined; m.vx = 0; m.vy = 0; m.av = 0; } }   // S → cancel the move order + stop, but keep the stored heading so M resumes the SAME direction
+    // X, not S: S is already a camera key (W/S fly up and down), so every stop order also dropped the
+    // camera. M starts the selected molecules moving, X stops them.
+    else if(k === 'x' || k === 'X'){ for(const m of gSelMol){ if(m.vx || m.vy || m.av){ m.svx = m.vx; m.svy = m.vy; m.sav = m.av; }   // remember the heading
+        m.mtx = undefined; m.vx = 0; m.vy = 0; m.av = 0; } }   // X → cancel the move order + stop, but keep the stored heading so M resumes the SAME direction
     else if(k === 'v' || k === 'V'){ gCollVizHold = true; if(COLL_VIZ && gCollViz){ gCollViz.setEnabled(true); if(gCollVizUpdate) gCollVizUpdate(); } }   // V held → reveal the collision spheres
   });
   window.addEventListener('keyup', e => { if(e.key === 'f' || e.key === 'F') gFocusDim = false;
@@ -8144,7 +8146,7 @@ void main(void){
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','lähennys'],['Keskinappi + rulla','hidas lähennys'],
       ['W / S','ylös ja alas'],['A / D','sivuaskel'],['I / O','lähennä ja loitonna'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
       ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
-      ['H','piilota käyttöliittymä'],['K','maalausefekti'],['U / P','kallista vasemmalle ja oikealle'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit']];
+      ['H','piilota käyttöliittymä'],['K','maalausefekti'],['U / P','kallista vasemmalle ja oikealle'],['M','valittu molekyyli liikkeelle'],['X','pysäytä molekyylit']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
       + rows.map(([k,v]) => '<span style="color:var(--brown);font-weight:bold">'+k+'</span> — '+v).join('<br>');
     document.body.appendChild(sc); gShortcuts = sc; }
