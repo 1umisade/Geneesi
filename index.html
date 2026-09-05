@@ -254,11 +254,6 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="camcoords"></div>
-<div id="zoomtips">
-  <button class="zt" id="zoom-in" aria-label="Lähennä">+</button>
-  <button class="zt" id="zoom-out" aria-label="Loitonna">−</button>
-  <span class="ztlabel">suurenna</span>
-</div>
 <div id="speedbox" style="position:fixed; left:50%; top:12px; transform:translateX(-50%); text-align:center; z-index:10; font:11px ui-monospace,monospace; color:#6a6a5a; user-select:none;">
   <div style="margin-bottom:4px; letter-spacing:.5px;">nopeus <span id="speedval">1.0×</span></div>
   <input id="speed" type="range" min="0" max="30" value="10" style="width:130px; cursor:pointer;">
@@ -3028,9 +3023,6 @@ async function run(){
     gZoomVel += Math.sign(e.deltaY) * mag * (wheelStep / WHEEL_STEPS) * gZoomSpeed;   // ramped, and scaled by the zoom-speed slider
     showTips(); hideTipsSoon();
   }, {passive:false});
-  const btnZoom = dir => { gZoomP = null; gZoomVel += dir * Math.max(fitRadius * 0.05, Math.abs(cam.radius) * 0.08); showTips(); hideTipsSoon(); };
-  document.getElementById('zoom-in').addEventListener('click',  () => btnZoom(-1));
-  document.getElementById('zoom-out').addEventListener('click', () => btnZoom(1));
   // Smooth (inertial) zoom: bleed the accumulated velocity out over several frames, each step routed
   // through zoomBy so the per-object slow-down keeps easing the arrival. Total travel = the impulse.
   scene.onBeforeRenderObservable.add(() => {
@@ -3260,11 +3252,11 @@ async function run(){
   const BUBBLE_R = 49.5;      // camera reveal-sphere radius (Å) — atoms within it go translucent
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
-  let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
+  let gBright = 0.63;         // global brightness multiplier (dev "lighting" slider → brightness post-process)
   let gZoomPull = 1.0;        // how far the view slides toward the cursor when wheel-zooming (0 = straight in, 1 = cursor stays pinned). Dev slider.
-  let gSat = 1.0;             // saturation, dev slider
-  let gHi = 0.0;              // highlight gain (bright end only), dev slider
-  let gSh = 0.0;              // shadow gain (dark end only), dev slider
+  let gSat = 1.66;            // saturation, dev slider
+  let gHi = 1.0;              // highlight gain (bright end only), dev slider
+  let gSh = -1.0;             // shadow gain (dark end only), dev slider
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
   let gConeTip = 0.12;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
@@ -4944,7 +4936,11 @@ async function run(){
        60000 matrices every frame cost ~8 ms per frame, which is most of the frame budget. */
     const oR = info(codeO).vr*FILL_SCALE;
     const bLo = new BABYLON.Vector3(x0+oR, y0+oR, z0+oR), bHi = new BABYLON.Vector3(x1-oR, y1-oR, z1-oR);
-    const wMat=(rad)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
+    // solid = never turn to glass. The reveal bubble is what makes the water go clear so its orbitals
+    // show; the other species have no orbitals, so their bubble radius is pinned to 0 and they stay
+    // opaque at every distance. (isShell must stay 1 either way — with isShell 0 the alpha is scaled BY
+    // the reveal, so the sphere would be invisible everywhere except inside the crisp zone.)
+    const wMat=(rad, solid)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
         attributes:['position','instanceColor','wOrig','wVel','world0','world1','world2','world3'],
         uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi','shellCen','shellRot','shellR2'],
         samplers:['shellTex'],
@@ -4956,13 +4952,13 @@ async function run(){
       m.setFloat('bubbleR',1e9);m.setFloat('protonOutline',0);m.setFloat('coneCos',-1.0);m.backFaceCulling=false;
       realAlpha(m);
       m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT);
-        eff.setFloat('bubbleR', gCrisp);   // glass only where the orbitals are actually drawn
+        eff.setFloat('bubbleR', solid ? 0 : gCrisp);   // glass only where the orbitals are actually drawn
         eff.setVector3('boxLo',bLo); eff.setVector3('boxHi',bHi);
         if(NSH){ eff.setTexture('shellTex', gShellTex); eff.setArray3('shellCen', gShellCen);
                  eff.setMatrix3x3('shellRot', gShellRot); eff.setFloatArray('shellR2', gShellR2); }
         eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
     // `off` gives each atom its rigid offset from the molecule centre (0 for O, the two O–H vectors for H)
-    const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+    const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad,false); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
       // Group 1, like every other vdW shell in the scene: the ORBITALS live in group 0 and are drawn
       // first, then the glass shell blends over them. Left in group 0 the sphere and the lobes sort
       // against each other arbitrarily, and the sphere's depth write simply rejected the lobes inside it.
@@ -4984,6 +4980,56 @@ async function run(){
     // element colours, so once you are close enough to see them the chemistry is still honest.
     mkImp('wO', oR, [0.22,0.52,0.85], NW, false);
     mkImp('wH', info(codeH).vr*FILL_SCALE, [0.62,0.82,0.97], NW*2, true);
+
+    /* ── The other three free species sharing the box ──────────────────────────────────────────────
+       Free protons, carbon dioxide and dioxygen, all flying and bouncing through the SAME analytic
+       triangle wave and the same protein-shell repulsion as the water — nothing per-frame on the CPU.
+       Each is given its own colour rather than the element palette, for the same reason the free water
+       is blue: dotted through proteins full of red oxygens and white hydrogens, honest element colours
+       would make them impossible to pick out. They carry no orbitals (a bare proton has no electrons
+       at all), so their spheres are solid rather than the water's glass. */
+    const codeC = codeOf('C');
+    // One species: `n` molecules, each a rigid set of atoms given as offsets from the molecule centre.
+    // `seed` picks an independent random stream so two species never share start points or velocities.
+    const mkFree = (nm, n, seed, atoms) => {
+      const c=new Float32Array(n*3), v=new Float32Array(n*3), ax=new Float32Array(n*3);
+      for(let i=0;i<n;i++){
+        c[i*3]=x0+rnd(seed+i*3+1)*bw; c[i*3+1]=y0+rnd(seed+i*3+2)*bh; c[i*3+2]=z0+rnd(seed+i*3+3)*bd;
+        const sp=28+rnd(seed+i*5+7)*40, th=rnd(seed+i*5+4)*6.283, ph=Math.acos(2*rnd(seed+i*5+5)-1);
+        v[i*3]=sp*Math.sin(ph)*Math.cos(th); v[i*3+1]=sp*Math.cos(ph); v[i*3+2]=sp*Math.sin(ph)*Math.sin(th);
+        // the molecule's own axis (linear species lie along it) — an independent uniform direction
+        const th2=rnd(seed+i*9+11)*6.283, ph2=Math.acos(2*rnd(seed+i*9+13)-1);
+        ax[i*3]=Math.sin(ph2)*Math.cos(th2); ax[i*3+1]=Math.cos(ph2); ax[i*3+2]=Math.sin(ph2)*Math.sin(th2);
+      }
+      for(const a of atoms){
+        const mesh=BABYLON.MeshBuilder.CreatePlane(nm+a.tag,{size:2},scene);
+        mesh.material=wMat(a.r, true); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+        mesh.renderingGroupId=1;
+        const cb=new Float32Array(n*4), mb=new Float32Array(n*16), og=new Float32Array(n*3), vl=new Float32Array(n*3);
+        for(let i=0;i<n;i++){
+          cb[i*4]=a.col[0]; cb[i*4+1]=a.col[1]; cb[i*4+2]=a.col[2]; cb[i*4+3]=0;
+          mb[i*16]=1; mb[i*16+5]=1; mb[i*16+10]=1; mb[i*16+15]=1;
+          mb[i*16+12]=ax[i*3]*a.d; mb[i*16+13]=ax[i*3+1]*a.d; mb[i*16+14]=ax[i*3+2]*a.d;   // offset along the molecule axis
+          og[i*3]=c[i*3]; og[i*3+1]=c[i*3+1]; og[i*3+2]=c[i*3+2];
+          vl[i*3]=v[i*3]; vl[i*3+1]=v[i*3+1]; vl[i*3+2]=v[i*3+2];
+        }
+        mesh.thinInstanceSetBuffer('instanceColor',cb,4,true);
+        mesh.thinInstanceSetBuffer('matrix',mb,16,true);
+        mesh.thinInstanceSetBuffer('wOrig',og,3,true);
+        mesh.thinInstanceSetBuffer('wVel',vl,3,true);
+        mesh.thinInstanceCount=n;
+      }
+    };
+    const cR = info(codeC).vr*FILL_SCALE;
+    // Free protons — crimson, and small: a bare nucleus has no electron cloud to fill a vdW sphere.
+    mkFree('p', 20000, 91731, [{tag:'H', r:info(codeH).vr*FILL_SCALE*0.42, col:[0.90,0.24,0.30], d:0}]);
+    // CO2 — charcoal carbon between two slate oxygens, C=O 1.16 Å. Reads as grey smoke against the water.
+    mkFree('co2', 20000, 218347, [{tag:'C', r:cR, col:[0.24,0.25,0.28], d:0},
+                                  {tag:'Oa', r:oR, col:[0.52,0.55,0.60], d: 1.16},
+                                  {tag:'Ob', r:oR, col:[0.52,0.55,0.60], d:-1.16}]);
+    // O2 — mint, the gas photosynthesis puts out. O=O 1.21 Å, so ±0.605 from the centre.
+    mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.30,0.80,0.62], d: 0.605},
+                                {tag:'b', r:oR, col:[0.30,0.80,0.62], d:-0.605}]);
 
     /* ── Water orbitals inside the crisp zone ───────────────────────────────────────────────────────
        Every water within gCrisp gets the same orbital treatment the proteins get: core shells, the two
@@ -5875,10 +5921,10 @@ async function run(){
     return { row, sld };
   };
   const zpG = mkGrade('zp','zoomin kohdistus', 0, 100, 100, v=>v+'%', v=>{ gZoomPull = v/100; });
-  const brG = mkGrade('br','kirkkaus',       20, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
-  const saG = mkGrade('sa','kylläisyys',    0, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
-  const hiG = mkGrade('hi','huippuvalot',  -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
-  const shG = mkGrade('sh','varjot',       -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gSh = v/100; });
+  const brG = mkGrade('br','kirkkaus',       20, 250,  63, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
+  const saG = mkGrade('sa','kylläisyys',    0, 250, 166, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
+  const hiG = mkGrade('hi','huippuvalot',  -100, 100, 100, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
+  const shG = mkGrade('sh','varjot',       -100, 100,-100, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gSh = v/100; });
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
@@ -6053,6 +6099,23 @@ async function run(){
   devPanel.appendChild(shG.row); devPanel.appendChild(shG.sld);
   devPanel.appendChild(fvStrRow); devPanel.appendChild(fvStrSld);   // both vignettes (F-hold and selection)
   devPanel.appendChild(fvRchRow); devPanel.appendChild(fvRchSld);
+  // Every slider gets its own little restore button on its right-hand end — one click puts THAT one
+  // control back to the value it opened with (and re-fires its oninput, so the scene follows).
+  // Done in one sweep after the panel is filled, so a slider added later is covered automatically.
+  for(const sld of [...devPanel.querySelectorAll('input[type=range]')]){
+    const def = sld.value;
+    const line = document.createElement('div');
+    line.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    sld.parentNode.insertBefore(line, sld);
+    sld.style.width = 'auto'; sld.style.flex = '1 1 auto'; sld.style.minWidth = '0';
+    line.appendChild(sld);
+    const rb = document.createElement('button'); rb.textContent = '⟲'; rb.title = 'palauta oletus';
+    rb.style.cssText = 'flex:0 0 auto;width:21px;height:19px;padding:0;line-height:1;cursor:pointer;'
+      + 'font:12px ui-monospace,monospace;color:var(--brown);background:var(--paper);'
+      + 'border:1.5px solid var(--brown);border-radius:5px;';
+    rb.onclick = () => { sld.value = def; sld.dispatchEvent(new Event('input')); };
+    line.appendChild(rb);
+  }
   devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   // The camera readout (#camcoords) is pinned to the same right:16px as this panel, so its fixed top of
