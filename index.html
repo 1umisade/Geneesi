@@ -116,6 +116,14 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
   color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
   box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
   line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#particles-btn{position:absolute;left:16px;top:348px;z-index:12;touch-action:manipulation;
+  font-family:'Courier New',monospace;font-size:13px;font-weight:bold;letter-spacing:.5px;
+  color:var(--ink);background:var(--paper);border:3px solid var(--brown);border-radius:999px;cursor:pointer;
+  box-shadow:0 4px 0 var(--brown);padding:8px 16px;display:inline-flex;align-items:center;gap:7px;
+  line-height:1;user-select:none;-webkit-user-select:none;transition:transform .1s ease,box-shadow .1s ease}
+#particles-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
+#particles-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
+#particles-icon{font-size:15px;line-height:1}
 #membrane-btn:active{transform:translateY(2px);box-shadow:0 2px 0 var(--brown)}
 #membrane-btn.on{background:var(--sage);color:var(--sageink);box-shadow:0 0 0 3px var(--sage2),0 4px 0 var(--brown)}
 #membrane-icon{font-size:15px;line-height:1}
@@ -255,6 +263,7 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 <button id="memcut-btn" title="Piilota kameran puoleinen kalvon puolisko (näe proteiinien läpi)"><span id="memcut-icon">◧</span><span id="memcut-label">Puolikas</span></button>
 <button id="memonly-btn" title="Näytä vain kalvoon sitoutuneet proteiinit (piilota irralliset — keventää)"><span id="memonly-icon">🧫</span><span id="memonly-label">Vain kalvo</span></button>
 <button id="outline-btn" title="Piilota mustat ja vihreät ääriviivat"><span id="outline-icon">✒️</span><span id="outline-label">Reunat</span></button>
+<button id="particles-btn" title="Piilota vapaana lentävä vesi (keventää)"><span id="particles-icon">💨</span><span id="particles-label">Hiukkaset</span></button>
 <button id="vr-btn" title="Siirry VR-tilaan" style="display:none"><span id="vr-icon">🥽</span><span id="vr-label">VR</span></button>
 <div id="zoomval">1.0×</div>
 <div id="camcoords"></div>
@@ -3299,6 +3308,19 @@ async function run(){
       const lab=document.getElementById('lantern-label'); if(lab) lab.textContent = gLantern ? 'Lyhty päällä' : 'Lyhty'; }); }
   // Membrane toggle → hide the tiled lipid bilayer for a big performance win (the cull loop + nucleon
   // pool observer read gMembrane each frame and force every membrane mesh off when it is false).
+  /* The 20 000 free waters and their crisp-zone orbitals, droppable in one click. This is the single
+     biggest difference between the build that was reported as running smoothly (water added at
+     88f70c5) and everything after it, so being able to A/B it inside one session beats juggling
+     two copies of the file. gFreeOn also short-circuits the per-frame orbital rebuild, so it buys
+     back the CPU as well as the pixels. NB: not gParticles — that name is the spawned-effect list. */
+  const gFreeMeshes = [];
+  let gFreeOn = true;
+  { const pb = document.getElementById('particles-btn');
+    if(pb) pb.addEventListener('click', () => { gFreeOn = !gFreeOn;
+        pb.classList.toggle('on', !gFreeOn);
+        const lab = document.getElementById('particles-label');
+        if(lab) lab.textContent = gFreeOn ? 'Hiukkaset' : 'Hiukkaset pois';
+        for(const m of gFreeMeshes) m.setEnabled(gFreeOn); }); }
   let gMembrane = false;   // membrane HIDDEN by default — it is much the heaviest thing in the scene; the Kalvo button brings it back instantly (it is still built during loading, just not drawn)
   { const mb = document.getElementById('membrane-btn');
     if(mb){ mb.addEventListener('click', () => { gMembrane = !gMembrane;
@@ -4687,12 +4709,16 @@ async function run(){
       mesh.thinInstanceSetBuffer('matrix',mb,16,true);
       mesh.thinInstanceSetBuffer('wOrig',og,3,true);
       mesh.thinInstanceSetBuffer('wVel',vl,3,true);
-      mesh.thinInstanceCount=cnt; return mesh; };
+      mesh.thinInstanceCount=cnt; gFreeMeshes.push(mesh); return mesh; };
     // Free water reads BLUE as a body of water, rather than by element — so it is instantly separable
     // from the red/white oxygens dotted through the proteins. The orbitals inside still use the real
     // element colours, so once you are close enough to see them the chemistry is still honest.
+    // A zero count would leave empty instance buffers on a mesh that still draws — the exact
+    // GL_INVALID_OPERATION ('vertex buffer is not big enough') smooth.html throws every frame.
+    if(NW > 0){
     mkImp('wO', oR, [0.22,0.52,0.85], NW, false);
     mkImp('wH', info(codeH).vr*FILL_SCALE, [0.62,0.82,0.97], NW*2, true);
+    }
 
     /* ── Water orbitals inside the crisp zone ───────────────────────────────────────────────────────
        Every water within gCrisp gets the same orbital treatment the proteins get: core shells, the two
@@ -4749,6 +4775,7 @@ async function run(){
     const wCoreMesh = BABYLON.MeshBuilder.CreateSphere('wOrbC',{segments:6,diameter:1},scene);
     wCoreMesh.material=wCoreMat; wCoreMesh.isPickable=false; wCoreMesh.alwaysSelectAsActiveMesh=true;
     const wBondMesh = BABYLON.MeshBuilder.CreateSphere('wOrbB',{segments:5,diameter:1},scene);
+    gFreeMeshes.push(wCoreMesh, wBondMesh);   // the Hiukkaset toggle drops these with the water
     wBondMesh.material=wBondMat; wBondMesh.isPickable=false; wBondMesh.alwaysSelectAsActiveMesh=true;
     { const cCol=new Float32Array(WCAP*wCoreN*3), cOid=new Float32Array(WCAP*wCoreN);
       const bCol=new Float32Array(WCAP*wBondN*3), bOid=new Float32Array(WCAP*wBondN), bTap=new Float32Array(WCAP*wBondN);
@@ -4773,6 +4800,7 @@ async function run(){
     const bnc=(x,lo,hi)=>{ const sp=hi-lo; let t=(x-lo)%(2*sp); if(t<0) t+=2*sp; return lo+(t<sp?t:2*sp-t); };
     const wPick=new Int32Array(WCAP), wPickD=new Float32Array(WCAP), wPos=new Float32Array(WCAP*3);
     scene.onBeforeRenderObservable.add(()=>{
+      if(!gFreeOn) return;   // Hiukkaset off → skip the whole rebuild, not just the drawing
       const cp=cam.position, R=gCrisp, R2=R*R;
       /* Use the clock the SHADER will see, not the current one. gWaveT is advanced by an observer that is
          registered AFTER this one, so by the time the water spheres are drawn it has already moved on by a
