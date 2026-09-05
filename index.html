@@ -2205,12 +2205,39 @@ async function run(){
   const gBackend = 'WebGL';
   engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
   engine.enableOfflineSupport = false;   // perf: skip the .manifest network probe per scene file
-  // Supersample: render at higher internal res so the shader-drawn sphere edges /
-  // ink outlines are anti-aliased (no FXAA). hardwareScalingLevel < 1 = higher res.
-  // Start ~1.5× above device pixels, capped at 2.5× linear; adaptive backoff below.
-  const SS_MIN = 0.4;                                   // floor = max supersample (2.5× linear)
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  engine.setHardwareScalingLevel(Math.max(SS_MIN, 1 / (dpr * 1.5)));   // crisp supersample (quality over FPS)
+  /* Supersample: render at higher internal res so the shader-drawn sphere edges / ink outlines are
+     anti-aliased (no FXAA). hardwareScalingLevel is a LINEAR divisor, so the cost is its square — at
+     0.4 the scene draws 6.25× the pixels of the window, and each of the six full-screen post-processes
+     allocates a target that size.
+     Derived from devicePixelRatio alone this was unbounded, which caused two separate bugs:
+       · A maximised window on a scaled 4K display asked for 8640×4500 — past the 8192 that
+         MAX_RENDERBUFFER_SIZE commonly reports — so the targets failed to allocate and the canvas came
+         out black with no JS error at all.
+       · dpr is read ONCE at load and changes with browser zoom and with which monitor the window is
+         on, so the same file could render 2.2× or 6.2× the pixels between two loads. Smooth one time,
+         crawling the next, with nothing else different.
+     So: ask for the supersample, then clamp it to a pixel budget AND to what the GPU can allocate. */
+  const SS_MIN = 0.4, SS_MAX = 1.6;                     // floor = max supersample (2.5× linear)
+  const PIX_BUDGET = 4.0e6;                             // pixels per full-screen pass, whatever the window size
+  let gMaxDim = 8192;
+  try { const g = engine._gl;
+    gMaxDim = Math.min(g.getParameter(g.MAX_RENDERBUFFER_SIZE), g.getParameter(g.MAX_TEXTURE_SIZE)) || 8192;
+  } catch(_){}
+  const chooseScale = () => {
+    const cv = engine.getRenderingCanvas();
+    const w = cv.clientWidth || window.innerWidth || 1280, h = cv.clientHeight || window.innerHeight || 720;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const lim = gMaxDim * 0.92;                         // margin under the hard limit
+    return Math.min(SS_MAX, Math.max(
+      Math.max(SS_MIN, 1 / (dpr * 1.5)),                // what we would LIKE
+      w / lim, h / lim,                                 // …but never a target the GPU cannot allocate
+      Math.sqrt((w * h) / PIX_BUDGET)));                // …and never more pixels than the budget
+  };
+  engine.setHardwareScalingLevel(chooseScale());
+  // A resize (or a drag onto a differently-scaled monitor) can blow the budget again. Only ever REDUCE
+  // the pixel count here, so this can't undo the adaptive backoff below.
+  window.addEventListener('resize', () => { const s = chooseScale();
+    if(s > engine.getHardwareScalingLevel() + 1e-3) engine.setHardwareScalingLevel(s); });
   const scene = new BABYLON.Scene(engine);
   scene.skipPointerMovePicking = true;   // perf: we never auto-pick on pointer-move (all picking is done manually in our own handlers)
   scene.clearColor = new BABYLON.Color4(0.055,0.135,0.082,1);   // static dark green (matches the bg quad)
@@ -4943,10 +4970,15 @@ async function run(){
       const want = (dx*dx+dy*dy+dz*dz) < reach*reach;
       if(rc.on !== want){ rc.on = want; for(const m of rc.meshes) m.setEnabled(want); }
     }
-    if(engine.getFps() < 12){   // only back off if truly unusable (quality prioritised over FPS)
-      if(++lowFrames > 90){ lowFrames = 0;
+    /* Adaptive backoff. The old threshold was 12 fps sustained for 90 frames, which meant anything
+       between 13 and 40 fps — i.e. every case that actually feels laggy — never backed off at all and
+       simply stayed slow forever. 45 fps over ~40 frames instead, so a genuinely stuttering frame rate
+       recovers within about a second. It only ever reduces resolution, never raises it, so it settles
+       instead of oscillating. */
+    if(engine.getFps() < 45){
+      if(++lowFrames > 40){ lowFrames = 0;
         const cur = engine.getHardwareScalingLevel();
-        if(cur < 1.0) engine.setHardwareScalingLevel(Math.min(cur + 0.15, 1.0));
+        if(cur < SS_MAX) engine.setHardwareScalingLevel(Math.min(cur + 0.12, SS_MAX));
       }
     } else lowFrames = 0;
   });
