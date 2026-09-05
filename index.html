@@ -47,9 +47,13 @@ body.dark-mode .loading-zzz span,body.dark-mode .loading-text{color:#c9b48f}
 .mlbl.dev{font-size:10px;padding:1px 6px;opacity:.9;box-shadow:0 2px 0 var(--brown)}   /* dev per-model tags: a touch lighter */
 #zoomval{position:absolute;top:14px;right:16px;z-index:10;color:var(--brown);
   font-family:'Courier New',monospace;font-size:15px;font-weight:bold;pointer-events:none}
-#camcoords{position:absolute;top:14px;right:16px;z-index:10;color:var(--brown);text-align:right;line-height:1.45;
-  font-family:'Courier New',monospace;font-size:12px;font-weight:bold;pointer-events:none;display:none;
-  background:rgba(244,236,216,.72);border:1.5px solid var(--brown);border-radius:7px;padding:3px 8px}
+/* right:70px clears the fullscreen button, which sits at right:16 and was drawn straight over this.
+   The dev slider panel is pushed below it at runtime (see applyDevMode) since both are right-anchored.
+   max-width + wrapping because the profile lines are long and a narrow window clipped them off. */
+#camcoords{position:absolute;top:14px;right:70px;z-index:23;color:var(--brown);text-align:right;line-height:1.5;
+  font-family:'Courier New',monospace;font-size:11.5px;font-weight:bold;pointer-events:none;display:none;
+  max-width:min(300px,60vw);white-space:normal;overflow-wrap:anywhere;
+  background:rgba(244,236,216,.9);border:1.5px solid var(--brown);border-radius:7px;padding:4px 8px}
 #zoomtips{position:absolute;right:18px;bottom:18px;z-index:10;
   display:flex;flex-direction:column;align-items:center;gap:8px;
   opacity:0;transition:opacity .5s;pointer-events:none;
@@ -4832,6 +4836,7 @@ async function run(){
   const zoomEl = document.getElementById('zoomval');
   const camcoordsEl = document.getElementById('camcoords');   // dev-only camera pos/rotation readout
   let gInstr = null;   // SceneInstrumentation, built on first use — it has a per-frame cost, so dev only
+  let gDraws = 0;      // draw calls, sampled AFTER the frame (the counter is zero before it)
   let lowFrames = 0;   // adaptive supersample: back off resolution if FPS sags (Firefox / weak GPUs)
   scene.onBeforeRenderObservable.add(() => {
     // Safety reset of shared GL state before ANY group renders. The selection stencil-mask mesh
@@ -4859,7 +4864,8 @@ async function run(){
     // free mode also keeps current via setTarget); radius + mode shown too.
     if(camcoordsEl){ if(gDev){ const p=cam.position, DEG=180/Math.PI;
         if(!gInstr){ gInstr = new BABYLON.SceneInstrumentation(scene);
-          gInstr.captureFrameTime = true; gInstr.captureActiveMeshesEvaluationTime = true; gInstr.captureRenderTime = true; }
+          gInstr.captureFrameTime = true; gInstr.captureActiveMeshesEvaluationTime = true; gInstr.captureRenderTime = true;
+          scene.onAfterRenderObservable.add(() => { gDraws = gInstr.drawCallsCounter.current; }); }
         camcoordsEl.style.display='block';
         /* Per-frame profile, so a screenshot of this readout says WHERE a slow frame goes instead of
            only that it is slow. cpu is the whole frame on the main thread, of which arv is Babylon
@@ -4871,12 +4877,16 @@ async function run(){
         // means nothing.
         const eng2 = scene.getEngine(), rw = eng2.getRenderWidth(), rh = eng2.getRenderHeight();
         const ms = c => { const v = c.lastSecAverage; return (isFinite(v) && v >= 0) ? v.toFixed(1) : '–'; };
-        camcoordsEl.innerHTML = Math.round(eng2.getFps())+' fps'
-          + (gInstr ? '<br>cpu '+ms(gInstr.frameTimeCounter)+' ms'
-                    + '  arv '+ms(gInstr.activeMeshesEvaluationTimeCounter)
-                    + '  pii '+ms(gInstr.renderTimeCounter)
-                    + '<br>'+Math.round(gInstr.drawCallsCounter.lastSecAverage||0)+' piirtoa  '   // .current is 0 here — the counter resets before this observer runs+scene.getActiveMeshes().length+'/'+scene.meshes.length+' meshiä'
-                    + '<br>'+rw+'×'+rh+'  ('+((rw*rh)/1e6).toFixed(2)+' Mpx)  hsl '+eng2.getHardwareScalingLevel().toFixed(2) : '')
+        // NB: the draw-call counter must be read as lastSecAverage — .current is always 0 here because
+        // it resets before this before-render observer runs. Comments stay OFF the concatenation lines:
+        // a // comment mid-expression silently swallows the rest of the line, which is how the mesh
+        // count vanished from this readout a commit ago.
+        camcoordsEl.innerHTML = Math.round(eng2.getFps())+' fps  ·  cpu '+(gInstr?ms(gInstr.frameTimeCounter):'–')+' ms'
+          + (gInstr ? '<br>arv '+ms(gInstr.activeMeshesEvaluationTimeCounter)+'  ·  pii '+ms(gInstr.renderTimeCounter)
+                    + '<br>'+gDraws+' piirtoa'
+                    + '<br>'+scene.getActiveMeshes().length+'/'+scene.meshes.length+' meshiä'
+                    + '<br>'+rw+'×'+rh+'  '+((rw*rh)/1e6).toFixed(2)+' Mpx'
+                    + '<br>hsl '+eng2.getHardwareScalingLevel().toFixed(2) : '')
           +'<br>sij. '+p.x.toFixed(0)+', '+p.y.toFixed(0)+', '+p.z.toFixed(0)
           +'<br>α '+(cam.alpha*DEG).toFixed(1)+'°  β '+(cam.beta*DEG).toFixed(1)+'°'
           +'<br>et. '+Math.abs(cam.radius).toFixed(0); }
@@ -5736,6 +5746,11 @@ async function run(){
   });
   // Turning dev mode OFF drops any live complex selection and hides every dev label + the dev panel.
   applyDevMode = () => { devPanel.style.display = gDev ? 'flex' : 'none';
+    // Both this panel and the camera/profile readout are anchored to the right edge, so a fixed top
+    // drew one straight over the other. Drop the panel below whatever height the readout has.
+    if(gDev) requestAnimationFrame(() => { const cc = document.getElementById('camcoords');
+      const bot = (cc && cc.offsetHeight) ? cc.getBoundingClientRect().bottom : 46;
+      devPanel.style.top = Math.round(bot + 10) + 'px'; });
     const zv = document.getElementById('zoomval'); if(zv) zv.style.display = gDev ? 'block' : 'none';   // zoom readout is dev-only
     if(gShortcuts) gShortcuts.style.display = gDev ? 'block' : 'none';   // keyboard-shortcut cheatsheet is dev-only
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
