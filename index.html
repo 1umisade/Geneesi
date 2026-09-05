@@ -2066,9 +2066,18 @@ varying vec2 vUV;
 uniform sampler2D textureSampler;
 uniform float bright;
 uniform float contrast;
+uniform float sat;      // 0 = greyscale, 1 = untouched, >1 = punchier
+uniform float hi;       // -1..1 on the bright end only
+uniform float sh;       // -1..1 on the dark end only
 void main(void){ vec4 t = texture2D(textureSampler, vUV);
   vec3 c = (t.rgb - 0.5) * contrast + 0.5;   // contrast around mid-grey — raised as it dims so it does not wash out
   c *= bright;                                // then the overall level
+  float luma = dot(c, vec3(0.299, 0.587, 0.114));
+  c = mix(vec3(luma), c, sat);                // saturation, pivoting on luminance so brightness is unchanged
+  // Highlights and shadows are weighted by luminance, so each end moves on its own and the midtones
+  // stay put. Both are gains rather than offsets, which keeps neutral at exactly 0.
+  c *= 1.0 + hi * smoothstep(0.5, 1.0, luma);
+  c *= 1.0 + sh * (1.0 - smoothstep(0.0, 0.5, luma));
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), t.a); }`;
 
 let engine = null;
@@ -3139,6 +3148,9 @@ async function run(){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
+  let gSat = 1.0;             // saturation, dev slider
+  let gHi = 0.0;              // highlight gain (bright end only), dev slider
+  let gSh = 0.0;              // shadow gain (dark end only), dev slider
   let gBoil = 0.2;            // line-boil amount (dev "boil" slider): stepped per-atom jitter + painterly warp (0 = off) — default 0.2
   let gRevealOn = 0;          // 1 = cofactor line-of-sight see-through active (ETC mode on, or a cofactor selected)
   let gConeTip = 0.12;        // cofactor see-through cone width AT the atom (0 = point tip → narrow; 1 = full disc → tube). Dev slider.
@@ -5635,6 +5647,21 @@ async function run(){
   rtSld.type='range'; rtSld.min='5'; rtSld.max='400'; rtSld.value='100'; rtSld.style.cssText='width:100%;cursor:pointer;';
   const rtValEl = rtRow.querySelector('#dev-rt-val');
   rtSld.oninput = () => { gRotSpeed = 2.2 * (+rtSld.value/100); rtValEl.textContent = Math.round(gRotSpeed*57.3)+'°/s'; };
+  // Colour grade: brightness, saturation, and the two ends of the tonal range independently.
+  const mkGrade = (id, label, min, max, init, fmt, apply) => {
+    const row = document.createElement('div');
+    row.innerHTML = label + ': <b id="dev-'+id+'-val">'+fmt(init)+'</b>';
+    const sld = document.createElement('input');
+    sld.type='range'; sld.min=String(min); sld.max=String(max); sld.value=String(init);
+    sld.style.cssText='width:100%;cursor:pointer;';
+    const val = row.querySelector('#dev-'+id+'-val');
+    sld.oninput = () => { const v = +sld.value; apply(v); val.textContent = fmt(v); };
+    return { row, sld };
+  };
+  const brG = mkGrade('br','kirkkaus',       20, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
+  const saG = mkGrade('sa','kylläisyys',    0, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
+  const hiG = mkGrade('hi','huippuvalot',  -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
+  const shG = mkGrade('sh','varjot',       -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gSh = v/100; });
   const coneRow = document.createElement('div');
   coneRow.innerHTML = 'culling cone: <b id="dev-cone-val">off</b>';   // OFF by default (dial it in when zoomed into a complex)
   const coneSld = document.createElement('input');
@@ -5801,6 +5828,10 @@ async function run(){
   devPanel.appendChild(mvRow); devPanel.appendChild(mvSld);
   devPanel.appendChild(zmRow); devPanel.appendChild(zmSld);
   devPanel.appendChild(rtRow); devPanel.appendChild(rtSld);
+  devPanel.appendChild(brG.row); devPanel.appendChild(brG.sld);
+  devPanel.appendChild(saG.row); devPanel.appendChild(saG.sld);
+  devPanel.appendChild(hiG.row); devPanel.appendChild(hiG.sld);
+  devPanel.appendChild(shG.row); devPanel.appendChild(shG.sld);
   devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
@@ -7688,9 +7719,6 @@ async function run(){
   // FXAA + supersampling still smooth the edges.
   new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);
   // Global brightness (dev "lighting" slider) — a simple per-pixel multiply on the finished frame.
-  const brightPP = new BABYLON.PostProcess('bright', 'bright', ['bright','contrast'], null, 1.0, cam);
-  brightPP.onApply = eff => { eff.setFloat('bright', gBright);
-    eff.setFloat('contrast', 1.0 + Math.max(0.0, 1.0 - gBright) * 1.2); };   // dimmer → punchier (no wash-out)
   // Painterly / comic-book grade — runs last, over the anti-aliased frame. Toggle with "P".
   let painterlyOn = true;
   const painterly = new BABYLON.PostProcess('painterly', 'painterly',
@@ -7737,6 +7765,15 @@ void main(void){
       eff.setFloat('aspect', w / h);
     };
   }
+
+  /* Colour grade runs LAST, after the painterly pass. Before, it fed painterly, whose comic-book
+     quantiser then re-banded the result -- pushing highlights UP could come out darker because the
+     value crossed into a different band. At the default brightness this pass is an identity, so
+     moving it changes nothing about the look and simply makes the sliders grade the final image. */
+  const brightPP = new BABYLON.PostProcess('bright', 'bright', ['bright','contrast','sat','hi','sh'], null, 1.0, cam);
+  brightPP.onApply = eff => { eff.setFloat('bright', gBright);
+    eff.setFloat('contrast', 1.0 + Math.max(0.0, 1.0 - gBright) * 1.2);   // dimmer → punchier (no wash-out)
+    eff.setFloat('sat', gSat); eff.setFloat('hi', gHi); eff.setFloat('sh', gSh); };
 
   // (shader pre-compile + loading-screen dismissal now happen after the background builds finish)
 
