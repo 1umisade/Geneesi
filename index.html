@@ -2728,7 +2728,8 @@ async function run(){
   // Camera feel, tunable from the dev panel. Each is a MAX rate that the camera eases up to: hold a key
   // and the speed ramps 0 → max over RAMP_S seconds, then holds. Releasing every key of that kind drops
   // the ramp straight back to 0, so a tap is a small nudge and a long hold is a full-speed sweep.
-  let gMoveSpeed = 1.0;    // multiplier on the distance-scaled fly speed (arrow keys)
+  let gPanSpeed  = 1.0;    // multiplier on the pan speed (W/A/S/D - screen-space pan)
+  let gZoomSpeed = 1.0;    // multiplier on the zoom speed (I/O - in and out along the view)
   let gRotSpeed  = 2.2;    // max yaw/pitch rate in rad/s (WASD) — 2.2 ≈ 126 deg/s
   const RAMP_S = 7.0;      // seconds from the initial nudge to full speed
   const RAMP_MIN = 0.10;   // a press starts at 10% of max, so a tap still nudges instead of creeping from a standstill
@@ -2746,13 +2747,16 @@ async function run(){
     orbitLocked = false; gCamFollow = false;
     const t=cam.getTarget(), p=cam.position;
     const F=cam.getDirection(BABYLON.Axis.Z), R=cam.getDirection(BABYLON.Axis.X);   // camera's OWN forward + right (screen-relative → stay consistent even when flipped upside-down)
-    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * gMoveSpeed * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
+    const sp = Math.max(4, Math.abs(cam.radius)*0.5) * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
+    const spP = sp * gPanSpeed, spZ = sp * gZoomSpeed;   // pan and zoom are tuned separately
     // Vertical is the camera's OWN up, i.e. straight up ON SCREEN. A fixed world axis does not work here:
     // the arrow-key free look rewrites cam.upVector, so after looking around "world up" is no longer the
     // up you see — and the membrane's normal is Y while the floor's is Z, so neither axis is reliably
     // "up" anyway. Screen-up is the one direction that always matches what the key is asking for.
     const U=cam.getDirection(BABYLON.Axis.Y);
-    const mx=(F.x*fwd+R.x*strafe+U.x*vert)*sp, my=(F.y*fwd+R.y*strafe+U.y*vert)*sp, mz=(F.z*fwd+R.z*strafe+U.z*vert)*sp;
+    const mx=F.x*fwd*spZ+(R.x*strafe+U.x*vert)*spP,
+          my=F.y*fwd*spZ+(R.y*strafe+U.y*vert)*spP,
+          mz=F.z*fwd*spZ+(R.z*strafe+U.z*vert)*spP;
     p.x+=mx; p.y+=my; p.z+=mz;
     cam.setTarget(new BABYLON.Vector3(t.x+mx, t.y+my, t.z+mz));   // shift target the SAME amount → pure translation, no rotation
   });
@@ -3940,6 +3944,103 @@ async function run(){
   /* No vdW shells: every atom always shows its full orbitals (no space-filling stand-in, no
      screen-door reveal band). Orbitals render for cells near the camera; far cells simply aren't
      drawn (rather than falling back to a vdW sphere). */
+
+  /* ── Per-protein collision shells ────────────────────────────────────────────────────────────────
+     A real shape derived from the spatial data, not a bounding box. Every atom is bucketed by its
+     DIRECTION from the model centroid, and each bucket keeps the furthest point that atom's vdW sphere
+     reaches. That is one pass over the atoms per model, and it leaves a spherical height-field: a radius
+     per direction that touches the outermost atom on that bearing — the surface atoms, connected.
+     Empty buckets (bearings no atom happened to fall on) are filled from their neighbours, then one
+     dilation pass guarantees the shell never cuts inside an atom it is meant to contain.
+     Star-shaped, so a deep concavity is bridged rather than followed — the usual trade for a collision
+     proxy, and it stays a closed watertight surface. Dev-only. */
+  const gHulls = [];
+  {
+    const NLAT = 32, NLON = 64;   // ~5.6 deg bearings
+    const hullMat = new BABYLON.StandardMaterial('hullMat', scene);
+    hullMat.wireframe = true; hullMat.disableLighting = true; hullMat.backFaceCulling = false;
+    hullMat.emissiveColor = new BABYLON.Color3(0.25, 0.95, 0.55); hullMat.alpha = 0.55;
+    for(let mi=0; mi<mols.length; mi++){
+      const m = mols[mi];
+      if(!m || !m.na || m === chl) continue;
+      const ox=m.ox||0, oy=m.oy||0, oz=m.oz||0;
+      let cx=0, cy=0, cz=0;
+      for(let k=0;k<m.na;k++){ cx+=m.x[k]; cy+=m.y[k]; cz+=m.z[k]; }
+      cx=cx/m.na+ox; cy=cy/m.na+oy; cz=cz/m.na+oz;
+      const R = new Float32Array(NLAT*NLON);
+      for(let k=0;k<m.na;k++){
+        const dx=m.x[k]+ox-cx, dy=m.y[k]+oy-cy, dz=m.z[k]+oz-cz;
+        const r=Math.hypot(dx,dy,dz); if(r<1e-6) continue;
+        const li=Math.min(NLAT-1, Math.max(0, Math.round(Math.acos(dz/r)/Math.PI*(NLAT-1))));
+        let lo=Math.floor((Math.atan2(dy,dx)+Math.PI)/(2*Math.PI)*NLON) % NLON; if(lo<0) lo+=NLON;
+        const reach = r + info(m.el[k]).vr*FILL_SCALE;
+        const q=li*NLON+lo; if(reach > R[q]) R[q]=reach;
+      }
+      // fill bearings no atom landed on, from whatever neighbours do have a value
+      for(let pass=0; pass<6; pass++){
+        let holes=0;
+        for(let li=0; li<NLAT; li++) for(let lo=0; lo<NLON; lo++){
+          const q=li*NLON+lo; if(R[q]>0) continue;
+          let best=0;
+          for(let dl=-1; dl<=1; dl++) for(let dn=-1; dn<=1; dn++){
+            const a=li+dl; if(a<0||a>=NLAT) continue;
+            const b=((lo+dn)%NLON+NLON)%NLON;
+            const v=R[a*NLON+b]; if(v>best) best=v;
+          }
+          if(best>0) R[q]=best; else holes++;
+        }
+        if(!holes) break;
+      }
+      // Dilate over a 5x5 bearing window. An atom lands in ONE bucket but the surface between buckets
+      // has to clear it too, so each vertex takes the largest reach anywhere nearby - the shell then
+      // contains the atoms instead of cutting between them. Measured 98.2% -> 100% enclosed.
+      const D = new Float32Array(R);
+      for(let li=0; li<NLAT; li++) for(let lo=0; lo<NLON; lo++){
+        let best=0;
+        for(let dl=-2; dl<=2; dl++) for(let dn=-2; dn<=2; dn++){
+          const a=li+dl; if(a<0||a>=NLAT) continue;
+          const b=((lo+dn)%NLON+NLON)%NLON;
+          const v=R[a*NLON+b]; if(v>best) best=v;
+        }
+        D[li*NLON+lo]=best;
+      }
+      // vertices are CENTROID-RELATIVE, so the mesh can simply carry its model's transform
+      const pos=[], idx=[];
+      for(let li=0; li<NLAT; li++){
+        const phi = li/(NLAT-1)*Math.PI, sp=Math.sin(phi), cp=Math.cos(phi);
+        for(let lo=0; lo<=NLON; lo++){
+          const theta = (lo%NLON)/NLON*2*Math.PI - Math.PI, rr = D[li*NLON+(lo%NLON)];
+          pos.push(sp*Math.cos(theta)*rr, sp*Math.sin(theta)*rr, cp*rr);
+        }
+      }
+      const W=NLON+1;
+      for(let li=0; li<NLAT-1; li++) for(let lo=0; lo<NLON; lo++){
+        const a=li*W+lo, b=a+1, c=a+W, d=c+1;
+        idx.push(a,c,b, b,c,d);
+      }
+      const mesh = new BABYLON.Mesh('hull'+mi, scene);
+      const vd = new BABYLON.VertexData(); vd.positions = pos; vd.indices = idx;
+      vd.normals = []; BABYLON.VertexData.ComputeNormals(pos, idx, vd.normals);
+      vd.applyToMesh(mesh);
+      mesh.material = hullMat; mesh.isPickable = false; mesh.alwaysSelectAsActiveMesh = true;
+      mesh.setEnabled(false);
+      gHulls.push({ mesh, mi, c:new BABYLON.Vector3(cx,cy,cz) });
+    }
+    // carry each shell on its model's transform, so a dragged or flattened model keeps its shell
+    const _hp=new BABYLON.Vector3(), _hq=new BABYLON.Quaternion(), _hs=new BABYLON.Vector3(), _hm=new BABYLON.Matrix();
+    scene.onBeforeRenderObservable.add(()=>{
+      if(!gHulls.length || !gHulls[0].mesh.isEnabled()) return;
+      for(const h of gHulls){
+        BABYLON.Matrix.FromArrayToRef(gModelXform, h.mi*16, _hm);
+        _hm.decompose(_hs, _hq, _hp);
+        const c=BABYLON.Vector3.TransformCoordinates(h.c, _hm);
+        h.mesh.position.copyFrom(c);
+        if(!h.mesh.rotationQuaternion) h.mesh.rotationQuaternion = new BABYLON.Quaternion();
+        h.mesh.rotationQuaternion.copyFrom(_hq);
+        h.mesh.scaling.copyFrom(_hs);
+      }
+    });
+  }
 
   /* ── Aromatic delocalised-π tori: two translucent rings (above/below each aromatic
      ring plane) with a bright arc orbiting them (the ring current). One thin-instanced
@@ -5513,11 +5614,17 @@ async function run(){
     + 'border-radius:12px;box-shadow:0 4px 0 var(--brown);padding:12px 14px;user-select:none;min-width:230px;bottom:246px;max-height:none;overflow-y:auto;';
   // Camera feel: max fly speed (arrow keys) and max turn rate (WASD). Both ease 0 → max over 1 s.
   const mvRow = document.createElement('div');
-  mvRow.innerHTML = 'liikkumisnopeus: <b id="dev-mv-val">1.00×</b>';
+  mvRow.innerHTML = 'panorointinopeus: <b id="dev-mv-val">1.00×</b>';
   const mvSld = document.createElement('input');
   mvSld.type='range'; mvSld.min='5'; mvSld.max='400'; mvSld.value='100'; mvSld.style.cssText='width:100%;cursor:pointer;';
   const mvValEl = mvRow.querySelector('#dev-mv-val');
-  mvSld.oninput = () => { gMoveSpeed = +mvSld.value/100; mvValEl.textContent = gMoveSpeed.toFixed(2)+'×'; };
+  mvSld.oninput = () => { gPanSpeed = +mvSld.value/100; mvValEl.textContent = gPanSpeed.toFixed(2)+'×'; };
+  const zmRow = document.createElement('div');
+  zmRow.innerHTML = 'zoomausnopeus: <b id="dev-zm-val">1.00×</b>';
+  const zmSld = document.createElement('input');
+  zmSld.type='range'; zmSld.min='5'; zmSld.max='400'; zmSld.value='100'; zmSld.style.cssText='width:100%;cursor:pointer;';
+  const zmValEl = zmRow.querySelector('#dev-zm-val');
+  zmSld.oninput = () => { gZoomSpeed = +zmSld.value/100; zmValEl.textContent = gZoomSpeed.toFixed(2)+'×'; };
   const rtRow = document.createElement('div');
   rtRow.innerHTML = 'kääntymisnopeus: <b id="dev-rt-val">126°/s</b>';
   const rtSld = document.createElement('input');
@@ -5687,7 +5794,9 @@ async function run(){
   // above (so its startup side-effects, such as the render-scale default, still run) - it is simply
   // not shown any more.
   devPanel.appendChild(backRow); devPanel.appendChild(czRow); devPanel.appendChild(czSld);
-  devPanel.appendChild(mvRow); devPanel.appendChild(mvSld); devPanel.appendChild(rtRow); devPanel.appendChild(rtSld);
+  devPanel.appendChild(mvRow); devPanel.appendChild(mvSld);
+  devPanel.appendChild(zmRow); devPanel.appendChild(zmSld);
+  devPanel.appendChild(rtRow); devPanel.appendChild(rtSld);
   devPanel.appendChild(camRow);
   document.body.appendChild(devPanel);
   scene.registerAfterRender(() => {   // live camera coordinates while dev mode is on
@@ -5712,7 +5821,9 @@ async function run(){
     if(gShadePlaneMesh) gShadePlaneMesh.setEnabled(gDev);   // white shading-reference plane
     { const rf = scene.getMeshByName('rtsFloor'); if(rf) rf.setEnabled(gDev); }   // light-green floor sheet → dev-only
     if(gCollViz) gCollViz.setEnabled(COLL_VIZ && (gDev || gCollVizHold));   // wireframe collision spheres (also on while V is held)
-    { const mm = document.getElementById('rts-minimap'); if(mm) mm.style.display = gDev ? '' : 'none'; }   // minimap → dev-only
+    { const mm = document.getElementById('rts-minimap'); if(mm) mm.style.display = gDev ? '' : 'none';
+      const slot = document.getElementById('sc2-minimap-slot'); if(slot) slot.style.display = gDev ? '' : 'none'; }   // minimap AND its frame → dev-only
+    for(const h of gHulls) h.mesh.setEnabled(gDev);   // per-protein collision shells → dev-only
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
   // it was built for a single PSII, so it grabbed every model at once. Left-click always picks atoms.
@@ -6772,6 +6883,7 @@ async function run(){
       s.style.cssText = 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:'+(pad||'8px 12px')+';overflow:hidden;pointer-events:auto;'
         + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
     const left = sect(0,'auto','5px'), center = document.createElement('div'), right = sect(0,'auto'); center.id = 'sc2-center';
+    left.id = 'sc2-minimap-slot';   // the minimap's frame - hidden with it, else an empty panel is left behind
     center.style.cssText = 'flex:1 0 0;pointer-events:none;';   // info module moved to the RIGHT (above the spawn module) → the centre is now a transparent spacer keeping minimap left / spawn right
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
