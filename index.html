@@ -2737,16 +2737,19 @@ async function run(){
   scene.onBeforeRenderObservable.add(() => {
     // WASD FLIES the camera (FPS-style): W/S forward/back along the view direction (moving in = zooming in),
     // A/D strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
-    let fwd=0, strafe=0;
-    if(wasdKeys.w) fwd+=1; if(wasdKeys.s) fwd-=1;          // W / S → forward / back along the view direction
+    let fwd=0, strafe=0, vert=0;
+    if(wasdKeys.i) fwd+=1; if(wasdKeys.o) fwd-=1;          // I / O → in / out along the view direction (zoom)
     if(wasdKeys.d) strafe+=1; if(wasdKeys.a) strafe-=1;    // A / D → strafe left / right
-    if(!fwd && !strafe){ _moveRamp = RAMP_MIN; return; }
+    if(wasdKeys.w) vert+=1; if(wasdKeys.s) vert-=1;        // W / S → straight up / down the WORLD vertical
+    if(!fwd && !strafe && !vert){ _moveRamp = RAMP_MIN; return; }
     _moveRamp = Math.min(1, _moveRamp + rampStep());
     orbitLocked = false; gCamFollow = false;
     const t=cam.getTarget(), p=cam.position;
     const F=cam.getDirection(BABYLON.Axis.Z), R=cam.getDirection(BABYLON.Axis.X);   // camera's OWN forward + right (screen-relative → stay consistent even when flipped upside-down)
     const sp = Math.max(4, Math.abs(cam.radius)*0.5) * gMoveSpeed * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
-    const mx=(F.x*fwd+R.x*strafe)*sp, my=(F.y*fwd+R.y*strafe)*sp, mz=(F.z*fwd+R.z*strafe)*sp;
+    // vertical is the WORLD up (+Z, the floor normal), NOT the camera's own up - so W always rises
+    // straight up however the view is tilted, instead of drifting with wherever you happen to be looking.
+    const mx=(F.x*fwd+R.x*strafe)*sp, my=(F.y*fwd+R.y*strafe)*sp, mz=(F.z*fwd+R.z*strafe)*sp + vert*sp;
     p.x+=mx; p.y+=my; p.z+=mz;
     cam.setTarget(new BABYLON.Vector3(t.x+mx, t.y+my, t.z+mz));   // shift target the SAME amount → pure translation, no rotation
   });
@@ -2756,8 +2759,8 @@ async function run(){
   // grabbing the mouse does). (S also stops selected molecules — that binding is a no-op with nothing selected.)
   const wasdKeys = Object.create(null);
   window.addEventListener('keydown', e => { if(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-    const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
-  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d') wasdKeys[k]=false; });
+    const k = e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'||k==='i'||k==='o'){ if(!wasdKeys[k]) scene.stopAnimation(cam); wasdKeys[k]=true; } });
+  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if(k==='w'||k==='a'||k==='s'||k==='d'||k==='i'||k==='o') wasdKeys[k]=false; });
   // The ARROW KEYS are a TRULY FREE look: the camera stays put and its orientation rotates with no limit.
   // This is a VR HEADSET head-turn, not an FPS body-spin. Left/right yaw about the camera's OWN up and up/down
   // pitch about its OWN right, so the gaze always sweeps along the screen's own axes: whatever sits at
@@ -4644,6 +4647,10 @@ async function run(){
         eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
     // `off` gives each atom its rigid offset from the molecule centre (0 for O, the two O–H vectors for H)
     const mkImp=(nm,rad,col,cnt,off)=>{ const mesh=BABYLON.MeshBuilder.CreatePlane(nm,{size:2},scene); mesh.material=wMat(rad); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
+      // Group 1, like every other vdW shell in the scene: the ORBITALS live in group 0 and are drawn
+      // first, then the glass shell blends over them. Left in group 0 the sphere and the lobes sort
+      // against each other arbitrarily, and the sphere's depth write simply rejected the lobes inside it.
+      mesh.renderingGroupId=1;
       const cb=new Float32Array(cnt*4), mb=new Float32Array(cnt*16), og=new Float32Array(cnt*3), vl=new Float32Array(cnt*3);
       for(let k=0;k<cnt;k++){ const i=off?(k>>1):k;                       // two H instances per molecule
         cb[k*4]=col[0];cb[k*4+1]=col[1];cb[k*4+2]=col[2];cb[k*4+3]=0;
@@ -7659,7 +7666,7 @@ void main(void){
       + 'font-family:"Courier New",monospace;font-size:11.5px;line-height:1.75;color:var(--ink);background:var(--paper);'
       + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 13px;pointer-events:none;';
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','lähennys'],['Keskinappi + rulla','hidas lähennys'],
-      ['WASD','liiku ja sivuaskella'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
+      ['W / S','ylös ja alas'],['A / D','sivuaskel'],['I / O','lähennä ja loitonna'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
       ['Minikartan klikkaus','panoroi kohtaan'],['F (pohjassa)','himmennä muut'],['R','oletusnäkymä'],
       ['H','piilota käyttöliittymä'],['P','maalausefekti'],['M','valittu molekyyli liikkeelle'],['S','pysäytä molekyylit']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
