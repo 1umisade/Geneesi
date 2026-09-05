@@ -2874,7 +2874,7 @@ async function run(){
     // WASD FLIES the camera (FPS-style): W/S forward/back along the view direction (moving in = zooming in),
     // A/D strafe. We translate BOTH position and target by the same delta, so the view direction is unchanged.
     let fwd=0, strafe=0, vert=0;
-    if(wasdKeys.q) fwd+=1; if(wasdKeys.e) fwd-=1;          // Q / E → in / out along the view direction (zoom)
+    if(wasdKeys.e) fwd+=1; if(wasdKeys.q) fwd-=1;          // E / Q → in / out along the view direction (zoom)
     if(wasdKeys.d) strafe+=1; if(wasdKeys.a) strafe-=1;    // A / D → strafe left / right
     if(wasdKeys.w) vert+=1; if(wasdKeys.s) vert-=1;        // W / S → straight up / down the WORLD vertical
     if(!fwd && !strafe && !vert){ _moveRamp = RAMP_MIN; return; }
@@ -5157,7 +5157,14 @@ async function run(){
       const T = gWaveT + Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;
       /* Take the NEAREST WCAP molecules in the zone, not the first WCAP by index — an index-ordered pick
          would swap which molecules are detailed as they drift, making orbitals blink on and off around
-         you. Insertion into a WCAP-sized worst-first list, so no full sort of the candidates. */
+         you. Insertion into a WCAP-sized worst-first list, so no full sort of the candidates.
+         BUT that ordering only earns its keep when a cap is actually in force and some molecules have to
+         lose. With no cap every in-zone molecule is kept regardless of order, and the insertion sort that
+         maintained it degenerated to O(n^2): about a thousand molecules in the zone meant roughly half a
+         million element shifts EVERY FRAME. Measured at 9.7 ms of pure main-thread time, against 0.3 ms
+         for every other per-frame observer in the scene put together — the stutter that showed up exactly
+         when the crisp zone lit up. Uncapped now appends and the sorted path is kept for a real cap. */
+      const capped = WCAP < NW;
       let n=0, worst=Infinity;
       for(let i=0;i<NW;i++){
         const px=bnc(wc[i*3]  +wv[i*3]  *T, bLo.x, bHi.x);
@@ -5169,6 +5176,7 @@ async function run(){
         // The zone pick uses the BALLISTIC position (cheap, and the shells only shift it by a molecule or
         // two at the boundary); the repel is applied to the few survivors below, matching the shader.
         _wp[0]=px; _wp[1]=py; _wp[2]=pz; repelShells(_wp);
+        if(!capped){ wPick[n]=i; wPos[n*3]=_wp[0]; wPos[n*3+1]=_wp[1]; wPos[n*3+2]=_wp[2]; n++; continue; }
         if(n===WCAP && d2>=worst) continue;
         let at=n<WCAP ? n++ : WCAP-1;
         while(at>0 && wPickD[at-1]>d2){ wPickD[at]=wPickD[at-1]; wPick[at]=wPick[at-1];
@@ -5178,35 +5186,50 @@ async function run(){
       }
       for(let k=0;k<n;k++){
         const i=wPick[k], px=wPos[k*3], py=wPos[k*3+1], pz=wPos[k*3+2];
-        // build this molecule's frame from its own two O–H vectors, then map canonical → molecule
-        const u=nrm([wh1[i*3],wh1[i*3+1],wh1[i*3+2]]);
-        const w=nrm(crs([wh1[i*3],wh1[i*3+1],wh1[i*3+2]],[wh2[i*3],wh2[i*3+1],wh2[i*3+2]]));
-        const v=crs(w,u);
-        const r0=[u[0]*cU[0]+v[0]*cV[0]+w[0]*cW[0], u[0]*cU[1]+v[0]*cV[1]+w[0]*cW[1], u[0]*cU[2]+v[0]*cV[2]+w[0]*cW[2]];
-        const r1=[u[1]*cU[0]+v[1]*cV[0]+w[1]*cW[0], u[1]*cU[1]+v[1]*cV[1]+w[1]*cW[1], u[1]*cU[2]+v[1]*cV[2]+w[1]*cW[2]];
-        const r2v=[u[2]*cU[0]+v[2]*cV[0]+w[2]*cW[0], u[2]*cU[1]+v[2]*cV[1]+w[2]*cW[1], u[2]*cU[2]+v[2]*cV[2]+w[2]*cW[2]];
-        const xf=(sx,sy,sz)=>[r0[0]*sx+r0[1]*sy+r0[2]*sz+px, r1[0]*sx+r1[1]*sy+r1[2]*sz+py, r2v[0]*sx+r2v[1]*sy+r2v[2]*sz+pz];
+        /* Build this molecule's frame from its own two O–H vectors, then map canonical → molecule.
+           Written out in scalars on purpose: nrm/crs/xf all RETURN a fresh 3-element array, and xf ran
+           twice for every lobe — at a few thousand lobes a frame that was ~9000 throwaway arrays per
+           frame of pure GC pressure, in the one observer that already dominates the frame. Same maths,
+           no allocation. */
+        const a1x=wh1[i*3], a1y=wh1[i*3+1], a1z=wh1[i*3+2];
+        const a2x=wh2[i*3], a2y=wh2[i*3+1], a2z=wh2[i*3+2];
+        const ul=Math.hypot(a1x,a1y,a1z)||1e-6, ux=a1x/ul, uy=a1y/ul, uz=a1z/ul;
+        let wx=a1y*a2z-a1z*a2y, wy=a1z*a2x-a1x*a2z, wz=a1x*a2y-a1y*a2x;
+        const wl=Math.hypot(wx,wy,wz)||1e-6; wx/=wl; wy/=wl; wz/=wl;
+        const vx=wy*uz-wz*uy, vy=wz*ux-wx*uz, vz=wx*uy-wy*ux;
+        const r00=ux*cU[0]+vx*cV[0]+wx*cW[0], r01=ux*cU[1]+vx*cV[1]+wx*cW[1], r02=ux*cU[2]+vx*cV[2]+wx*cW[2];
+        const r10=uy*cU[0]+vy*cV[0]+wy*cW[0], r11=uy*cU[1]+vy*cV[1]+wy*cW[1], r12=uy*cU[2]+vy*cV[2]+wy*cW[2];
+        const r20=uz*cU[0]+vz*cV[0]+wz*cW[0], r21=uz*cU[1]+vz*cV[1]+wz*cW[1], r22=uz*cU[2]+vz*cV[2]+wz*cW[2];
         for(let q=0;q<wCoreN;q++){ const s0=q*16, d0=(k*wCoreN+q)*16;
           for(let c=0;c<3;c++){ const ax=wOrbCore.m[s0+c*4], ay=wOrbCore.m[s0+c*4+1], az=wOrbCore.m[s0+c*4+2];
-            wCoreM[d0+c*4]  =r0[0]*ax+r0[1]*ay+r0[2]*az;
-            wCoreM[d0+c*4+1]=r1[0]*ax+r1[1]*ay+r1[2]*az;
-            wCoreM[d0+c*4+2]=r2v[0]*ax+r2v[1]*ay+r2v[2]*az; wCoreM[d0+c*4+3]=0; }
-          const t=xf(wOrbCore.m[s0+12], wOrbCore.m[s0+13], wOrbCore.m[s0+14]);
-          wCoreM[d0+12]=t[0]; wCoreM[d0+13]=t[1]; wCoreM[d0+14]=t[2]; wCoreM[d0+15]=1;
-          const ct=xf(wOrbCore.cen[q*3], wOrbCore.cen[q*3+1], wOrbCore.cen[q*3+2]);
-          const dc=(k*wCoreN+q)*3; wCoreC[dc]=ct[0]; wCoreC[dc+1]=ct[1]; wCoreC[dc+2]=ct[2]; }
+            wCoreM[d0+c*4]  =r00*ax+r01*ay+r02*az;
+            wCoreM[d0+c*4+1]=r10*ax+r11*ay+r12*az;
+            wCoreM[d0+c*4+2]=r20*ax+r21*ay+r22*az; wCoreM[d0+c*4+3]=0; }
+          const mx=wOrbCore.m[s0+12], my=wOrbCore.m[s0+13], mz=wOrbCore.m[s0+14];
+          wCoreM[d0+12]=r00*mx+r01*my+r02*mz+px; wCoreM[d0+13]=r10*mx+r11*my+r12*mz+py;
+          wCoreM[d0+14]=r20*mx+r21*my+r22*mz+pz; wCoreM[d0+15]=1;
+          const ex=wOrbCore.cen[q*3], ey=wOrbCore.cen[q*3+1], ez=wOrbCore.cen[q*3+2], dc=(k*wCoreN+q)*3;
+          wCoreC[dc]  =r00*ex+r01*ey+r02*ez+px; wCoreC[dc+1]=r10*ex+r11*ey+r12*ez+py;
+          wCoreC[dc+2]=r20*ex+r21*ey+r22*ez+pz; }
         for(let q=0;q<wBondN;q++){ const s0=q*16, d0=(k*wBondN+q)*16;
           for(let c=0;c<3;c++){ const ax=wOrbBond.m[s0+c*4], ay=wOrbBond.m[s0+c*4+1], az=wOrbBond.m[s0+c*4+2];
-            wBondM[d0+c*4]  =r0[0]*ax+r0[1]*ay+r0[2]*az;
-            wBondM[d0+c*4+1]=r1[0]*ax+r1[1]*ay+r1[2]*az;
-            wBondM[d0+c*4+2]=r2v[0]*ax+r2v[1]*ay+r2v[2]*az; wBondM[d0+c*4+3]=0; }
-          const t=xf(wOrbBond.m[s0+12], wOrbBond.m[s0+13], wOrbBond.m[s0+14]);
-          wBondM[d0+12]=t[0]; wBondM[d0+13]=t[1]; wBondM[d0+14]=t[2]; wBondM[d0+15]=1;
-          const ct=xf(wOrbBond.cen[q*3], wOrbBond.cen[q*3+1], wOrbBond.cen[q*3+2]);
-          const dc=(k*wBondN+q)*3; wBondC[dc]=ct[0]; wBondC[dc+1]=ct[1]; wBondC[dc+2]=ct[2]; }
+            wBondM[d0+c*4]  =r00*ax+r01*ay+r02*az;
+            wBondM[d0+c*4+1]=r10*ax+r11*ay+r12*az;
+            wBondM[d0+c*4+2]=r20*ax+r21*ay+r22*az; wBondM[d0+c*4+3]=0; }
+          const mx=wOrbBond.m[s0+12], my=wOrbBond.m[s0+13], mz=wOrbBond.m[s0+14];
+          wBondM[d0+12]=r00*mx+r01*my+r02*mz+px; wBondM[d0+13]=r10*mx+r11*my+r12*mz+py;
+          wBondM[d0+14]=r20*mx+r21*my+r22*mz+pz; wBondM[d0+15]=1;
+          const ex=wOrbBond.cen[q*3], ey=wOrbBond.cen[q*3+1], ez=wOrbBond.cen[q*3+2], dc=(k*wBondN+q)*3;
+          wBondC[dc]  =r00*ex+r01*ey+r02*ez+px; wBondC[dc+1]=r10*ex+r11*ey+r12*ez+py;
+          wBondC[dc+2]=r20*ex+r21*ey+r22*ez+pz; }
       }
-      if(n){ wCoreMesh.thinInstanceBufferUpdated('matrix'); wCoreMesh.thinInstanceBufferUpdated('ocen');
-             wBondMesh.thinInstanceBufferUpdated('matrix'); wBondMesh.thinInstanceBufferUpdated('ocen'); }
+      /* Upload ONLY the slice actually in use. These buffers are sized for the no-cap worst case — every
+         one of the 20000 molecules at once — so thinInstanceBufferUpdated was pushing about 14 MB to the
+         GPU every frame to describe the few hundred molecules that are really in the zone. */
+      if(n){ wCoreMesh.thinInstancePartialBufferUpdate('matrix', wCoreM.subarray(0, n*wCoreN*16), 0);
+             wCoreMesh.thinInstancePartialBufferUpdate('ocen',   wCoreC.subarray(0, n*wCoreN*3),  0);
+             wBondMesh.thinInstancePartialBufferUpdate('matrix', wBondM.subarray(0, n*wBondN*16), 0);
+             wBondMesh.thinInstancePartialBufferUpdate('ocen',   wBondC.subarray(0, n*wBondN*3),  0); }
       wCoreMesh.thinInstanceCount = n*wCoreN; wBondMesh.thinInstanceCount = n*wBondN;
       wCoreMesh.setEnabled(n>0); wBondMesh.setEnabled(n>0);
     });
@@ -8184,7 +8207,7 @@ void main(void){
       + 'font-family:"Courier New",monospace;font-size:11.5px;line-height:1.75;color:var(--ink);background:var(--paper);'
       + 'border:2.5px solid var(--brown);border-radius:12px;box-shadow:0 3px 0 var(--brown);padding:9px 13px;pointer-events:none;';
     const rows = [['Keskinapin veto','pyöritä kameraa'],['Rulla','lähennys'],['Keskinappi + rulla','hidas lähennys'],
-      ['W / S','ylös ja alas'],['A / D','sivuaskel'],['Q / E','lähennä ja loitonna'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
+      ['W / S','ylös ja alas'],['A / D','sivuaskel'],['E / Q','lähennä ja loitonna'],['Nuolinäppäimet','katso ympärille'],['Oikea klikkaus','siirräkäsky'],['Tuplaklikkaus','valitse atomi/kofaktori'],
       ['Minikartan klikkaus','panoroi kohtaan'],['O (pohjassa)','himmennä muut'],['I','oletusnäkymä'],
       ['H','piilota käyttöliittymä'],['K','maalausefekti'],['R / F','kallista vasemmalle ja oikealle'],['M','valittu molekyyli liikkeelle'],['X','pysäytä molekyylit']];
     sc.innerHTML = '<b style="font-size:12.5px;color:var(--brown)">Pikanäppäimet</b><br>'
