@@ -5858,6 +5858,8 @@ async function run(){
     if(gCollViz) gCollViz.setEnabled(COLL_VIZ && (gDev || gCollVizHold));   // wireframe collision spheres (also on while V is held)
     { const mm = document.getElementById('rts-minimap'); if(mm) mm.style.display = gDev ? '' : 'none';
       const slot = document.getElementById('sc2-minimap-slot'); if(slot) slot.style.display = gDev ? '' : 'none'; }   // minimap AND its frame → dev-only
+    { const et = document.getElementById('eltable'); if(et) et.style.display = gDev ? '' : 'none';
+      const es = document.getElementById('sc2-elements-slot'); if(es) es.style.display = gDev ? '' : 'none'; }   // element/spawn panel → dev-only
     for(const h of gHulls) h.mesh.setEnabled(gDev);   // per-protein collision shells → dev-only
     if(!gDev){ deselectModel(); for(const {el} of devLabels) el.style.display='none'; } };
   // Macromolecule (whole-model) select + move gizmo is disabled in the multi-model thylakoid scene:
@@ -6919,6 +6921,7 @@ async function run(){
         + 'background:var(--paper);border:2.5px solid var(--brown);border-radius:14px;box-shadow:0 3px 0 var(--brown);flex:'+grow+' 0 '+basis+';'; return s; };
     const left = sect(0,'auto','5px'), center = document.createElement('div'), right = sect(0,'auto'); center.id = 'sc2-center';
     left.id = 'sc2-minimap-slot';   // the minimap's frame - hidden with it, else an empty panel is left behind
+    right.id = 'sc2-elements-slot';  // same for the element/spawn panel
     center.style.cssText = 'flex:1 0 0;pointer-events:none;';   // info module moved to the RIGHT (above the spawn module) → the centre is now a transparent spacer keeping minimap left / spawn right
     con.appendChild(left); con.appendChild(center); con.appendChild(right);
     document.body.appendChild(con);
@@ -6966,7 +6969,8 @@ async function run(){
     const menu = document.createElement('div'); menu.id = 'settings-menu';
     menu.style.cssText = 'position:fixed;left:16px;top:60px;z-index:15;display:none;flex-direction:column;gap:8px;align-items:flex-start;';
     document.body.appendChild(gear); document.body.appendChild(menu);
-    for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn']){
+    for(const id of ['darkmode-btn','gfx-btn','color-btn','etc-btn','dev-btn','lantern-btn','membrane-btn',
+                     'memcut-btn','memonly-btn','outline-btn']){
       const b = document.getElementById(id); if(!b) continue;
       b.style.position = 'static'; b.style.left = 'auto'; b.style.top = 'auto'; menu.appendChild(b);   // static → they stack in the menu
     }
@@ -7786,11 +7790,17 @@ void main(void){
   { const st = document.createElement('style');
     st.textContent = 'html.cursor-idle, html.cursor-idle *{cursor:none!important}';
     document.head.appendChild(st);
-    let idleTimer = null;
+    let idleTimer = null, fsTimer = null;
+    const fsBtn = () => document.getElementById('fs-btn');
     const wake = () => {
       document.documentElement.classList.remove('cursor-idle');
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => document.documentElement.classList.add('cursor-idle'), 10000);
+      // the fullscreen button gets out of the way sooner than the cursor does
+      const b = fsBtn();
+      if(b){ b.style.transition='opacity .35s ease'; b.style.opacity='1'; b.style.pointerEvents='auto'; }
+      clearTimeout(fsTimer);
+      fsTimer = setTimeout(() => { const x=fsBtn(); if(x){ x.style.opacity='0'; x.style.pointerEvents='none'; } }, 3000);
     };
     // POINTER activity only — deliberately NOT keydown. Flying with WASD/arrows leaves the mouse still,
     // and that is exactly when the cursor should get out of the way.
