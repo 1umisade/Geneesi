@@ -358,6 +358,19 @@ const ETC_TYRZ = 9;                                             // assigned geom
 const LIPID_RES = { LMG:1, DGD:2, SQD:3, LHG:4 };
 // Every cofactor type is one of five bright hues: RED, GREEN, CORAL, BLUE, PINK.
 const _RED=[1.00,0.16,0.16], _GRN=[0.16,0.90,0.36], _COR=[1.00,0.50,0.34], _BLU=[0.28,0.56,1.00], _PNK=[1.00,0.42,0.80];
+/* One stable colour per MOLECULE (residue instance). Hashing the id spreads neighbouring residues to
+   far-apart hues, so two chlorophylls sitting side by side never come out the same shade, while every
+   atom of one molecule shares exactly one colour - which is what makes the grouping readable. */
+function molCol(id){
+  let h = (id ^ (id >>> 16)) >>> 0;
+  h = (Math.imul(h, 2246822519) ^ (h >>> 13)) >>> 0;
+  h = (Math.imul(h, 3266489917) ^ (h >>> 16)) >>> 0;
+  const hue = (h >>> 8) / 16777216, sat = 0.55, lig = 0.62;
+  const c = (1 - Math.abs(2*lig - 1)) * sat, x = c * (1 - Math.abs(((hue*6) % 2) - 1)), m = lig - c/2;
+  const seg = Math.floor(hue*6) % 6;
+  const rgb = [[c,x,0],[x,c,0],[0,c,x],[0,x,c],[x,0,c],[c,0,x]][seg];
+  return [rgb[0]+m, rgb[1]+m, rgb[2]+m];
+}
 const ETC_COL = [ [0,0,0],   // 0 unused
   _COR,   // 1 OEC (Mn₄CaO₅)        — coral
   _PNK,   // 2 pheophytin           — pink
@@ -645,7 +658,10 @@ void main(void){
 #endif
 #ifdef MODELMOVE
 #ifndef NUCLEON
-  if(colorMode > 0.5) vColor = modelCol[int(modelId + 0.5)];   // colour-by-model tints atoms — but NEVER the nuclei (protons red / neutrons grey always)
+  // colour-by-model tints atoms - but NEVER the nuclei (protons red / neutrons grey always), and never
+  // an instance that carries its own identity colour (alpha 1), which is how each distinct molecule
+  // keeps its own hue instead of being flattened into its host protein's pastel.
+  if(colorMode > 0.5 && instanceColor.a < 0.5) vColor = modelCol[int(modelId + 0.5)];
 #endif
   vMid = modelId;
 #endif
@@ -2360,7 +2376,13 @@ async function run(){
       // that world point fixed by shifting the pivot the same fraction the distance changed - target = P + f*(target - P).
       const zp = sc || gZoomP;
       if(zp){ const f = newR / oldR;
-        cam.target.set(zp.x + f*(cam.target.x-zp.x), zp.y + f*(cam.target.y-zp.y), zp.z + f*(cam.target.z-zp.z)); }
+        // Full strength keeps zp exactly pinned on screen. gZoomPull scales only the CURSOR pull - a
+        // selection still gets followed exactly, since that is the point of having selected it.
+        const pull = sc ? 1.0 : gZoomPull;
+        const tx = zp.x + f*(cam.target.x-zp.x), ty = zp.y + f*(cam.target.y-zp.y), tz = zp.z + f*(cam.target.z-zp.z);
+        cam.target.set(cam.target.x + (tx-cam.target.x)*pull,
+                       cam.target.y + (ty-cam.target.y)*pull,
+                       cam.target.z + (tz-cam.target.z)*pull); }
       cam.radius = newR;
     }
   };
@@ -3162,6 +3184,7 @@ async function run(){
   let gWaveT = 0;             // global thermal-shake clock (bound as uT in every atom shader)
   let gSpeed = 1;             // master speed (wiggle + camera), driven by the bottom-left slider
   let gBright = 1.0;          // global brightness multiplier (dev "lighting" slider → brightness post-process)
+  let gZoomPull = 1.0;        // how far the view slides toward the cursor when wheel-zooming (0 = straight in, 1 = cursor stays pinned). Dev slider.
   let gSat = 1.0;             // saturation, dev slider
   let gHi = 0.0;              // highlight gain (bright end only), dev slider
   let gSh = 0.0;              // shadow gain (dark end only), dev slider
@@ -3597,7 +3620,13 @@ async function run(){
     const sb=sphBuf[e], ec=info(e).c, vr=info(e).vr*FILL_SCALE, cf=cofBuf[e], rs=resBuf[e];
     for(let a=0;a<atomCount[e];a++){
       const c=getCell(cellIx(sb[a*16+12],sb[a*16+13],sb[a*16+14]));
-      pushN(c.sphM, sb, a*16, 16); c.sphC.push(ec[0],ec[1],ec[2],0); c.sphR.push(vr);
+      pushN(c.sphM, sb, a*16, 16);
+      // A cofactor / bound molecule gets ONE colour of its own, keyed on its residue instance, so every
+      // atom of that molecule matches and the neighbouring one differs. Alpha 1 marks it as carrying its
+      // own identity, which stops colour-by-model overwriting it in the shader.
+      if(cf && cf[a]){ const mc=molCol(rs[a]); c.sphC.push(mc[0],mc[1],mc[2],1); }
+      else c.sphC.push(ec[0],ec[1],ec[2],0);
+      c.sphR.push(vr);
       if(cf && cf[a]){ const cc=ETC_COL[cf[a]]||ec; pushN(etcM, sb, a*16, 16); etcC.push(cc[0],cc[1],cc[2],0); etcR.push(vr*1.15); etcT.push(cf[a]); etcS.push(rs[a]); etcEl.push(e); etcIdx.push(a); }   // cofactor → overlay, coloured by type, slightly enlarged to pop (etcEl/etcIdx = element + its orbBuf index for the info panel)
     }
     await yield_();
@@ -5672,6 +5701,7 @@ async function run(){
     sld.oninput = () => { const v = +sld.value; apply(v); val.textContent = fmt(v); };
     return { row, sld };
   };
+  const zpG = mkGrade('zp','zoomin kohdistus', 0, 100, 100, v=>v+'%', v=>{ gZoomPull = v/100; });
   const brG = mkGrade('br','kirkkaus',       20, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gBright = v/100; });
   const saG = mkGrade('sa','kylläisyys',    0, 250, 100, v=>(v/100).toFixed(2)+'×', v=>{ gSat   = v/100; });
   const hiG = mkGrade('hi','huippuvalot',  -100, 100,   0, v=>(v>0?'+':'')+(v/100).toFixed(2), v=>{ gHi = v/100; });
@@ -5842,6 +5872,7 @@ async function run(){
   devPanel.appendChild(mvRow); devPanel.appendChild(mvSld);
   devPanel.appendChild(zmRow); devPanel.appendChild(zmSld);
   devPanel.appendChild(rtRow); devPanel.appendChild(rtSld);
+  devPanel.appendChild(zpG.row); devPanel.appendChild(zpG.sld);
   devPanel.appendChild(brG.row); devPanel.appendChild(brG.sld);
   devPanel.appendChild(saG.row); devPanel.appendChild(saG.sld);
   devPanel.appendChild(hiG.row); devPanel.appendChild(hiG.sld);
@@ -7805,16 +7836,16 @@ void main(void){
     st.textContent = 'html.cursor-idle, html.cursor-idle *{cursor:none!important}';
     document.head.appendChild(st);
     let idleTimer = null, fsTimer = null;
-    const fsBtn = () => document.getElementById('fs-btn');
+    // the floating chrome that steps aside when the mouse is still
+    const chrome = () => ['fs-btn','settings-btn','speedbox'].map(i=>document.getElementById(i)).filter(Boolean);
     const wake = () => {
       document.documentElement.classList.remove('cursor-idle');
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => document.documentElement.classList.add('cursor-idle'), 10000);
       // the fullscreen button gets out of the way sooner than the cursor does
-      const b = fsBtn();
-      if(b){ b.style.transition='opacity .35s ease'; b.style.opacity='1'; b.style.pointerEvents='auto'; }
+      for(const el of chrome()){ el.style.transition='opacity .35s ease'; el.style.opacity='1'; el.style.pointerEvents='auto'; }
       clearTimeout(fsTimer);
-      fsTimer = setTimeout(() => { const x=fsBtn(); if(x){ x.style.opacity='0'; x.style.pointerEvents='none'; } }, 3000);
+      fsTimer = setTimeout(() => { for(const el of chrome()){ el.style.opacity='0'; el.style.pointerEvents='none'; } }, 3000);
     };
     // POINTER activity only — deliberately NOT keydown. Flying with WASD/arrows leaves the mouse still,
     // and that is exactly when the cursor should get out of the way.
