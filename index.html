@@ -2747,9 +2747,12 @@ async function run(){
     const t=cam.getTarget(), p=cam.position;
     const F=cam.getDirection(BABYLON.Axis.Z), R=cam.getDirection(BABYLON.Axis.X);   // camera's OWN forward + right (screen-relative → stay consistent even when flipped upside-down)
     const sp = Math.max(4, Math.abs(cam.radius)*0.5) * gMoveSpeed * _moveRamp * Math.min(120, scene.getEngine().getDeltaTime())/1000;
-    // vertical is the WORLD up (+Z, the floor normal), NOT the camera's own up - so W always rises
-    // straight up however the view is tilted, instead of drifting with wherever you happen to be looking.
-    const mx=(F.x*fwd+R.x*strafe)*sp, my=(F.y*fwd+R.y*strafe)*sp, mz=(F.z*fwd+R.z*strafe)*sp + vert*sp;
+    // Vertical is the camera's OWN up, i.e. straight up ON SCREEN. A fixed world axis does not work here:
+    // the arrow-key free look rewrites cam.upVector, so after looking around "world up" is no longer the
+    // up you see — and the membrane's normal is Y while the floor's is Z, so neither axis is reliably
+    // "up" anyway. Screen-up is the one direction that always matches what the key is asking for.
+    const U=cam.getDirection(BABYLON.Axis.Y);
+    const mx=(F.x*fwd+R.x*strafe+U.x*vert)*sp, my=(F.y*fwd+R.y*strafe+U.y*vert)*sp, mz=(F.z*fwd+R.z*strafe+U.z*vert)*sp;
     p.x+=mx; p.y+=my; p.z+=mz;
     cam.setTarget(new BABYLON.Vector3(t.x+mx, t.y+my, t.z+mz));   // shift target the SAME amount → pure translation, no rotation
   });
