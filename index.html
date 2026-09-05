@@ -4924,16 +4924,17 @@ async function run(){
         mesh.thinInstanceSetBuffer('wVel',vl,3,true);
         mesh.thinInstanceCount=n; gFreeMeshes.push(mesh);
       }
+      return {c, v, ax, n};   // the orbital builder below rides these same bodies
     };
     const cR = info(codeC).vr*FILL_SCALE;
     // Free protons — crimson, and small: a bare nucleus has no electron cloud to fill a vdW sphere.
-    mkFree('p', 20000, 91731, [{tag:'H', r:info(codeH).vr*FILL_SCALE*0.42, col:[0.90,0.24,0.30], d:0}]);
+    const FREE_P = mkFree('p', 20000, 91731, [{tag:'H', r:info(codeH).vr*FILL_SCALE*0.42, col:[0.90,0.24,0.30], d:0}]);
     // CO2 — charcoal carbon between two slate oxygens, C=O 1.16 Å. Reads as grey smoke against the water.
-    mkFree('co2', 20000, 218347, [{tag:'C', r:cR, col:[0.24,0.25,0.28], d:0},
+    const FREE_CO2 = mkFree('co2', 20000, 218347, [{tag:'C', r:cR, col:[0.24,0.25,0.28], d:0},
                                   {tag:'Oa', r:oR, col:[0.52,0.55,0.60], d: 1.16},
                                   {tag:'Ob', r:oR, col:[0.52,0.55,0.60], d:-1.16}]);
     // O2 — oxygen's own red, the gas photosynthesis puts out. O=O 1.21 Å, so ±0.605 from the centre.
-    mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.94,0.15,0.15], d: 0.605},
+    const FREE_O2 = mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.94,0.15,0.15], d: 0.605},
                                 {tag:'b', r:oR, col:[0.94,0.15,0.15], d:-0.605}]);
 
     /* ── Water orbitals inside the crisp zone ───────────────────────────────────────────────────────
@@ -5113,6 +5114,128 @@ async function run(){
       wCoreMesh.thinInstanceCount = n*wCoreN; wBondMesh.thinInstanceCount = n*wBondN;
       wCoreMesh.setEnabled(n>0); wBondMesh.setEnabled(n>0);
     });
+
+    /* Orbitals for the linear free species (CO2, O2). Same idea as the water above: build ONE canonical
+       lobe set and instance it per molecule with that molecule's own rotation, so only a small matrix
+       buffer is rewritten each frame. These two are LINEAR, which makes it simpler than water - a
+       molecule's orientation is a single axis, so the template is laid out along +Z and a per-molecule
+       rotation carries +Z onto that axis.
+       The free protons deliberately get none: H+ is a bare nucleus with its electron stripped off, so it
+       genuinely has no orbitals to draw. A cloud on it would be wrong chemistry, not a missing feature. */
+    const linearOrb = (nm, F, els, offs) => {
+      const core = { m:[], col:[], cen:[], oid:[] }, bond = { m:[], tap:[], col:[], cen:[], oid:[] };
+      { const tmp = new Float32Array(16);
+        const at = offs.map(d => [0, 0, d]);
+        const pushCore = (c,cx,cy,cz,oid) => { for(let j=0;j<16;j++) core.m.push(tmp[j]);
+          core.col.push(c[0],c[1],c[2]); core.cen.push(cx,cy,cz); core.oid.push(oid); };
+        const put = (sx,sy,sz, ex,ey,ez, wid, c, cx,cy,cz, oid) => { cylTo(sx,sy,sz, ex,ey,ez, tmp, 0, wid);
+          for(let j=0;j<16;j++) bond.m.push(tmp[j]);
+          bond.tap.push(1.0); bond.col.push(c[0],c[1],c[2]); bond.cen.push(cx,cy,cz); bond.oid.push(oid); };
+        for(let k=0;k<els.length;k++){ const e=els[k], cfg=econf(e), maxNe=cfg.reduce((mx,sh)=>Math.max(mx,sh[0]),0);
+          const q=at[k], c=info(e).c;
+          for(const sh of cfg){ const n2=sh[0], ty=sh[1], R=n2*SHELL_STEP, oid=n2*100+ty*10;
+            if(maxNe>1 && n2===maxNe && ty<=1) continue;
+            if(ty===0){ sphereMat(q[0],q[1],q[2], R*0.72, tmp, 0); pushCore(c,q[0],q[1],q[2],oid); }
+            else for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid); } } }
+        const f = 0.62, kL = 0.24, kW = LOBE_W*0.5, bdirs = els.map(() => []);
+        for(let k=1;k<els.length;k++){
+          const q=at[k], L=Math.abs(offs[k]), u=[0,0,offs[k]/L];
+          const c0=info(els[0]).c, ck=info(els[k]).c;
+          put(0,0,0, u[0]*L*f,u[1]*L*f,u[2]*L*f, LOBE_W, c0, 0,0,0, 1000);
+          put(q[0],q[1],q[2], q[0]-u[0]*L*f,q[1]-u[1]*L*f,q[2]-u[2]*L*f, LOBE_W, ck, q[0],q[1],q[2], 1001);
+          put(0,0,0, -u[0]*kL,-u[1]*kL,-u[2]*kL, kW, c0, 0,0,0, 1000);
+          bdirs[0].push(u); bdirs[k].push([-u[0],-u[1],-u[2]]);
+        }
+        for(let k=0;k<els.length;k++){
+          const q=at[k], c=info(els[k]).c;
+          for(const d of lonePairDirs(bdirs[k], lonePairs(els[k])))
+            put(q[0],q[1],q[2], q[0]+d[0]*0.75,q[1]+d[1]*0.75,q[2]+d[2]*0.75, LOBE_W, c, q[0],q[1],q[2], 2000);
+        }
+      }
+      const coreN = core.m.length/16, bondN = bond.m.length/16;
+      if(!coreN && !bondN) return;
+      const CAP = F.n;
+      const cMat = wOrbMat(nm+'OrbCore','orb',['position','normal','ocol','ocen','oid','world0','world1','world2','world3']);
+      const bMat = wOrbMat(nm+'OrbBond','bond',['position','normal','taper','ocen','bcol','oid','world0','world1','world2','world3'],['opacity']);
+      bMat.setFloat('nElec',1);
+      const cMesh = BABYLON.MeshBuilder.CreateSphere(nm+'OrbC',{segments:6,diameter:1},scene);
+      cMesh.material=cMat; cMesh.isPickable=false; cMesh.alwaysSelectAsActiveMesh=true;
+      const bMesh = BABYLON.MeshBuilder.CreateSphere(nm+'OrbB',{segments:5,diameter:1},scene);
+      bMesh.material=bMat; bMesh.isPickable=false; bMesh.alwaysSelectAsActiveMesh=true;
+      gFreeMeshes.push(cMesh, bMesh);
+      { const cc=new Float32Array(CAP*coreN*3), co=new Float32Array(CAP*coreN);
+        const bc=new Float32Array(CAP*bondN*3), bo=new Float32Array(CAP*bondN), bt=new Float32Array(CAP*bondN);
+        for(let k=0;k<CAP;k++){
+          for(let q=0;q<coreN;q++){ const d=(k*coreN+q)*3;
+            cc[d]=core.col[q*3]; cc[d+1]=core.col[q*3+1]; cc[d+2]=core.col[q*3+2]; co[k*coreN+q]=core.oid[q]; }
+          for(let q=0;q<bondN;q++){ const d=(k*bondN+q)*3;
+            bc[d]=bond.col[q*3]; bc[d+1]=bond.col[q*3+1]; bc[d+2]=bond.col[q*3+2];
+            bo[k*bondN+q]=bond.oid[q]; bt[k*bondN+q]=bond.tap[q]; } }
+        cMesh.thinInstanceSetBuffer('ocol',cc,3,true); cMesh.thinInstanceSetBuffer('oid',co,1,true);
+        bMesh.thinInstanceSetBuffer('bcol',bc,3,true); bMesh.thinInstanceSetBuffer('oid',bo,1,true);
+        bMesh.thinInstanceSetBuffer('taper',bt,1,true); }
+      const cM=new Float32Array(CAP*coreN*16), cC=new Float32Array(CAP*coreN*3);
+      const bM=new Float32Array(CAP*bondN*16), bC=new Float32Array(CAP*bondN*3);
+      cMesh.thinInstanceSetBuffer('matrix',cM,16,false); cMesh.thinInstanceSetBuffer('ocen',cC,3,false);
+      bMesh.thinInstanceSetBuffer('matrix',bM,16,false); bMesh.thinInstanceSetBuffer('ocen',bC,3,false);
+      const pick=new Int32Array(CAP), pos=new Float32Array(CAP*3);
+      scene.onBeforeRenderObservable.add(()=>{
+        if(!gFreeOn){ cMesh.setEnabled(false); bMesh.setEnabled(false); return; }
+        const cp=cam.position, R=gCrisp, R2=R*R;
+        const T = gWaveT + Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;
+        let n=0;
+        for(let i=0;i<F.n;i++){
+          const px=bnc(F.c[i*3]  +F.v[i*3]  *T, bLo.x, bHi.x);
+          const dx=px-cp.x; if(dx*dx>R2) continue;
+          const py=bnc(F.c[i*3+1]+F.v[i*3+1]*T, bLo.y, bHi.y);
+          const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
+          const pz=bnc(F.c[i*3+2]+F.v[i*3+2]*T, bLo.z, bHi.z);
+          const dz=pz-cp.z; if(dx*dx+dy*dy+dz*dz>R2) continue;
+          pick[n]=i; pos[n*3]=px; pos[n*3+1]=py; pos[n*3+2]=pz; n++;
+        }
+        for(let k=0;k<n;k++){
+          const i=pick[k], px=pos[k*3], py=pos[k*3+1], pz=pos[k*3+2];
+          /* Rotation carrying the canonical +Z onto this molecule's axis, written out in scalars for the
+             same reason the water loop is: a helper returning fresh arrays here would allocate thousands
+             of throwaway vectors per frame, in the hottest loop in the scene. */
+          const zx=F.ax[i*3], zy=F.ax[i*3+1], zz=F.ax[i*3+2];
+          let tx=0, ty=0, tz=1; if(Math.abs(zz)>0.9){ tx=1; tz=0; }
+          let ux=ty*zz-tz*zy, uy=tz*zx-tx*zz, uz=tx*zy-ty*zx;
+          const ul=Math.hypot(ux,uy,uz)||1e-6; ux/=ul; uy/=ul; uz/=ul;
+          const vx=zy*uz-zz*uy, vy=zz*ux-zx*uz, vz=zx*uy-zy*ux;
+          const r00=ux, r01=vx, r02=zx, r10=uy, r11=vy, r12=zy, r20=uz, r21=vz, r22=zz;
+          for(let q=0;q<coreN;q++){ const s0=q*16, d0=(k*coreN+q)*16;
+            for(let cN=0;cN<3;cN++){ const a1=core.m[s0+cN*4], a2=core.m[s0+cN*4+1], a3=core.m[s0+cN*4+2];
+              cM[d0+cN*4]  =r00*a1+r01*a2+r02*a3;
+              cM[d0+cN*4+1]=r10*a1+r11*a2+r12*a3;
+              cM[d0+cN*4+2]=r20*a1+r21*a2+r22*a3; cM[d0+cN*4+3]=0; }
+            const mx=core.m[s0+12], my=core.m[s0+13], mz=core.m[s0+14];
+            cM[d0+12]=r00*mx+r01*my+r02*mz+px; cM[d0+13]=r10*mx+r11*my+r12*mz+py;
+            cM[d0+14]=r20*mx+r21*my+r22*mz+pz; cM[d0+15]=1;
+            const ex=core.cen[q*3], ey=core.cen[q*3+1], ez=core.cen[q*3+2], dc=(k*coreN+q)*3;
+            cC[dc]  =r00*ex+r01*ey+r02*ez+px; cC[dc+1]=r10*ex+r11*ey+r12*ez+py;
+            cC[dc+2]=r20*ex+r21*ey+r22*ez+pz; }
+          for(let q=0;q<bondN;q++){ const s0=q*16, d0=(k*bondN+q)*16;
+            for(let cN=0;cN<3;cN++){ const a1=bond.m[s0+cN*4], a2=bond.m[s0+cN*4+1], a3=bond.m[s0+cN*4+2];
+              bM[d0+cN*4]  =r00*a1+r01*a2+r02*a3;
+              bM[d0+cN*4+1]=r10*a1+r11*a2+r12*a3;
+              bM[d0+cN*4+2]=r20*a1+r21*a2+r22*a3; bM[d0+cN*4+3]=0; }
+            const mx=bond.m[s0+12], my=bond.m[s0+13], mz=bond.m[s0+14];
+            bM[d0+12]=r00*mx+r01*my+r02*mz+px; bM[d0+13]=r10*mx+r11*my+r12*mz+py;
+            bM[d0+14]=r20*mx+r21*my+r22*mz+pz; bM[d0+15]=1;
+            const ex=bond.cen[q*3], ey=bond.cen[q*3+1], ez=bond.cen[q*3+2], dc=(k*bondN+q)*3;
+            bC[dc]  =r00*ex+r01*ey+r02*ez+px; bC[dc+1]=r10*ex+r11*ey+r12*ez+py;
+            bC[dc+2]=r20*ex+r21*ey+r22*ez+pz; } }
+        if(n){ cMesh.thinInstancePartialBufferUpdate('matrix', cM.subarray(0, n*coreN*16), 0);
+               cMesh.thinInstancePartialBufferUpdate('ocen',   cC.subarray(0, n*coreN*3),  0);
+               bMesh.thinInstancePartialBufferUpdate('matrix', bM.subarray(0, n*bondN*16), 0);
+               bMesh.thinInstancePartialBufferUpdate('ocen',   bC.subarray(0, n*bondN*3),  0); }
+        cMesh.thinInstanceCount = n*coreN; bMesh.thinInstanceCount = n*bondN;
+        cMesh.setEnabled(n>0); bMesh.setEnabled(n>0);
+      });
+    };
+    linearOrb('co2', FREE_CO2, [codeC, codeO, codeO], [0, 1.16, -1.16]);
+    linearOrb('o2',  FREE_O2,  [codeO, codeO],        [0.605, -0.605]);
   }
 
   // Headlight follows the camera; fog darkens fragments by distance (front→back)
