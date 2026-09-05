@@ -644,6 +644,19 @@ attribute vec3 wOrig;
 attribute vec3 wVel;
 uniform vec3 boxLo;
 uniform vec3 boxHi;
+/* Molecule-vs-molecule collisions ride ON TOP of that analytic path as a DISPLACEMENT, looked up per
+   molecule from a texture. The analytic wave stays the reference trajectory and costs nothing, while
+   the CPU simulates only the molecules near the camera and writes their deviation here. Everything
+   else reads zero and is exactly as before.
+   Doing it this way keeps the property that made 65000 molecules affordable in the first place: the
+   far ones need no state, no integration and no upload. Only what you can actually see is simulated. */
+attribute float molId;
+uniform sampler2D molTex;
+uniform float molTexDim;
+vec3 molDisp(){
+  float x = mod(molId, molTexDim), y = floor(molId / molTexDim);
+  return texture2D(molTex, vec2((x + 0.5)/molTexDim, (y + 0.5)/molTexDim)).xyz;
+}
 float bnc(float x, float lo, float hi){
   float s = hi - lo;
   float t = mod(x - lo, 2.0*s);
@@ -691,8 +704,9 @@ void main(void){
   vec3 wCen = vec3(bnc(wOrig.x + wVel.x*uT, boxLo.x, boxHi.x),
                    bnc(wOrig.y + wVel.y*uT, boxLo.y, boxHi.y),
                    bnc(wOrig.z + wVel.z*uT, boxLo.z, boxHi.z));
+  wCen += molDisp();          // collision deviation, zero for anything the CPU is not simulating
 #ifdef NSHELL
-  wCen = repelShells(wCen);
+  wCen = repelShells(wCen);   // the protein shells still win: they are applied last
 #endif
   base = wCen + W[3].xyz;
 #endif
@@ -2946,7 +2960,7 @@ async function run(){
   let gZoomSpeed = 1.0;    // multiplier on the zoom speed (I/O - in and out along the view)
   let gRotSpeed  = 2.2;    // max yaw/pitch rate in rad/s (WASD) — 2.2 ≈ 126 deg/s
   const RAMP_S = 7.0;      // seconds from the initial nudge to full speed
-  const RAMP_MIN = 0.10;   // a press starts at 10% of max, so a tap still nudges instead of creeping from a standstill
+  const RAMP_MIN = 0.01;   // a press starts at 1% of max and eases to 100% over RAMP_S, so a tap barely creeps and a held key winds all the way up
   let _moveRamp = RAMP_MIN, _rotRamp = RAMP_MIN;
   const rampStep = () => (1-RAMP_MIN) * Math.min(120, scene.getEngine().getDeltaTime())/1000/RAMP_S;
   scene.onBeforeRenderObservable.add(() => {
@@ -3481,6 +3495,9 @@ async function run(){
      (double-click a complex → the UI panel above the speed slider) and floating position labels for
      every complex. setDevMode(false) also drops any live model selection. Wired up after the model
      selection code exists (see applyDevMode below). */
+  // Declared up here, not next to the dev readout that uses it: the collision block assigns it and
+  // runs earlier, so a later let would be in the temporal dead zone when that assignment happens.
+  let gSimStat = () => '0 sim';   // molecules in the collision simulation, and what that pass costs
   let gDev = false;
   let gDevPanelEl = null, gDevTopSet = false;   // the slider panel, and whether its top has been dropped below the camera readout yet
   let applyDevMode = () => {};   // real implementation installed once deselectModel + labels exist
@@ -5065,6 +5082,8 @@ async function run(){
       wh1[i*3]=oh*(ux*ca+qx*sa); wh1[i*3+1]=oh*(uy*ca+qy*sa); wh1[i*3+2]=oh*(uz*ca+qz*sa);
       wh2[i*3]=oh*(ux*ca-qx*sa); wh2[i*3+1]=oh*(uy*ca-qy*sa); wh2[i*3+2]=oh*(uz*ca-qz*sa);
     }
+    // Global molecule-id space, shared by the molId attribute and the collision texture.
+    const MOLBASE = { w:0, p:20000, co2:40000, o2:60000 };   // 65000 molecules into 65536 slots
     const codeO=codeOf('O'), codeH=codeOf('H');
     /* Everything below is uploaded ONCE. The molecules fly and bounce entirely in the vertex shader
        (see WATERBOX), driven by the existing uT clock — which is already advanced by dt × gSpeed, so the
@@ -5077,9 +5096,9 @@ async function run(){
     // opaque at every distance. (isShell must stay 1 either way — with isShell 0 the alpha is scaled BY
     // the reveal, so the sphere would be invisible everywhere except inside the crisp zone.)
     const wMat=(rad, solid)=>{ const m=new BABYLON.ShaderMaterial('wMat'+rad,scene,'imp',{
-        attributes:['position','instanceColor','wOrig','wVel','world0','world1','world2','world3'],
-        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi','shellCen','shellRot','shellR2'],
-        samplers:['shellTex'],
+        attributes:['position','instanceColor','wOrig','wVel','molId','world0','world1','world2','world3'],
+        uniforms:['view','projection','radius','fogColor','fogStart','fogEnd','isShell','shellMin','revealFade','bubbleR','protonOutline','uT','coneCos','boxLo','boxHi','molTexDim','shellCen','shellRot','shellR2'],
+        samplers:['shellTex','molTex'],
         defines: NSH ? ['#define WATERBOX', '#define NSHELL '+NSH, '#define SH_LAT '+SH_LAT+'.0', '#define SH_LON '+SH_LON+'.0']
                      : ['#define WATERBOX'] });
       // isShell = 1 so the sphere turns to GLASS inside the reveal radius, exactly as the protein vdW does
@@ -5090,6 +5109,7 @@ async function run(){
       m.onBindObservable.add(()=>{const eff=m.getEffect();if(!eff)return; eff.setFloat('uT',gWaveT);
         eff.setFloat('bubbleR', solid ? 0 : gCrisp);   // glass only where the orbitals are actually drawn
         eff.setVector3('boxLo',bLo); eff.setVector3('boxHi',bHi);
+        eff.setFloat('molTexDim', MOLTEX_DIM); eff.setTexture('molTex', gMolTex);
         if(NSH){ eff.setTexture('shellTex', gShellTex); eff.setArray3('shellCen', gShellCen);
                  eff.setMatrix3x3('shellRot', gShellRot); eff.setFloatArray('shellR2', gShellR2); }
         eff.setColor3('fogColor',scene.fogColor);eff.setFloat('fogStart',scene.fogStart);eff.setFloat('fogEnd',scene.fogEnd);}); return m; };
@@ -5100,7 +5120,9 @@ async function run(){
       // against each other arbitrarily, and the sphere's depth write simply rejected the lobes inside it.
       mesh.renderingGroupId=1;
       const cb=new Float32Array(cnt*4), mb=new Float32Array(cnt*16), og=new Float32Array(cnt*3), vl=new Float32Array(cnt*3);
+      const mid=new Float32Array(cnt);
       for(let k=0;k<cnt;k++){ const i=off?(k>>1):k;                       // two H instances per molecule
+        mid[k]=MOLBASE.w+i;
         cb[k*4]=col[0];cb[k*4+1]=col[1];cb[k*4+2]=col[2];cb[k*4+3]=0;
         mb[k*16]=1;mb[k*16+5]=1;mb[k*16+10]=1;mb[k*16+15]=1;
         if(off){ const h=(k&1)?wh2:wh1; mb[k*16+12]=h[i*3]; mb[k*16+13]=h[i*3+1]; mb[k*16+14]=h[i*3+2]; }
@@ -5110,6 +5132,7 @@ async function run(){
       mesh.thinInstanceSetBuffer('matrix',mb,16,true);
       mesh.thinInstanceSetBuffer('wOrig',og,3,true);
       mesh.thinInstanceSetBuffer('wVel',vl,3,true);
+      mesh.thinInstanceSetBuffer('molId',mid,1,true);
       mesh.thinInstanceCount=cnt; gFreeMeshes.push(mesh); return mesh; };
     // Free water reads BLUE as a body of water, rather than by element — so it is instantly separable
     // from the red/white oxygens dotted through the proteins. The orbitals inside still use the real
@@ -5127,7 +5150,7 @@ async function run(){
     const codeC = codeOf('C');
     // One species: `n` molecules, each a rigid set of atoms given as offsets from the molecule centre.
     // `seed` picks an independent random stream so two species never share start points or velocities.
-    const mkFree = (nm, n, seed, atoms) => {
+    const mkFree = (nm, n, seed, atoms, molBase) => {
       const c=new Float32Array(n*3), v=new Float32Array(n*3), ax=new Float32Array(n*3);
       for(let i=0;i<n;i++){
         c[i*3]=x0+rnd(seed+i*3+1)*bw; c[i*3+1]=y0+rnd(seed+i*3+2)*bh; c[i*3+2]=z0+rnd(seed+i*3+3)*bd;
@@ -5142,7 +5165,9 @@ async function run(){
         mesh.material=wMat(a.r, true); mesh.isPickable=false; mesh.alwaysSelectAsActiveMesh=true;
         mesh.renderingGroupId=1;
         const cb=new Float32Array(n*4), mb=new Float32Array(n*16), og=new Float32Array(n*3), vl=new Float32Array(n*3);
+        const mid=new Float32Array(n);
         for(let i=0;i<n;i++){
+          mid[i]=molBase+i;
           cb[i*4]=a.col[0]; cb[i*4+1]=a.col[1]; cb[i*4+2]=a.col[2]; cb[i*4+3]=0;
           mb[i*16]=1; mb[i*16+5]=1; mb[i*16+10]=1; mb[i*16+15]=1;
           mb[i*16+12]=ax[i*3]*a.d; mb[i*16+13]=ax[i*3+1]*a.d; mb[i*16+14]=ax[i*3+2]*a.d;   // offset along the molecule axis
@@ -5153,20 +5178,21 @@ async function run(){
         mesh.thinInstanceSetBuffer('matrix',mb,16,true);
         mesh.thinInstanceSetBuffer('wOrig',og,3,true);
         mesh.thinInstanceSetBuffer('wVel',vl,3,true);
+        mesh.thinInstanceSetBuffer('molId',mid,1,true);
         mesh.thinInstanceCount=n; gFreeMeshes.push(mesh);
       }
       return {c, v, ax, n};   // the orbital builder below rides these same bodies
     };
     const cR = info(codeC).vr*FILL_SCALE;
     // Free protons — crimson, and small: a bare nucleus has no electron cloud to fill a vdW sphere.
-    const FREE_P = mkFree('p', 20000, 91731, [{tag:'H', r:info(codeH).vr*FILL_SCALE*0.42, col:[0.90,0.24,0.30], d:0}]);
+    const FREE_P = mkFree('p', 20000, 91731, [{tag:'H', r:info(codeH).vr*FILL_SCALE*0.42, col:[0.90,0.24,0.30], d:0}], MOLBASE.p);
     // CO2 — charcoal carbon between two slate oxygens, C=O 1.16 Å. Reads as grey smoke against the water.
     const FREE_CO2 = mkFree('co2', 20000, 218347, [{tag:'C', r:cR, col:[0.24,0.25,0.28], d:0},
                                   {tag:'Oa', r:oR, col:[0.52,0.55,0.60], d: 1.16},
-                                  {tag:'Ob', r:oR, col:[0.52,0.55,0.60], d:-1.16}]);
+                                  {tag:'Ob', r:oR, col:[0.52,0.55,0.60], d:-1.16}], MOLBASE.co2);
     // O2 — oxygen's own red, the gas photosynthesis puts out. O=O 1.21 Å, so ±0.605 from the centre.
     const FREE_O2 = mkFree('o2', 5000, 400391, [{tag:'a', r:oR, col:[0.94,0.15,0.15], d: 0.605},
-                                {tag:'b', r:oR, col:[0.94,0.15,0.15], d:-0.605}]);
+                                {tag:'b', r:oR, col:[0.94,0.15,0.15], d:-0.605}], MOLBASE.o2);
 
     /* ── Water orbitals inside the crisp zone ───────────────────────────────────────────────────────
        Every water within gCrisp gets the same orbital treatment the proteins get: core shells, the two
@@ -5275,8 +5301,11 @@ async function run(){
         const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
         const pz=bnc(wc[i*3+2]+wv[i*3+2]*T, bLo.z, bHi.z);
         const dz=pz-cp.z; const d2=dx*dx+dy*dy+dz*dz; if(d2>R2) continue;
-        // the shader repels the molecule centre, so this mirror must too or the lobes leave their atoms
-        _wp[0]=px; _wp[1]=py; _wp[2]=pz; repelShells(_wp);
+        /* The shader adds the collision displacement and then repels off the protein shells, so this
+           mirror must do BOTH in the same order or the lobes drift off the atoms they belong to. */
+        const _md=(MOLBASE.w+i)*4;
+        _wp[0]=px+gMolDisp[_md]; _wp[1]=py+gMolDisp[_md+1]; _wp[2]=pz+gMolDisp[_md+2];
+        repelShells(_wp);
         if(!capped){ wPick[n]=i; wPos[n*3]=_wp[0]; wPos[n*3+1]=_wp[1]; wPos[n*3+2]=_wp[2]; n++; continue; }
         if(n===WCAP && d2>=worst) continue;
         let at=n<WCAP ? n++ : WCAP-1;
@@ -5346,6 +5375,174 @@ async function run(){
       wCoreMesh.thinInstanceCount = n*wCoreN; wBondMesh.thinInstanceCount = n*wBondN;
       wCoreMesh.setEnabled(n>0); wBondMesh.setEnabled(n>0);
     });
+
+
+    /* Molecule-vs-molecule collisions.
+       Measured on the real scene before building this: mean spacing is 20 units against a 3.2-unit
+       molecule diameter, so each molecule collides roughly every 4 seconds and the box sees about 8800
+       collisions a second. Sparse, but nowhere near rare enough to skip - among the few hundred
+       molecules inside the crisp zone that is 60-70 visible collisions a second.
+
+       The trick that makes it affordable: the analytic triangle wave STAYS as the reference trajectory,
+       and the simulation only produces a per-molecule DISPLACEMENT from it, uploaded in one small
+       texture. A molecule far from the camera has zero displacement and costs exactly what it did
+       before - no state, no integration, no upload. Only the ones near enough to see are simulated.
+       Because the analytic motion is constant-velocity between wall bounces, adding a velocity delta on
+       top of it is proper dynamics rather than a fudge: the reference frame just moves with it. */
+    const MOL_N = 65536;                 // texture slots: 256x256, comfortably over the 65000 molecules
+    const MOLTEX_DIM = 256;
+    const SIM_R = 260;                   // simulate within this of the camera
+    const SIM_CAP = 2500;                // hard ceiling on simultaneously simulated molecules
+    const MOL_R = 1.6;                   // collision radius per molecule (vdW-ish, scene units)
+    const gMolDisp = new Float32Array(MOL_N*4);          // the texture's own backing store
+    const gMolTex = new BABYLON.RawTexture(gMolDisp, MOLTEX_DIM, MOLTEX_DIM,
+      BABYLON.Constants.TEXTUREFORMAT_RGBA, scene, false, false,
+      BABYLON.Texture.NEAREST_SAMPLINGMODE, BABYLON.Constants.TEXTURETYPE_FLOAT);
+    gMolTex.wrapU = gMolTex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+
+    /* Species register themselves here: where their molecules start in the texture, and the arrays that
+       hold their analytic start point and velocity. */
+    const gSpecies = [
+      { c: wc,          v: wv,          base: MOLBASE.w,   n: NW },
+      { c: FREE_P.c,    v: FREE_P.v,    base: MOLBASE.p,   n: FREE_P.n },
+      { c: FREE_CO2.c,  v: FREE_CO2.v,  base: MOLBASE.co2, n: FREE_CO2.n },
+      { c: FREE_O2.c,   v: FREE_O2.v,   base: MOLBASE.o2,  n: FREE_O2.n }];
+    const gDVel = new Float32Array(MOL_N*3);   // velocity DELTA from collisions (added to the analytic one)
+    let gCollideOn = true;
+    let gSimActive = 0;   // how many molecules were simulated this frame (shown in the dev readout)
+    let gSimMs = 0;       // smoothed cost of the collision pass, so a regression shows up in the readout
+    gSimStat = () => gSimActive + ' sim ' + gSimMs.toFixed(1) + ' ms';
+
+    { const idx = new Int32Array(SIM_CAP), sx = new Float32Array(SIM_CAP), sy = new Float32Array(SIM_CAP), sz = new Float32Array(SIM_CAP);
+      const vxA = new Float32Array(SIM_CAP), vyA = new Float32Array(SIM_CAP), vzA = new Float32Array(SIM_CAP);
+      // the analytic position and velocity are kept from the gather pass, so the write-back needs no
+      // second lookup and no species search
+      const ax_ = new Float32Array(SIM_CAP), ay_ = new Float32Array(SIM_CAP), az_ = new Float32Array(SIM_CAP);
+      const bx_ = new Float32Array(SIM_CAP), by_ = new Float32Array(SIM_CAP), bz_ = new Float32Array(SIM_CAP);
+      // which species each active molecule belongs to, and its index inside it, so the per-frame pass
+      // can recompute its analytic position without re-scanning all 65000
+      const spk = new Int32Array(SIM_CAP), mi_ = new Int32Array(SIM_CAP);
+      let nAct = 0, regather = 0;
+      const CELL = MOL_R*2.0;                        // one collision diameter, so 27 cells covers every contact
+      const NB = 1 << 14, head = new Int32Array(NB), next = new Int32Array(SIM_CAP);
+      const hash = (a,b,c) => (((a*73856093) ^ (b*19349663) ^ (c*83492791)) >>> 0) & (NB-1);
+      let prevActive = new Set(), curActive = new Set(), _hadActive = false;
+
+      scene.onBeforeRenderObservable.add(()=>{
+        /* Idle while the scene is still building. The gather scans all 65000 molecules and the texture
+           upload is 1 MB, and doing both every frame during the membrane build dropped it to 4.7 fps. */
+        { const ov = document.getElementById('overlay');
+          if(ov && !ov.classList.contains('gone')) return; }
+        const dt = Math.min(engine.getDeltaTime(), 50) * 0.001 * gSpeed;
+        if(!gFreeOn || !gCollideOn || dt <= 0){
+          if(prevActive.size){ for(const id of prevActive){ const o=id*4; gMolDisp[o]=gMolDisp[o+1]=gMolDisp[o+2]=0;
+              gDVel[id*3]=gDVel[id*3+1]=gDVel[id*3+2]=0; }
+            prevActive.clear(); gMolTex.update(gMolDisp); }
+          return;
+        }
+        const cp = cam.position, R2 = SIM_R*SIM_R;
+        const T = gWaveT + dt;                       // the clock the shader will use this frame
+        /* The gather is the expensive part - it touches all 65000 molecules - and it does not need to run
+           every frame. Molecules cross the 260-unit region in about five seconds at these speeds, so
+           refreshing the active set eight times a second is ample, and it took this observer from
+           18.5 ms a frame to a fraction of that. The cheap per-frame pass below just re-derives the
+           active molecules' analytic positions, which is a few thousand operations rather than 65000. */
+        if(--regather <= 0){
+          regather = 8;
+          nAct = 0;
+          for(let spi=0; spi<gSpecies.length; spi++){
+            const sp = gSpecies[spi], c = sp.c, v = sp.v, base = sp.base, cnt = sp.n;
+            for(let i=0; i<cnt && nAct<SIM_CAP; i++){
+              const px = bnc(c[i*3]   + v[i*3]  *T, bLo.x, bHi.x);
+              const dx = px - cp.x; if(dx*dx > R2) continue;
+              const py = bnc(c[i*3+1] + v[i*3+1]*T, bLo.y, bHi.y);
+              const dy = py - cp.y; if(dx*dx + dy*dy > R2) continue;
+              const pz = bnc(c[i*3+2] + v[i*3+2]*T, bLo.z, bHi.z);
+              const dz = pz - cp.z; if(dx*dx + dy*dy + dz*dz > R2) continue;
+              idx[nAct] = base + i; spk[nAct] = spi; mi_[nAct] = i; nAct++;
+            }
+          }
+        }
+        const n = nAct;
+        for(let k=0;k<n;k++){
+          const sp = gSpecies[spk[k]], i = mi_[k], id = idx[k], c = sp.c, v = sp.v;
+          const px = bnc(c[i*3]   + v[i*3]  *T, bLo.x, bHi.x);
+          const py = bnc(c[i*3+1] + v[i*3+1]*T, bLo.y, bHi.y);
+          const pz = bnc(c[i*3+2] + v[i*3+2]*T, bLo.z, bHi.z);
+          ax_[k] = px; ay_[k] = py; az_[k] = pz;
+          bx_[k] = v[i*3]; by_[k] = v[i*3+1]; bz_[k] = v[i*3+2];
+          sx[k] = px + gMolDisp[id*4];               // analytic path plus whatever deviation it carries
+          sy[k] = py + gMolDisp[id*4+1];
+          sz[k] = pz + gMolDisp[id*4+2];
+          vxA[k] = v[i*3]   + gDVel[id*3];           // analytic velocity plus the collision delta
+          vyA[k] = v[i*3+1] + gDVel[id*3+1];
+          vzA[k] = v[i*3+2] + gDVel[id*3+2];
+        }
+        // spatial hash: one pass to bucket, then each molecule tests only its 27 neighbouring cells
+        head.fill(-1, 0, NB);
+        for(let k=0;k<n;k++){
+          const h = hash(Math.floor(sx[k]/CELL), Math.floor(sy[k]/CELL), Math.floor(sz[k]/CELL));
+          next[k] = head[h]; head[h] = k;
+        }
+        const D = MOL_R*2, D2 = D*D;
+        for(let k=0;k<n;k++){
+          const gx = Math.floor(sx[k]/CELL), gy = Math.floor(sy[k]/CELL), gz = Math.floor(sz[k]/CELL);
+          for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++) for(let c2=-1;c2<=1;c2++){
+            let j = head[hash(gx+a, gy+b, gz+c2)];
+            while(j >= 0){
+              if(j > k){                              // each pair once
+                const dx = sx[j]-sx[k], dy = sy[j]-sy[k], dz = sz[j]-sz[k];
+                const d2 = dx*dx + dy*dy + dz*dz;
+                if(d2 < D2 && d2 > 1e-9){
+                  /* Equal-mass elastic collision: swap the velocity components along the line of
+                     centres, leave the tangential parts alone. Then push the pair apart so they are
+                     not left overlapping, which would make them collide again next frame and buzz. */
+                  const d = Math.sqrt(d2), nx = dx/d, ny = dy/d, nz = dz/d;
+                  const rel = (vxA[j]-vxA[k])*nx + (vyA[j]-vyA[k])*ny + (vzA[j]-vzA[k])*nz;
+                  if(rel < 0){
+                    vxA[k] += rel*nx; vyA[k] += rel*ny; vzA[k] += rel*nz;
+                    vxA[j] -= rel*nx; vyA[j] -= rel*ny; vzA[j] -= rel*nz;
+                  }
+                  const push = (D - d) * 0.5;
+                  sx[k] -= nx*push; sy[k] -= ny*push; sz[k] -= nz*push;
+                  sx[j] += nx*push; sy[j] += ny*push; sz[j] += nz*push;
+                }
+              }
+              j = next[j];
+            }
+          }
+        }
+        // write back as a DEVIATION from the analytic path, and remember who is active
+        curActive.clear();
+        for(let k=0;k<n;k++){
+          const id = idx[k], o = id*4, o3 = id*3;
+          gMolDisp[o]   = sx[k] - ax_[k];
+          gMolDisp[o+1] = sy[k] - ay_[k];
+          gMolDisp[o+2] = sz[k] - az_[k];
+          gDVel[o3]   = vxA[k] - bx_[k];
+          gDVel[o3+1] = vyA[k] - by_[k];
+          gDVel[o3+2] = vzA[k] - bz_[k];
+          curActive.add(id);
+        }
+        /* A molecule that has drifted out of range is eased back onto its analytic path rather than
+           snapped, so leaving the simulated region is not a visible jump. */
+        for(const id of prevActive){
+          if(curActive.has(id)) continue;
+          const o = id*4, o3 = id*3;
+          gMolDisp[o] *= 0.86; gMolDisp[o+1] *= 0.86; gMolDisp[o+2] *= 0.86;
+          gDVel[o3] *= 0.86; gDVel[o3+1] *= 0.86; gDVel[o3+2] *= 0.86;
+          if(Math.abs(gMolDisp[o]) + Math.abs(gMolDisp[o+1]) + Math.abs(gMolDisp[o+2]) > 0.01) curActive.add(id);
+          else { gMolDisp[o]=gMolDisp[o+1]=gMolDisp[o+2]=0; gDVel[o3]=gDVel[o3+1]=gDVel[o3+2]=0; }
+        }
+        const t = prevActive; prevActive = curActive; curActive = t;
+        // Only re-upload when something is actually deviating. Pointing the camera at empty space, or
+        // away from the box, then costs nothing at all instead of 1 MB a frame.
+        if(prevActive.size || _hadActive) gMolTex.update(gMolDisp);
+        _hadActive = prevActive.size > 0;
+        gSimActive = n;
+        gSimMs += (performance.now() - t0 - gSimMs) * 0.1;
+      });
+    }
 
     /* Orbitals for the linear free species (CO2, O2). Same idea as the water above: build ONE canonical
        lobe set and instance it per molecule with that molecule's own rotation, so only a small matrix
@@ -5423,7 +5620,9 @@ async function run(){
           const dy=py-cp.y; if(dx*dx+dy*dy>R2) continue;
           const pz=bnc(F.c[i*3+2]+F.v[i*3+2]*T, bLo.z, bHi.z);
           const dz=pz-cp.z; if(dx*dx+dy*dy+dz*dz>R2) continue;
-          _lp[0]=px; _lp[1]=py; _lp[2]=pz; repelShells(_lp);   // same mirror, same reason
+          const md=(F.base+i)*4;   // same mirror, same order: displacement first, then the shells
+          _lp[0]=px+gMolDisp[md]; _lp[1]=py+gMolDisp[md+1]; _lp[2]=pz+gMolDisp[md+2];
+          repelShells(_lp);
           pick[n]=i; pos[n*3]=_lp[0]; pos[n*3+1]=_lp[1]; pos[n*3+2]=_lp[2]; n++;
         }
         for(let k=0;k<n;k++){
@@ -5467,6 +5666,7 @@ async function run(){
         cMesh.setEnabled(n>0); bMesh.setEnabled(n>0);
       });
     };
+    FREE_CO2.base = MOLBASE.co2; FREE_O2.base = MOLBASE.o2;   // for the displacement lookup above
     linearOrb('co2', FREE_CO2, [codeC, codeO, codeO], [0, 1.16, -1.16]);
     linearOrb('o2',  FREE_O2,  [codeO, codeO],        [0.605, -0.605]);
   }
@@ -5526,7 +5726,7 @@ async function run(){
         const ms = c => { const v = c.lastSecAverage; return (isFinite(v) && v >= 0) ? v.toFixed(1) : '–'; };
         camcoordsEl.innerHTML = Math.round(eng2.getFps())+' fps  ·  cpu '+(gInstr?ms(gInstr.frameTimeCounter):'–')+' ms'
           + (gInstr ? '<br>arv '+ms(gInstr.activeMeshesEvaluationTimeCounter)+'  ·  pii '+ms(gInstr.renderTimeCounter)
-                    + '<br>'+gDraws+' piirtoa'
+                    + '<br>'+gDraws+' piirtoa  ·  '+gSimStat()
                     + '<br>'+scene.getActiveMeshes().length+'/'+scene.meshes.length+' meshiä'
                     + '<br>'+rw2+'×'+rh2+'  '+((rw2*rh2)/1e6).toFixed(2)+' Mpx'
                     + '<br>hsl '+eng2.getHardwareScalingLevel().toFixed(2) : '')
