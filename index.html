@@ -2206,8 +2206,20 @@ async function run(){
   const canvas = document.getElementById('c');
   // WebGL2 engine. WebGPU was removed: the custom impostor / hand-written frag-depth shaders render
   // invisible on WebGPU, so it was never usable here.
-  const gBackend = 'WebGL';
   engine = new BABYLON.Engine(canvas, true, {stencil:true});   // stencil → nucleus shows through its OWN orbitals but is hidden by others
+  /* Which renderer is ACTUALLY behind the context. A frame can be 35 ms while the CPU does 7 ms of work
+     and only 0.31 Mpx is drawn — that is not scene complexity, that is a GPU that is not a GPU. Firefox
+     and Chrome both fall back to a software rasteriser (llvmpipe / SwiftShader / "Basic Render Driver")
+     when the driver is blocklisted, when hardware acceleration is off, or after a GPU-process crash —
+     and the page looks identical, just slow. Worth being able to READ rather than guess at. */
+  const gBackend = 'WebGL' + (engine.webGLVersion || '');
+  let gRenderer = '?';
+  try { const g = engine._gl;
+    const dbg = g.getExtension('WEBGL_debug_renderer_info');
+    gRenderer = String(g.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : g.RENDERER) || '?');
+  } catch(_){}
+  // llvmpipe, SwiftShader, ANGLE's Vulkan-on-SwiftShader, Microsoft's Basic Render Driver, plain "software"
+  const gSoftware = /llvmpipe|softpipe|swiftshader|software|basic render|generic render|microsoft basic/i.test(gRenderer);
   engine.enableOfflineSupport = false;   // perf: skip the .manifest network probe per scene file
   /* Supersample: render at higher internal res so the shader-drawn sphere edges / ink outlines are
      anti-aliased (no FXAA). hardwareScalingLevel is a LINEAR divisor, so the cost is its square — at
@@ -5720,7 +5732,10 @@ async function run(){
   resetBtn.onclick = () => devSliders.forEach((s, i) => { s.value = devDefaults[i]; s.dispatchEvent(new Event('input')); });
   resetRow.appendChild(resetBtn);
   const camRow = document.createElement('div'); camRow.id = 'dev-cam'; camRow.style.cssText = 'line-height:1.5;';
-  const backRow = document.createElement('div'); backRow.textContent = 'piirtomoottori: ' + gBackend;   // which backend is live (WebGL only)
+  const backRow = document.createElement('div');
+  backRow.innerHTML = 'piirtomoottori: ' + gBackend
+    + '<br><span style="font-weight:normal;opacity:.85">' + gRenderer.slice(0, 70) + '</span>'
+    + (gSoftware ? '<br><b style="color:#a33">OHJELMISTORENDERÖINTI — ei näytönohjainta!</b>' : '');
   backRow.style.cssText = 'font-weight:bold;color:var(--sageink);background:var(--sage);border-radius:8px;padding:2px 7px;align-self:flex-start;';
   // Only the crisp-zone slider plus the two read-outs. Every other slider object is still created
   // above (so its startup side-effects, such as the render-scale default, still run) - it is simply
