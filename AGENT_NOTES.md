@@ -422,3 +422,12 @@ protein footprints, the shuttles, the bouncers - is untouched. Around it, in `bu
   `halfH` 110 (220 thick), its own fixed colour `col` dark brown-green, a coarser grain. From outside the cell
   you see the wall, the membrane only from within.
 - 'Kalvostoon' sits in the bottom-right dock now, first in the row, not in the gear menu.
+
+### Editor: right-click info card (2026-09-10)
+
+- A RIGHT-click on a list item opens its info card (`#valinta`, top right) without spawning: `infoOf` (name,
+  formula, atoms and bonds, for an atom its protons, neutrons and shells) plus the list picture once the
+  thumbnail exists (`showInfo`). The left button alone starts a drag (`e.button !== 0` guard).
+- PITFALL fixed the same day: a `//` comment appended to a line that CONTINUED with code (the preload edit of
+  `loadFile`) swallowed `let na = 0, nb = 0` - every protein load in the editor failed with 'na is not defined'
+  from 8166c17 until now. Never end an inserted line with `//` when the original line went on after the anchor.

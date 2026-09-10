@@ -12336,7 +12336,7 @@ for(const sym of ATOMS) mkSpecies(sym, mkModel([A(sym,0,0)], []));
 mkSpecies('p', mkModel([A('H',0,0)], []), { noOrb: true, bare: true });   // a bare proton: no electron, just the nucleus in a small pink shell
 /* mol2-based species, loaded on first drag. A multi-molecule file is concatenated into one model. */
 const fileCache = {};
-const loadFile = async fn => { if(fileCache[fn]) return fileCache[fn]; const recs = await preParsed(fn); if(!recs) throw new Error(fn + ' not found');   // the background preload's parse let na = 0, nb = 0; for(const r of recs){ na += r.na; nb += r.nb; }
+const loadFile = async fn => { if(fileCache[fn]) return fileCache[fn]; const recs = await preParsed(fn); if(!recs) throw new Error(fn + ' not found');   /* the background preload's parse */ let na = 0, nb = 0; for(const r of recs){ na += r.na; nb += r.nb; }
   const m = { na, x:new Float32Array(na), y:new Float32Array(na), z:new Float32Array(na), el:new Uint16Array(na), nb, b1:new Int32Array(nb), b2:new Int32Array(nb), bo:new Uint8Array(nb) };
   let oa = 0, ob = 0; for(const r of recs){ m.x.set(r.x.subarray(0, r.na), oa); m.y.set(r.y.subarray(0, r.na), oa); m.z.set(r.z.subarray(0, r.na), oa); m.el.set(r.el.subarray(0, r.na), oa);
     for(let b=0;b<r.nb;b++){ m.b1[ob+b] = r.b1[b] + oa; m.b2[ob+b] = r.b2[b] + oa; m.bo[ob+b] = r.bo ? r.bo[b] : 1; } oa += r.na; ob += r.nb; }
@@ -12653,7 +12653,7 @@ document.getElementById('haamu').style.display = 'none';
 const clampXY = (sp, p) => { const r = Math.min(sp.radius, HH - 1); return [Math.max(-HW + r, Math.min(HW - r, p[0])), Math.max(-HH + r, Math.min(HH - r, p[1]))]; };
 const planeOf = e => { const rc = canvas.getBoundingClientRect(); return toPlane((e.clientX - rc.left) * (canvas.width / rc.width), (e.clientY - rc.top) * (canvas.height / rc.height)); };
 let drag = null;
-host.addEventListener('pointerdown', async e => { const el = e.target.closest('.atomi'); if(!el) return; e.preventDefault();
+host.addEventListener('pointerdown', async e => { const el = e.target.closest('.atomi'); if(!el || e.button !== 0) return; e.preventDefault();   // LEFT drags - the right button opens the info card (below)
   const d = { key: el.dataset.sp, id: e.pointerId, el, last: planeOf(e), m: null, done: false, right: false }; drag = d; const tila = el.querySelector('.tila');
   cam.inputs.attached.pointers.buttons = [1];   // while a particle is in the hand the right button stamps copies (below), not the camera
   try { tila.textContent = SPECIES[d.key] ? '' : 'ladataan…'; const sp = await ensureSpecies(d.key); tila.textContent = ''; if(sp) queueThumb(d.key);
@@ -12679,6 +12679,23 @@ const pickMol = e => { const rc = canvas.getBoundingClientRect(), ray = scene.cr
 /* Selection: click a molecule - its shells tint sage (proteins through the shader's selModel), a card names
    it, the camera swivels onto it with the zoom untouched. Click empty space or press Esc to clear. */
 const card = document.getElementById('valinta');
+/* RIGHT-click on a list item (owner, 2026-09-10): its info card on the right - the same card a selected particle
+   gets, plus its list picture and, for an atom, its nucleus and shells - without spawning anything. */
+const SHELL_L = 'spdf';
+const infoOf = (key, sp) => { const P = PROTEINS.find(x => x[0] === key), name = NAME_FI[key] || key;
+  const sub = P ? P[2].replace('.mol2','') : (FORMULA[key] || (ATOMS.includes(key) ? key[0] + key.slice(1).toLowerCase() + '-atomi' : key));
+  let extra = '';
+  if(ATOMS.includes(key)){ const E = ELEM[key], sh = (ECONF[key] || [[1,0]]).map(q => q[0] + SHELL_L[q[1]]).join(' ');
+    extra = '<br>' + E.z + ' protonia, ' + (E.n - E.z) + ' neutronia<br>kuoret ' + sh; }
+  return '<b>' + name + '</b><br>' + sub + '<br>' + sp.model.na + ' atomia' + (sp.model.nb ? ', ' + sp.model.nb + ' sidosta' : '') + extra; };
+const showInfo = (key, sp, img) => { selected = null;
+  card.innerHTML = (img && !/R0lGOD/.test(img) ? '<img src="' + img + '" alt="" style="display:block;width:96px;height:96px;margin:2px auto 8px;border-radius:14px;background:#e7d4ac">' : '') + infoOf(key, sp);
+  card.style.display = 'block'; };
+host.addEventListener('contextmenu', async e => { const el = e.target.closest('.atomi'); if(!el) return; e.preventDefault();
+  const key = el.dataset.sp, tila = el.querySelector('.tila');
+  try { if(!SPECIES[key]) tila.textContent = 'ladataan…'; const sp = await ensureSpecies(key); tila.textContent = ''; if(!sp) return; queueThumb(key);
+    showInfo(key, sp, el.querySelector('img').src); }
+  catch(err){ tila.textContent = 'virhe: ' + String(err && (err.message || err)).slice(0, 60); } });
 const FORMULA = { H2:'H₂', O2:'O₂', OH:'OH', H2O:'H₂O', CO2:'CO₂', Pi:'PO₄³⁻', p:'H⁺', ATP:'ATP', ADP:'ADP', NADP:'NADP⁺', CHL:'klorofylli a', PQ:'plastokinoni' };
 const select = m => { selected = m; if(!m){ card.style.display = 'none'; return; }
   const P = PROTEINS.find(x => x[0] === m.sp.key), name = NAME_FI[m.sp.key] || m.sp.key, sub = P ? P[2].replace('.mol2','') : (FORMULA[m.sp.key] || (ATOMS.includes(m.sp.key) ? m.sp.key[0] + m.sp.key.slice(1).toLowerCase() + '-atomi' : m.sp.key));
