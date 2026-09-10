@@ -1837,6 +1837,7 @@ void main(void){
   if(selModel >= 0.0 && abs(vMid - selModel) < 0.5)
     c = mix(c, selCol, smoothstep(0.45, 0.95, fres) * 0.95);   // sage rim on the selected complex's lobes
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → others' electrons dim to  5%
+  if(efac < 0.5) alpha *= 0.3;   // and the others' lobes go 70 percent transparent (owner, 2026-09-10)
 #ifdef ELECGATE
   if(drawElec > 0.5 && length(vViewPos) < elecR) electrons(c, nElec, efac);
 #else
@@ -2202,6 +2203,7 @@ void main(void){
     c = mix(c, selCol, smoothstep(0.45, 0.95, fres) * 0.95);   // sage rim on the selected complex's lobes
   float ne = (vCol.r > 0.82 && vCol.g > 0.82 && vCol.b > 0.82) ? 1.0 : nElec;   // hydrogen 1s holds a single electron
   float efac = (focusId >= 0.0 && vSel > 0.5 && abs(vOid - focusId) > 0.5) ? 0.05 : 1.0;   // isolate an orbital → the others' electrons dim to  5%
+  if(efac < 0.5) alpha *= 0.3;   // and the others' lobes go 70 percent transparent (owner, 2026-09-10)
 #ifdef ELECGATE
   if(drawElec > 0.5 && length(vViewPos) < elecR) electrons(c, ne, efac);
 #else
@@ -2998,6 +3000,21 @@ const blitRTT = (rtt, buf, canvas) => { const sz = rtt.getSize(), W = sz.width, 
   else for(let y=0;y<ch;y++){ const sy=Math.min(H-1, Math.floor((ch-1-y)*H/ch));
     for(let x=0;x<cw;x++){ const sx=Math.min(W-1, Math.floor(x*W/cw)), si=(sy*W+sx)*4, di=(y*cw+x)*4; img.data[di]=src[si]; img.data[di+1]=src[si+1]; img.data[di+2]=src[si+2]; img.data[di+3]=src[si+3]; } }
   ctx.putImageData(img, 0, 0); };
+/* the axes over the render (owner, 2026-09-10): when the isolated orbital is a p or d orbital, x, y and z are drawn
+   through the atom on the card's canvas after each blit, projected with the card's own camera so they turn with the
+   render - the p orbital's own axis in sage, the others in brown. oid < 900: type 1 = p (its axis in the last digit),
+   type 2 = d (a plane, so all three plain). Hybrids, pi and lone pairs draw no axes. */
+const axisOfOid = oid => { if(oid < 0 || oid >= 900) return null; const type = Math.floor((oid % 100)/10); if(type === 1) return oid % 10; if(type >= 2) return -1; return null; };
+const drawAxes = (canvas, cam, centre, L, hot) => { const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  const vp = new BABYLON.Viewport(0, 0, W, H), tm = cam.getTransformationMatrix(), I = BABYLON.Matrix.Identity();
+  const pr = p => BABYLON.Vector3.Project(p, I, tm, vp);
+  const c0 = pr(centre), names = ['x','y','z'];
+  for(let a=0;a<3;a++){ const d = new BABYLON.Vector3(a===0?L:0, a===1?L:0, a===2?L:0);
+    const p1 = pr(centre.add(d)), p2 = pr(centre.subtract(d)); if(!(p1.z > 0 && p1.z < 1 && p2.z > 0 && p2.z < 1)) continue;
+    ctx.lineWidth = a === hot ? 4 : 2.2; ctx.strokeStyle = a === hot ? '#82a058' : 'rgba(74,51,32,.85)'; ctx.setLineDash(a === hot ? [] : [6, 5]);
+    ctx.beginPath(); ctx.moveTo(p2.x, H - p2.y); ctx.lineTo(p1.x, H - p1.y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = 'bold 16px Courier New, monospace'; ctx.fillStyle = a === hot ? '#82a058' : '#4a3320'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const ex = p1.x + (p1.x - c0.x) * 0.12, ey = (H - p1.y) + ((H - p1.y) - (H - c0.y)) * 0.12; ctx.fillText(names[a], Math.max(8, Math.min(W-8, ex)), Math.max(8, Math.min(H-8, ey))); } };
 const spinHook = (canvas, st) => { canvas.style.cursor = 'grab'; canvas.style.touchAction = 'none';
   canvas.onpointerdown = e => { if(e.button !== 0) return; st.drag = true; st.lx = e.clientX; st.ly = e.clientY; try { canvas.setPointerCapture(e.pointerId); } catch(_){} canvas.style.cursor = 'grabbing'; e.preventDefault(); e.stopPropagation(); };
   canvas.onpointermove = e => { if(!st.drag) return; st.dAlpha += (e.clientX - st.lx) * 0.012; st.dBeta += (e.clientY - st.ly) * 0.012; st.lx = e.clientX; st.ly = e.clientY; };
@@ -3061,11 +3078,11 @@ const buildAtomCard = (kit, ca, spec) => {
   nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:2px;flex:0 0 auto;';
   nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
   grid.style.margin = '0 auto';
-  const cloudLbl = document.createElement('div'); cloudLbl.textContent = 'elektronipilvi';
+  const cloudLbl = document.createElement('div'); cloudLbl.textContent = 'elektronit';   // (owner, 2026-09-10: 'elektronit', under the render)
   cloudLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:2px 0 0;letter-spacing:.3px;";
   const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'Ydin';
   ydinLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:10px 0 0;letter-spacing:.3px;";
-  ca.appendChild(title); ca.appendChild(cloudLbl); ca.appendChild(orbViz); ca.appendChild(grid); ca.appendChild(ydinLbl); ca.appendChild(nucRow);
+  ca.appendChild(title); ca.appendChild(orbViz); ca.appendChild(cloudLbl); ca.appendChild(grid); ca.appendChild(ydinLbl); ca.appendChild(nucRow);
   return { orbViz, nucViz, repaint };
 };
 async function run(){
@@ -11327,9 +11344,11 @@ void main(void){
     if(!cs.drag) prevCam.alpha += 0.45*dt;
     prevCam.alpha += cs.dAlpha; prevCam.beta = Math.max(0.05, Math.min(Math.PI - 0.05, prevCam.beta + cs.dBeta)); cs.dAlpha = 0; cs.dBeta = 0;
     prevCam.radius = cs.radius; prevRTT.renderList = [prevOrb, prevNuc];
+    prevOrbMat.setFloat('focusId', gFocusId); prevOrbMat.setVector3('selCenter', gFocusId >= 0 ? BABYLON.Vector3.ZeroReadOnly : new BABYLON.Vector3(1e6,1e6,1e6));   // the isolated orbital in the card too
     prevNucMat.setFloat('depthBias', NUC_BIAS); prevRTT.render(); prevNucMat.setFloat('depthBias', 0.0);
     cardSpinBusy = true;
-    Promise.resolve(prevRTT.readPixels()).then(buf => { if(buf && gCardSpin === cs) blitRTT(prevRTT, buf, cs.canvas); }).finally(() => { cardSpinBusy = false; }); });
+    Promise.resolve(prevRTT.readPixels()).then(buf => { if(buf && gCardSpin === cs){ blitRTT(prevRTT, buf, cs.canvas);
+      const ax = axisOfOid(gFocusId); if(ax !== null) drawAxes(cs.canvas, prevCam, BABYLON.Vector3.Zero(), cs.radius/3, ax); } }).finally(() => { cardSpinBusy = false; }); });
   const renderPreviews = (atom, orbCanvas, nucCanvas) => {
     const gen = ++prevGen; gCardSpin = null;
     const maxR = buildOrb(atom);
@@ -12722,10 +12741,10 @@ const showInfo = (key, sp, img) => { selected = null; resetCard();
     const rows = KIT.atomicOrbitals(e).map(oid => ({ oid, ev: KIT.orbEnergyEV(e, oid, null, maxN) }));
     let focus = -1;
     card.style.width = '300px'; card.style.maxWidth = '300px'; card.style.display = 'flex'; card.style.flexDirection = 'column'; card.style.alignItems = 'center'; card.style.gap = '6px';
-    const built = buildAtomCard(KIT, card, { e, rows, hyb:null, maxN, getFocus: () => focus, onRowClick: oid => { focus = focus === oid ? -1 : oid; } });
-    KIT.draw2DNucleus(built.nucViz, e);
+    const built = buildAtomCard(KIT, card, { e, rows, hyb:null, maxN, getFocus: () => focus, onRowClick: oid => { focus = focus === oid ? -1 : oid; cardFocus = focus; applyCardFocus(); } });
+    KIT.draw2DNucleus(built.nucViz, e);   // a placeholder until the 3-D nucleus lands
     if(img && !/R0lGOD/.test(img)){ const im = new Image(); im.onload = () => { if(cardSt) return; const c = built.orbViz.getContext('2d'); c.clearRect(0,0,256,256); c.drawImage(im, 0, 0, 256, 256); }; im.src = img; }   // the list picture until the live render lands
-    startCardRender(key, sp, built.orbViz);
+    startCardRender(key, sp, built.orbViz, built.nucViz);
     return; }
   if(sp.isProt){ card.innerHTML = (img && !/R0lGOD/.test(img) ? '<img src="' + img + '" alt="" style="display:block;width:96px;height:96px;margin:2px auto 8px;border-radius:14px;background:#e7d4ac">' : '') + infoOf(key, sp); return; }
   const cv = document.createElement('canvas'); cv.width = cv.height = CARD; cv.style.cssText = 'display:block;width:180px;height:180px;margin:2px auto 8px;';   // a molecule: its live, spinning render
@@ -12780,15 +12799,20 @@ const thumbQueue = [], thumbDone = {}, thumbTries = {};
    blitted onto the card's canvas. Proteins keep their dot picture. */
 const CARD = 256, CARD_X = 52000;
 const cardRT = new BABYLON.RenderTargetTexture('cardRT', CARD, scene, false, true); cardRT.clearColor = new BABYLON.Color4(0,0,0,0);
-const cardCam = new BABYLON.ArcRotateCamera('cardCam', -Math.PI/2.5, Math.PI/2.7, 10, new BABYLON.Vector3(CARD_X, 0, 0), scene); cardCam.fov = 0.7; cardCam.minZ = 0.1; cardCam.maxZ = 5000; cardRT.activeCamera = cardCam;
-cardCam.freezeProjectionMatrix(BABYLON.Matrix.PerspectiveFovLH(0.7, 1.0, 0.1, 5000));
-let cardMol = null, cardSt = null, cardBusy = false, cardTick = 0;
-const stopCardRender = () => { if(cardMol){ remove(cardMol); cardMol = null; } cardSt = null; };
-const startCardRender = (key, sp, canvas) => { stopCardRender(); const m = spawn(key, CARD_X, 0, 0, 0); if(!m) return;
+const cardCam = new BABYLON.ArcRotateCamera('cardCam', -Math.PI/2.5, Math.PI/2.7, 10, new BABYLON.Vector3(CARD_X, 0, 0), scene); cardCam.fov = 0.7; cardCam.minZ = 0.01; cardCam.maxZ = 5000; cardRT.activeCamera = cardCam;   // near 0.01: a nucleus is 0.05 across (the viewer's prevCam is the same)
+cardCam.freezeProjectionMatrix(BABYLON.Matrix.PerspectiveFovLH(0.7, 1.0, 0.01, 5000));
+let cardMol = null, cardSt = null, cardBusy = false, cardTick = 0, cardFocus = -1;
+const CARD_C = new BABYLON.Vector3(CARD_X, 0, 0);
+/* the isolated orbital: the card's atom is the 'selected' one for the orbital materials (selCenter on it, far from the
+   arena), so the orb / bond shaders draw its other lobes at 30 percent and dim their electrons, as in the viewer */
+const applyCardFocus = () => { for(const m of [dynCore, dynBond]){ m.setFloat('focusId', cardFocus); m.setVector3('selCenter', cardFocus >= 0 ? CARD_C : FAR); } };
+const nucClusterR = e => { const A = info(e).n; const dm = A>1 ? Math.hypot(fcc[A-1][0],fcc[A-1][1],fcc[A-1][2]) : 0; return dm*SPACING + NUCLEON_R; };
+const stopCardRender = () => { if(cardMol){ remove(cardMol); cardMol = null; } cardSt = null; cardFocus = -1; applyCardFocus(); };
+const startCardRender = (key, sp, canvas, nucCanvas) => { stopCardRender(); const m = spawn(key, CARD_X, 0, 0, 0); if(!m) return;
   m.held = true; m.thumb = true; m.ang = 0; m.rockAmp = 0; m.angV = 0; cardMol = m;
   cardCam.target.set(CARD_X, 0, 0); cardCam.alpha = -Math.PI/2.5; cardCam.beta = Math.PI/2.7; cardCam.upVector.set(0, 1, 0);
   cardCam.radius = Math.max(0.6, sp.orbR*(sp.model.na > 1 ? 2.6 : 3.0));
-  cardSt = { canvas, drag:false, dAlpha:0, dBeta:0 }; spinHook(canvas, cardSt); };
+  cardSt = { canvas, nucCanvas: nucCanvas || null, nucDone: false, blits: 0, drag:false, dAlpha:0, dBeta:0 }; spinHook(canvas, cardSt); };
 scene.onAfterRenderObservable.add(() => { const m = cardMol, st = cardSt; if(!m || !st || cardBusy || (++cardTick & 1)) return;
   if(!mols.includes(m)){ cardMol = null; return; }   // gone meanwhile (eraser, reset)
   const dt = Math.min(0.1, scene.getEngine().getDeltaTime()/1000);
@@ -12796,7 +12820,13 @@ scene.onAfterRenderObservable.add(() => { const m = cardMol, st = cardSt; if(!m 
   cardCam.alpha += st.dAlpha; cardCam.beta = Math.max(0.05, Math.min(Math.PI - 0.05, cardCam.beta + st.dBeta)); st.dAlpha = 0; st.dBeta = 0;
   const sp = m.sp; cardRT.renderList = (sp.coreN + sp.bondN) ? [coreMesh, bondMesh, nucMesh] : [shellMesh, nucMesh];
   const save = scene.activeCamera; scene.activeCamera = cardCam; cardRT.render(); scene.activeCamera = save;
-  cardBusy = true; Promise.resolve(cardRT.readPixels()).then(px => { if(px && cardSt === st) blitRTT(cardRT, px, st.canvas); }).finally(() => { cardBusy = false; }); });
+  cardBusy = true; Promise.resolve(cardRT.readPixels()).then(px => { if(px && cardSt === st){ blitRTT(cardRT, px, st.canvas); st.blits++;
+      const ax = axisOfOid(cardFocus); if(ax !== null) drawAxes(st.canvas, cardCam, CARD_C, cardCam.radius/3, ax); } }).finally(() => { cardBusy = false;
+    /* the nucleus, once, after the lobes have landed: the real-scale 3-D nucleus (protons red, neutrons grey) into the small canvas, the viewer's way */
+    if(st.nucCanvas && !st.nucDone && st.blits >= 2 && cardSt === st && cardMol){ st.nucDone = true; const e0 = cardMol.sp.model.el[0], keepR = cardCam.radius;
+      cardCam.radius = Math.max(0.11, nucClusterR(e0) * 3.0); cardRT.renderList = [nucMesh];
+      const sv = scene.activeCamera; scene.activeCamera = cardCam; dynNuc.setFloat('depthBias', 0); cardRT.render(); dynNuc.setFloat('depthBias', NUC_BIAS); scene.activeCamera = sv; cardCam.radius = keepR;   // no depth bias at this framing - the 2-unit push toward the camera clips the whole nucleus past the near plane
+      cardBusy = true; Promise.resolve(cardRT.readPixels()).then(px => { if(px && cardSt === st) blitRTT(cardRT, px, st.nucCanvas); }).finally(() => { cardBusy = false; }); } }); });
 const queueThumb = key => { if(!thumbDone[key] && !thumbQueue.includes(key)) thumbQueue.push(key); };
 const thumbCanvas = document.createElement('canvas'); thumbCanvas.width = THUMB; thumbCanvas.height = THUMB;
 /* The card's dot picture for a protein (the viewer's drawProteinImage): every atom a dot, back-to-front,

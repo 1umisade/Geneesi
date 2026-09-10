@@ -446,3 +446,11 @@ protein footprints, the shuttles, the bouncers - is untouched. Around it, in `bu
   52000 (past the thumbnail's 50000) and renders `cardRT` with `cardCam` the same way (`startCardRender` /
   `stopCardRender`, tied to resetCard). `spinHook` gives any such canvas the left-drag turn. `blitRTT` is the
   shared GL-rows-bottom-up copy. Molecules in the editor get the live render too, proteins keep the dot picture.
+- Isolating an orbital (a row click) makes the atom's OTHER lobes 70 percent transparent (orb / bond fragments,
+  `alpha *= 0.3` beside the 5 percent electron dim) - in the scene and in both cards: the viewer's live loop
+  passes gFocusId + selCenter (0,0,0, the preview atom) to prevOrbMat each tick, the editor sets focusId +
+  selCenter (CARD_C, far from the arena) on dynCore / dynBond (`applyCardFocus`). A focused p orbital draws the
+  three axes over the render, its own in sage (`axisOfOid` / `drawAxes`, projected with the card's camera after
+  every blit), a d orbital all three plain. The label under the render reads 'elektronit'. The editor's nucleus
+  canvas is a one-shot 3-D render of nucMesh at the nucleus framing (cardCam near plane 0.01 - at 0.1 the
+  0.05-wide nucleus was clipped away), the 2-D sunflower only until it lands.
