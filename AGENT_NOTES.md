@@ -1,5 +1,5 @@
 # MUUTTANUT 10.9.2026: Geneesi on nyt Solukko-repon alikansio `geneesi/` (https://github.com/1umisade/Solukko),
-# julkinen osoite https://solukko.com/geneesi/. Tama repo on vain uudelleenohjaus (index.html). Kaikki kehitys
+# julkinen osoite https://solukko.com/simulaatiot/. Tama repo on vain uudelleenohjaus (index.html). Kaikki kehitys
 # tapahtuu Solukko-repossa - lue siella `geneesi/AGENT_NOTES.md` ja repon juuren `PROJEKTI.md`.
 
 # Geneesi - briefing for a new agent
