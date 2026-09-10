@@ -454,3 +454,7 @@ protein footprints, the shuttles, the bouncers - is untouched. Around it, in `bu
   every blit), a d orbital all three plain. The label under the render reads 'elektronit'. The editor's nucleus
   canvas is a one-shot 3-D render of nucMesh at the nucleus framing (cardCam near plane 0.01 - at 0.1 the
   0.05-wide nucleus was clipped away), the 2-D sunflower only until it lands.
+- Orbital ids: a p or d ORBITAL is a pair of lobes and gets its own id, `n*100 + type*10 + floor(k/2)` over the
+  OTMPL lobes - the protein atom build always did this, the three `rigidOrbSet` builders (the viewer's free
+  species, the lipids' sibling, the editor's) gave one id per subshell, so in the editor isolating 2px kept every
+  p lobe solid (owner, 2026-09-10: 'z valitsee kaikki p-orbitaalit?'). All three number per pair now.

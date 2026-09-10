@@ -8304,7 +8304,7 @@ void main(void){
         for(const sh of cfg){ const n2=sh[0], ty=sh[1], R=n2*SHELL_STEP, oid=n2*100+ty*10;
           if(bonded && maxNe>1 && n2===maxNe && ty<=1) continue;   // valence s/p of a bonded atom → the bonds represent them
           if(ty===0){ if(bonded && EL_LIST[e]==='H') h1sMat(q[0],q[1],q[2], R*0.72, bd[k][0], tmp, 0); else sphereMat(q[0],q[1],q[2], R*0.72, tmp, 0); pushCore(c,q[0],q[1],q[2],oid); }
-          else for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid); } } }
+          else { let k = 0; for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid + Math.floor(k/2)); k++; } } } }   // each p / d ORBITAL (a pair of lobes) its own id, as the protein atoms are numbered - one id per subshell made 2px isolate every p lobe (owner, 2026-09-10)
       const pn = bd.map(dirs => { for(let a=0;a<dirs.length;a++) for(let b=a+1;b<dirs.length;b++){ const cr=crs(dirs[a],dirs[b]), l=Math.hypot(cr[0],cr[1],cr[2]); if(l>0.3) return [cr[0]/l,cr[1]/l,cr[2]/l]; } return null; });
       const f=0.62, kL=0.24, kW=LOBE_W*0.5, pw=LOBE_W*0.42, pR=0.62; let hyb=0;
       for(let b=0;b<m.nb;b++){ const i=m.b1[b], j=m.b2[b]; if(i<0||j<0||i>=N||j>=N) continue; const bo=m.bo ? m.bo[b] : 1;
@@ -8342,7 +8342,7 @@ void main(void){
           for(const sh of cfg){ const n2=sh[0], ty=sh[1], R=n2*SHELL_STEP, oid=n2*100+ty*10;
             if(maxNe>1 && n2===maxNe && ty<=1) continue;
             if(ty===0){ sphereMat(q[0],q[1],q[2], R*0.72, tmp, 0); pushCore(c,q[0],q[1],q[2],oid); }
-            else for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid); } } }
+            else { let k = 0; for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid + Math.floor(k/2)); k++; } } } }   // each p / d ORBITAL (a pair of lobes) its own id, as the protein atoms are numbered - one id per subshell made 2px isolate every p lobe (owner, 2026-09-10)
         /* Bonds. Both of these species are held together by DOUBLE bonds (O=C=O and O=O), so they get
            the same treatment every other double bond in the scene gets: a sigma lobe from each end, a
            small back knob behind each nucleus, and a pi cloud above AND below the bond axis built from
@@ -12317,7 +12317,7 @@ const rigidOrbSet = (m, noOrb) => {
     for(const sh of cfg){ const n2=sh[0], ty=sh[1], R=n2*SHELL_STEP, oid=n2*100+ty*10;
       if(bonded && maxNe>1 && n2===maxNe && ty<=1) continue;
       if(ty===0){ if(bonded && EL_LIST[e]==='H') h1sMat(q[0],q[1],q[2], R*0.72, bd[k][0], tmp, 0); else sphereMat(q[0],q[1],q[2], R*0.72, tmp, 0); pushCore(c,q[0],q[1],q[2],oid); }
-      else for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid); } } }
+      else { let k = 0; for(const d of OTMPL[ty]){ cylTo(q[0],q[1],q[2], q[0]+d[0]*R,q[1]+d[1]*R,q[2]+d[2]*R, tmp,0,R*0.34); pushCore(c,q[0],q[1],q[2],oid + Math.floor(k/2)); k++; } } } }   // each p / d ORBITAL (a pair of lobes) its own id, as the protein atoms are numbered - one id per subshell made 2px isolate every p lobe (owner, 2026-09-10)
   const pn = bd.map(dirs => { for(let a=0;a<dirs.length;a++) for(let b=a+1;b<dirs.length;b++){ const cr=crs(dirs[a],dirs[b]), l=Math.hypot(cr[0],cr[1],cr[2]); if(l>0.3) return [cr[0]/l,cr[1]/l,cr[2]/l]; } return null; });
   const f=0.62, kL=0.24, kW=LOBE_W*0.5, pw=LOBE_W*0.42, pR=0.62; let hyb=0;
   for(let b=0;b<m.nb;b++){ const i=m.b1[b], j=m.b2[b]; if(i<0||j<0||i>=N||j>=N) continue; const bo=m.bo ? m.bo[b] : 1;
