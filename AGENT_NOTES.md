@@ -431,3 +431,18 @@ protein footprints, the shuttles, the bouncers - is untouched. Around it, in `bu
 - PITFALL fixed the same day: a `//` comment appended to a line that CONTINUED with code (the preload edit of
   `loadFile`) swallowed `let na = 0, nb = 0` - every protein load in the editor failed with 'na is not defined'
   from 8166c17 until now. Never end an inserted line with `//` when the original line went on after the anchor.
+
+### One atom card for both modes, live and grabbable (2026-09-10)
+
+- The card's helpers left run(): `mkOrbKit(econf)` at the top level (capOf, orbLabel, orbElectrons, hybLabel,
+  the Slater energies, atomicOrbitals, draw2DNucleus, rgbCss, orbShapeSVG) - run() destructures its own
+  instance (`ORBKIT`), the editor makes `KIT` with its econf. `buildAtomCard(kit, ca, spec)` builds the card DOM
+  (title, elektronipilvi, the render canvas, the orbital table, Ydin, the nucleus row) for both; the viewer's
+  `showConfig` only computes the rows / hybridisation and wires the isolate-on-click callbacks; the editor's
+  `showInfo` builds it for an atom of the list (atomic orbitals, no hybrids, a 2-D nucleus).
+- The 3-D render in the card is LIVE: the viewer re-renders `prevRTT` every other frame with prevCam turning
+  (0.45 rad/s) and blits it onto the canvas (`gCardSpin`, set at the end of renderPreviews's chain, cleared by
+  hideCenterAtom - the nucleus in the same pass with NUC_BIAS); the editor spawns the species held at CARD_X
+  52000 (past the thumbnail's 50000) and renders `cardRT` with `cardCam` the same way (`startCardRender` /
+  `stopCardRender`, tied to resetCard). `spinHook` gives any such canvas the left-drag turn. `blitRTT` is the
+  shared GL-rows-bottom-up copy. Molecules in the editor get the live render too, proteins keep the dot picture.

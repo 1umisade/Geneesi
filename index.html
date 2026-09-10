@@ -2889,6 +2889,185 @@ void main(void){ vec4 t = texture2D(textureSampler, vUV);
 let engine = null;
 
 /* ── Fetch + parse + build a mol2 file, then render it ─────────────────── */
+/* ── The atom info card's helpers - one code path for the viewer AND the chemistry editor, so their cards match
+   (owner, 2026-09-10: 'info cards need to be exactly like in geneesi'). econf is passed in because each mode has
+   its own. Everything here is pure: element tables, orbital labels, Hund filling, Slater energies, the shape icons,
+   the flat nucleus. */
+const mkOrbKit = econf => {
+  const capOf = [2,6,10,14], subL = ['s','p','d','f'];
+  const orbLabel = (oid, hyb, maxN) => {
+    if(oid >= 2000) return (hyb || 'sp³') + ' lp';     // lone pair — sits in a hybrid orbital, so name it (e.g. "sp³ lp")
+    if(oid >= 1000) return hyb || 'sp³';               // hybrid orbital
+    if(oid === 900) return (maxN || 2) + 'p';          // the π IS the unhybridised valence p orbital (e.g. 2p)
+    const n = Math.floor(oid/100), type = Math.floor((oid%100)/10), sub = oid%10;
+    if(type === 1) return n + 'p' + 'xyz'[sub];        // 2pₓ / 2p_y / 2p_z
+    if(type >= 2) return n + 'spdf'[type] + (sub>0 ? '·'+(sub+1) : '');
+    return n + 's';
+  };
+  // Electrons occupying a panel orbital: hybrids / π / lone pairs hold a pair; atomic subshells
+  // fill by Hund's rule (one per orbital, then pair up).
+  const orbElectrons = (e, oid) => {
+    if(oid >= 900) return 2;                            // hybrid / π / lone pair → an electron pair
+    const n = Math.floor(oid/100), L = Math.floor((oid%100)/10), sub = oid%10;
+    let Z = info(e).z, total = 0;
+    for(const [nn,ll] of econf(e)){ const c = Math.min(capOf[ll], Z); Z -= c; if(nn===n && ll===L){ total=c; break; } }
+    if(L===0) return total;                             // s orbital: 0/1/2
+    const norb = 2*L+1;                                 // this specific p/d/f orbital under Hund filling
+    return sub < total-norb ? 2 : (sub < total ? 1 : 0);
+  };
+  const hybLabel = {2:'sp',3:'sp²',4:'sp³',5:'sp³d',6:'sp³d²'};
+  // ── Orbital energies (eV) via a hydrogenic model with Slater-rule effective charge ──
+  //    E = −13.6 · Z_eff² / n*² ;  Z_eff = Z − σ (Slater screening), n* = effective principal number.
+  const nStar = {1:1.0, 2:2.0, 3:3.0, 4:3.7, 5:4.0, 6:4.2};
+  const subOcc = e => { let Z = info(e).z; const occ=[];
+    for(const [n,l] of econf(e)){ const c = Math.min(capOf[l], Z); Z -= c; if(c>0) occ.push({n,l,count:c}); } return occ; };
+  const grpRank = (n,l) => n*10 + (l<=1 ? 0 : l);   // Slater groups: (ns np) share a rank; nd, nf are separate, higher
+  const zeffSub = (e, N, L) => {
+    const occ = subOcc(e), Z = info(e).z, selfR = grpRank(N,L); let sigma = 0;
+    for(const s of occ){ const sR = grpRank(s.n,s.l);
+      if(sR === selfR){ const other = s.count - (s.n===N && s.l===L ? 1 : 0);   // same group (self excluded)
+        if(other > 0) sigma += other * ((N===1 && L===0) ? 0.30 : 0.35); }
+      else if(L <= 1){ if(s.n === N-1) sigma += s.count*0.85; else if(s.n <= N-2) sigma += s.count*1.00; }
+      else { if(sR < selfR) sigma += s.count*1.00; }   // d/f: everything to the left screens fully
+    }
+    return Math.max(0.5, Z - sigma);
+  };
+  const subEnergyEV = (e, N, L) => { const ze = zeffSub(e,N,L), ns = nStar[N]||N; return -13.6 * ze*ze / (ns*ns); };
+  // Energy for one panel orbital id (atomic subshell, hybrid, π or lone pair) on this atom.
+  const orbEnergyEV = (e, oid, hyb, maxN) => {
+    if(oid < 900){ const N = Math.floor(oid/100), L = Math.floor((oid%100)/10); return subEnergyEV(e, N, L); }
+    const Es = subEnergyEV(e, maxN, 0), Ep = subEnergyEV(e, maxN, 1);
+    if(oid === 900) return Ep;                                   // π = unhybridised valence p
+    const pN = {sp:1, 'sp²':2, 'sp³':3, 'sp³d':4, 'sp³d²':5}[hyb] ?? 3;   // spⁿ = 1 s + pN p orbitals
+    return (Es + pN*Ep) / (1 + pN);                             // hybrid / lone-pair sit at the mixed level
+  };
+  // The plain ATOMIC orbitals of an element (1s, 2s, 2pₓ, 2p_y, 2p_z …) from its ground config —
+  // never the hybrid set. Used by BOTH the panel list and the header render, so they always agree.
+  const atomicOrbitals = e => { const list = [];
+    for(const [n,ty] of econf(e)){ const norb = 2*ty + 1;   // s=1, p=3, d=5, f=7 orbitals (NOT lobes)
+      for(let sub=0; sub<norb; sub++) list.push(n*100 + ty*10 + sub); }
+    return list; };
+  // Flat 2D nucleus for the info-panel footer: protons (red) + neutrons (grey) in a sunflower pack.
+  const draw2DNucleus = (canvas, e) => {
+    const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height, cx = W/2, cy = H/2;
+    ctx.clearRect(0, 0, W, H);
+    const A = info(e).n, Z = info(e).z, GA = Math.PI * (3 - Math.sqrt(5));   // golden angle
+    let maxr = 0; const pos = [];
+    for(let i=0;i<A;i++){ const rr = Math.sqrt(i + 0.5), th = i * GA; pos.push([rr*Math.cos(th), rr*Math.sin(th)]); if(rr > maxr) maxr = rr; }
+    const scale = (W * 0.44) / (maxr + 0.7), nucR = 0.62 * scale;   // fit the whole cluster with a little margin
+    for(let i=0;i<A;i++){
+      const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);
+      const px = cx + pos[i][0]*scale, py = cy + pos[i][1]*scale;
+      const g = ctx.createRadialGradient(px - nucR*0.35, py - nucR*0.35, nucR*0.12, px, py, nucR);
+      if(proton){ g.addColorStop(0, '#ff9a94'); g.addColorStop(1, '#c0403a'); }
+      else { g.addColorStop(0, '#9c9c8e'); g.addColorStop(1, '#5f5f52'); }
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, nucR, 0, 6.2832); ctx.fill();
+      ctx.lineWidth = Math.max(1, nucR*0.12); ctx.strokeStyle = proton ? '#7d2420' : '#3d3d34'; ctx.stroke();
+    }
+  };
+
+  const rgbCss = c => 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')';
+  const orbShapeSVG = (oid, fill) => {
+    const stroke = '#4a3320', sw = 2;
+    const lobe = (cx,cy,rx,ry) => '<ellipse cx="'+cx+'" cy="'+cy+'" rx="'+rx+'" ry="'+ry+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>';
+    let inner;
+    if(oid >= 1000){                       // hybrid (1000+) OR lone pair (2000+) → big lobe + small back lobe
+      inner = lobe(20,31,4.6,6) + lobe(20,13,9,12);
+    } else if(oid === 900){                // π = unhybridised valence p → dumbbell
+      inner = lobe(20,11,8,10) + lobe(20,29,8,10);
+    } else {
+      const type = Math.floor((oid % 100)/10);
+      if(type === 1) inner = lobe(20,11,8,10) + lobe(20,29,8,10);                                   // atomic p → dumbbell
+      else if(type >= 2) inner = lobe(11,11,6,7)+lobe(29,11,6,7)+lobe(11,29,6,7)+lobe(29,29,6,7);    // d/f → clover
+      else inner = '<circle cx="20" cy="20" r="12" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>';   // s → sphere
+    }
+    return '<svg class="orb-shape" width="28" height="28" viewBox="0 0 40 40" aria-hidden="true">'+inner+'</svg>';
+  };
+  return { capOf, subL, orbLabel, orbElectrons, hybLabel, orbEnergyEV, atomicOrbitals, draw2DNucleus, rgbCss, orbShapeSVG };
+};
+/* The card itself, built the same way in both modes: name, 'elektronipilvi', the 3-D render canvas, the orbital table
+   (valence shell on top, a gap between shells, no horizontal rules), 'Ydin' and the proton / nucleus / neutron row.
+   spec: e (element code), rows [{oid, ev}], hyb, maxN, getFocus() -> the isolated orbital id or -1, onRowClick(oid).
+   Returns the two canvases so the caller renders into them (the viewer in 3-D, the editor its own way). */
+/* The card's 3-D render (owner, 2026-09-10): it SPINS slowly and can be grabbed - a left drag on the canvas turns it.
+   blitRTT copies a square render target (GL rows run bottom-up) onto a canvas of any size, spinHook wires the drag:
+   st.drag while the button is down, alpha / beta offsets applied by the caller's per-frame loop. */
+const blitRTT = (rtt, buf, canvas) => { const sz = rtt.getSize(), W = sz.width, H = sz.height, cw = canvas.width, ch = canvas.height;
+  const ctx = canvas.getContext('2d'), img = ctx.createImageData(cw, ch), src = new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
+  if(cw === W && ch === H){ for(let y=0;y<ch;y++) img.data.set(src.subarray((H-1-y)*W*4, (H-y)*W*4), y*W*4); }
+  else for(let y=0;y<ch;y++){ const sy=Math.min(H-1, Math.floor((ch-1-y)*H/ch));
+    for(let x=0;x<cw;x++){ const sx=Math.min(W-1, Math.floor(x*W/cw)), si=(sy*W+sx)*4, di=(y*cw+x)*4; img.data[di]=src[si]; img.data[di+1]=src[si+1]; img.data[di+2]=src[si+2]; img.data[di+3]=src[si+3]; } }
+  ctx.putImageData(img, 0, 0); };
+const spinHook = (canvas, st) => { canvas.style.cursor = 'grab'; canvas.style.touchAction = 'none';
+  canvas.onpointerdown = e => { if(e.button !== 0) return; st.drag = true; st.lx = e.clientX; st.ly = e.clientY; try { canvas.setPointerCapture(e.pointerId); } catch(_){} canvas.style.cursor = 'grabbing'; e.preventDefault(); e.stopPropagation(); };
+  canvas.onpointermove = e => { if(!st.drag) return; st.dAlpha += (e.clientX - st.lx) * 0.012; st.dBeta += (e.clientY - st.ly) * 0.012; st.lx = e.clientX; st.ly = e.clientY; };
+  canvas.onpointerup = canvas.onpointercancel = e => { st.drag = false; canvas.style.cursor = 'grab'; }; };
+const buildAtomCard = (kit, ca, spec) => {
+  const { e, rows, hyb, maxN } = spec, Z = info(e).z;
+  ca.innerHTML = '';
+  const orbViz = document.createElement('canvas');
+  orbViz.width = orbViz.height = 256;
+  orbViz.style.cssText = 'width:210px;height:210px;display:block;margin:0 auto;';
+  const title = document.createElement('div');
+  title.textContent = elemNameFi(e);
+  title.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:19px;font-weight:bold;color:var(--brown);text-align:center;margin:0 0 4px;letter-spacing:.3px;";
+  const EV_AJ = 0.1602176634;                        // 1 eV = 0.16022 aJ   (1 aJ = 1e-18 J)
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,auto);align-items:stretch;';
+  const gcell = (col, css) => { const d = document.createElement('div');
+    d.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:3px 5px;' + (col>0 ? 'border-left:2px solid var(--brown);' : '') + (css||'');
+    return d; };
+  ['orbitaali','muoto','elektronit','energia'].forEach((t,i)=>{ const c = gcell(i,'font-size:10.5px;font-weight:bold;opacity:.72;padding-bottom:4px;'); c.textContent = t; grid.appendChild(c); });
+  const shellN = oid => oid >= 900 ? maxN : Math.floor(oid/100);
+  const rws = rows.map(r => ({ oid: r.oid, ev: r.ev, n: shellN(r.oid) }));
+  const shells = [...new Set(rws.map(r => r.n))].sort((a,b)=> b-a);   // valence shell (highest n) on top, core at the bottom
+  const eMin = rws.length ? Math.min(...rws.map(r => r.ev)) : 0;      // energies RELATIVE to the most-bound orbital
+  const fmtAJ = ev => { const a = (ev - eMin) * EV_AJ; return (a < 1e-9 ? '0' : (a >= 10 ? a.toFixed(0) : a.toFixed(2)).replace('.', ',')) + ' aJ'; };
+  const cellsByOid = new Map();
+  let hovOid = -1;
+  const repaint = () => { const f = spec.getFocus ? spec.getFocus() : -1; for(const [t,cells] of cellsByOid){ const on = (+t===f), hv = (+t===hovOid);
+    const bg = on ? 'var(--sage)' : (hv ? 'var(--paper2)' : 'transparent');
+    for(const c of cells) c.style.background = bg; } };
+  for(const n of shells){
+    const gap = document.createElement('div'); gap.style.cssText = 'grid-column:1/-1;height:12px;'; grid.appendChild(gap);   // a GAP, no line, separates the shells
+    for(const {oid, ev} of rws.filter(r => r.n===n).sort((a,b)=> a.ev - b.ev)){
+      const ne = kit.orbElectrons(e, oid);
+      const nameC = gcell(0,'font-size:13px;font-weight:bold;');
+      nameC.innerHTML = '<span class="orb-name">'+kit.orbLabel(oid, hyb, maxN).replace(/^(\d+[pd])([a-z][a-z0-9\u00b2\-]*)$/i, '$1<sub>$2</sub>')+'</span>';
+      const shapeC = gcell(1); shapeC.innerHTML = kit.orbShapeSVG(+oid, kit.rgbCss(info(e).c));
+      const box = document.createElement('span'); box.className = 'orb-box';
+      const isBond = (oid >= 1000 && oid < 2000) || oid === 900;   // a sigma hybrid or a pi: one of the two electrons is the other atom's
+      for(let k=0;k<ne;k++){ const dot=document.createElement('span'); dot.className = (isBond && k === ne-1) ? 'orb-e orb-e-shared' : 'orb-e'; box.appendChild(dot); }
+      const elecC = gcell(2); elecC.appendChild(box);
+      const enC = gcell(3,'font-size:11px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;white-space:nowrap;'); enC.textContent = fmtAJ(ev);
+      const cells = [nameC, shapeC, elecC, enC];
+      cellsByOid.set(oid, cells);
+      for(const c of cells){ c.style.cursor = 'pointer'; c.title = ne + ' elektronia';
+        c.onmouseenter = () => { hovOid = oid; repaint(); };
+        c.onmouseleave = () => { hovOid = -1; repaint(); };
+        c.onclick = () => { if(spec.onRowClick) spec.onRowClick(oid); repaint(); };
+        grid.appendChild(c); }
+    }
+  }
+  repaint();
+  const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
+  nucViz.style.cssText = 'width:82px;height:82px;flex:0 0 auto;';
+  const Nn = Math.max(0, info(e).n - Z);
+  const protonLbl = document.createElement('div'); protonLbl.textContent = Z + (Z === 1 ? ' protoni' : ' protonia');
+  protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:0 0 auto;white-space:nowrap;';
+  const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + (Nn === 1 ? ' neutroni' : ' neutronia') : '';
+  neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:0 0 auto;white-space:nowrap;';
+  const nucRow = document.createElement('div');
+  nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:2px;flex:0 0 auto;';
+  nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
+  grid.style.margin = '0 auto';
+  const cloudLbl = document.createElement('div'); cloudLbl.textContent = 'elektronipilvi';
+  cloudLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:2px 0 0;letter-spacing:.3px;";
+  const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'Ydin';
+  ydinLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:10px 0 0;letter-spacing:.3px;";
+  ca.appendChild(title); ca.appendChild(cloudLbl); ca.appendChild(orbViz); ca.appendChild(grid); ca.appendChild(ydinLbl); ca.appendChild(nucRow);
+  return { orbViz, nucViz, repaint };
+};
 async function run(){
   /* ── Thylakoid membrane scene ─────────────────────────────────────────────
      Integral complexes are embedded in the bilayer (Y≈0) in electron-transport order
@@ -10974,7 +11153,7 @@ void main(void){
     BABYLON.Animation.CreateAndStartAnimation('perpA', cam, 'alpha', 60, 26, cam.alpha, best, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
     BABYLON.Animation.CreateAndStartAnimation('perpB', cam, 'beta', 60, 26, cam.beta, CAM_DEF_BETA, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT, ease);
   };
-  const capOf = [2,6,10,14], subL = ['s','p','d','f'];
+  const ORBKIT = mkOrbKit(econf), { capOf, subL, orbLabel, orbElectrons, hybLabel, orbEnergyEV, atomicOrbitals, draw2DNucleus, rgbCss, orbShapeSVG } = ORBKIT;   // shared with the editor (mkOrbKit)
   const sup = c => String(c).replace(/[0-9]/g, d => '⁰¹²³⁴⁵⁶⁷⁸⁹'[+d]);
   // Which focus id does a subshell map to? Its own atomic orbital if that lobe is really drawn,
   // otherwise 99 (it was hybridised → represented by the bonds + lone pairs).
@@ -10995,63 +11174,12 @@ void main(void){
     list.sort((a,b)=>a-b);
     return list;
   };
-  const orbLabel = (oid, hyb, maxN) => {
-    if(oid >= 2000) return (hyb || 'sp³') + ' lp';     // lone pair — sits in a hybrid orbital, so name it (e.g. "sp³ lp")
-    if(oid >= 1000) return hyb || 'sp³';               // hybrid orbital
-    if(oid === 900) return (maxN || 2) + 'p';          // the π IS the unhybridised valence p orbital (e.g. 2p)
-    const n = Math.floor(oid/100), type = Math.floor((oid%100)/10), sub = oid%10;
-    if(type === 1) return n + 'p' + 'xyz'[sub];        // 2pₓ / 2p_y / 2p_z
-    if(type >= 2) return n + 'spdf'[type] + (sub>0 ? '·'+(sub+1) : '');
-    return n + 's';
-  };
-  // Electrons occupying a panel orbital: hybrids / π / lone pairs hold a pair; atomic subshells
-  // fill by Hund's rule (one per orbital, then pair up).
-  const orbElectrons = (e, oid) => {
-    if(oid >= 900) return 2;                            // hybrid / π / lone pair → an electron pair
-    const n = Math.floor(oid/100), L = Math.floor((oid%100)/10), sub = oid%10;
-    let Z = info(e).z, total = 0;
-    for(const [nn,ll] of econf(e)){ const c = Math.min(capOf[ll], Z); Z -= c; if(nn===n && ll===L){ total=c; break; } }
-    if(L===0) return total;                             // s orbital: 0/1/2
-    const norb = 2*L+1;                                 // this specific p/d/f orbital under Hund filling
-    return sub < total-norb ? 2 : (sub < total ? 1 : 0);
-  };
   const hideConfig = () => { econfPanel.style.display='none'; econfPanel.innerHTML=''; };
-  const hybLabel = {2:'sp',3:'sp²',4:'sp³',5:'sp³d',6:'sp³d²'};
 
-  // ── Orbital energies (eV) via a hydrogenic model with Slater-rule effective charge ──
-  //    E = −13.6 · Z_eff² / n*² ;  Z_eff = Z − σ (Slater screening), n* = effective principal number.
-  const nStar = {1:1.0, 2:2.0, 3:3.0, 4:3.7, 5:4.0, 6:4.2};
-  const subOcc = e => { let Z = info(e).z; const occ=[];
-    for(const [n,l] of econf(e)){ const c = Math.min(capOf[l], Z); Z -= c; if(c>0) occ.push({n,l,count:c}); } return occ; };
-  const grpRank = (n,l) => n*10 + (l<=1 ? 0 : l);   // Slater groups: (ns np) share a rank; nd, nf are separate, higher
-  const zeffSub = (e, N, L) => {
-    const occ = subOcc(e), Z = info(e).z, selfR = grpRank(N,L); let sigma = 0;
-    for(const s of occ){ const sR = grpRank(s.n,s.l);
-      if(sR === selfR){ const other = s.count - (s.n===N && s.l===L ? 1 : 0);   // same group (self excluded)
-        if(other > 0) sigma += other * ((N===1 && L===0) ? 0.30 : 0.35); }
-      else if(L <= 1){ if(s.n === N-1) sigma += s.count*0.85; else if(s.n <= N-2) sigma += s.count*1.00; }
-      else { if(sR < selfR) sigma += s.count*1.00; }   // d/f: everything to the left screens fully
-    }
-    return Math.max(0.5, Z - sigma);
-  };
-  const subEnergyEV = (e, N, L) => { const ze = zeffSub(e,N,L), ns = nStar[N]||N; return -13.6 * ze*ze / (ns*ns); };
-  // Energy for one panel orbital id (atomic subshell, hybrid, π or lone pair) on this atom.
-  const orbEnergyEV = (e, oid, hyb, maxN) => {
-    if(oid < 900){ const N = Math.floor(oid/100), L = Math.floor((oid%100)/10); return subEnergyEV(e, N, L); }
-    const Es = subEnergyEV(e, maxN, 0), Ep = subEnergyEV(e, maxN, 1);
-    if(oid === 900) return Ep;                                   // π = unhybridised valence p
-    const pN = {sp:1, 'sp²':2, 'sp³':3, 'sp³d':4, 'sp³d²':5}[hyb] ?? 3;   // spⁿ = 1 s + pN p orbitals
-    return (Es + pN*Ep) / (1 + pN);                             // hybrid / lone-pair sit at the mixed level
-  };
+
   const EV_J = 1.602176634e-19;   // 1 eV in joules
   // Relative energy (lowest orbital = 0, others above it): E'_i = E_i − E_lowest, in joules.
   const fmtJ = evRel => { const j = evRel*EV_J; return j < 1e-30 ? '0 J' : '+' + j.toExponential(2) + ' J'; };
-  // The plain ATOMIC orbitals of an element (1s, 2s, 2pₓ, 2p_y, 2p_z …) from its ground config —
-  // never the hybrid set. Used by BOTH the panel list and the header render, so they always agree.
-  const atomicOrbitals = e => { const list = [];
-    for(const [n,ty] of econf(e)){ const norb = 2*ty + 1;   // s=1, p=3, d=5, f=7 orbitals (NOT lobes)
-      for(let sub=0; sub<norb; sub++) list.push(n*100 + ty*10 + sub); }
-    return list; };
   // The atom's ACTUAL orbitals as rendered in 3-D: the unique oids of its real lobes — inner-shell
   // atomic orbitals, the sp/sp²/sp³ hybrids (one per σ bond), the π (oid 900) and the lone pairs.
   // The panel lists THESE (not the idealised atomic set) so each chip maps exactly to one 3-D orbital.
@@ -11190,8 +11318,20 @@ void main(void){
   // the nucleus → the small ydin canvas.
   const tmpCanvas = document.createElement('canvas'); tmpCanvas.width = tmpCanvas.height = 256;
   let prevGen = 0;
+  /* the live view: while an atom card is open the preview target is rendered again every other frame with the
+     preview camera turning (or dragged), the nucleus at true scale in the same pass (a depth bias lets it beat
+     its own lobes, as in the scene), and blitted onto the card's canvas */
+  let gCardSpin = null; let cardSpinBusy = false, cardSpinTick = 0;
+  scene.onAfterRenderObservable.add(() => { const cs = gCardSpin; if(!cs || cardSpinBusy || (++cardSpinTick & 1)) return;
+    const dt = Math.min(0.1, engine.getDeltaTime()/1000);
+    if(!cs.drag) prevCam.alpha += 0.45*dt;
+    prevCam.alpha += cs.dAlpha; prevCam.beta = Math.max(0.05, Math.min(Math.PI - 0.05, prevCam.beta + cs.dBeta)); cs.dAlpha = 0; cs.dBeta = 0;
+    prevCam.radius = cs.radius; prevRTT.renderList = [prevOrb, prevNuc];
+    prevNucMat.setFloat('depthBias', NUC_BIAS); prevRTT.render(); prevNucMat.setFloat('depthBias', 0.0);
+    cardSpinBusy = true;
+    Promise.resolve(prevRTT.readPixels()).then(buf => { if(buf && gCardSpin === cs) blitRTT(prevRTT, buf, cs.canvas); }).finally(() => { cardSpinBusy = false; }); });
   const renderPreviews = (atom, orbCanvas, nucCanvas) => {
-    const gen = ++prevGen;
+    const gen = ++prevGen; gCardSpin = null;
     const maxR = buildOrb(atom);
     prevCam.setTarget(BABYLON.Vector3.Zero());
     prevCam.radius = Math.max(0.6, maxR * 3.0);   // frame the whole orbital cloud with margin (never crop; FOV needs ≥2.74×)
@@ -11208,29 +11348,11 @@ void main(void){
         buildNuc(atom, 1);                                       // 3. real-scale nucleus (protons red - neutrons grey) → the small nucleus canvas
         prevCam.radius = Math.max(0.11, nucClusterR(atom.e) * 3.0);
         prevRTT.renderList = [prevNuc];
-        return capturePreview(nucCanvas);
+        return capturePreview(nucCanvas).then(() => { if(gen !== prevGen) return;   // 4. from here on the orbital canvas is LIVE - spinning, grabbable
+          const cs = { canvas: orbCanvas, radius: Math.max(0.6, maxR * 3.0), drag:false, dAlpha:0, dBeta:0 }; spinHook(orbCanvas, cs); gCardSpin = cs; });
       });
     });
   };
-  // Flat 2D nucleus for the info-panel footer: protons (red) + neutrons (grey) in a sunflower pack.
-  const draw2DNucleus = (canvas, e) => {
-    const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height, cx = W/2, cy = H/2;
-    ctx.clearRect(0, 0, W, H);
-    const A = info(e).n, Z = info(e).z, GA = Math.PI * (3 - Math.sqrt(5));   // golden angle
-    let maxr = 0; const pos = [];
-    for(let i=0;i<A;i++){ const rr = Math.sqrt(i + 0.5), th = i * GA; pos.push([rr*Math.cos(th), rr*Math.sin(th)]); if(rr > maxr) maxr = rr; }
-    const scale = (W * 0.44) / (maxr + 0.7), nucR = 0.62 * scale;   // fit the whole cluster with a little margin
-    for(let i=0;i<A;i++){
-      const proton = Math.floor((i+1)*Z/A) > Math.floor(i*Z/A);
-      const px = cx + pos[i][0]*scale, py = cy + pos[i][1]*scale;
-      const g = ctx.createRadialGradient(px - nucR*0.35, py - nucR*0.35, nucR*0.12, px, py, nucR);
-      if(proton){ g.addColorStop(0, '#ff9a94'); g.addColorStop(1, '#c0403a'); }
-      else { g.addColorStop(0, '#9c9c8e'); g.addColorStop(1, '#5f5f52'); }
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, nucR, 0, 6.2832); ctx.fill();
-      ctx.lineWidth = Math.max(1, nucR*0.12); ctx.strokeStyle = proton ? '#7d2420' : '#3d3d34'; ctx.stroke();
-    }
-  };
-
   // ── Selected-cofactor info panel: a 3D image of the molecule + its single-unit mass + a PubChem link ──
   const PUBCHEM_Q = { 1:'oxygen evolving complex', 2:'pheophytin a', 3:'plastoquinone', 4:'heme b',
     5:'iron-sulfur cluster', 6:'plastocyanin', 7:'chlorophyll a', 8:'beta-carotene', 9:'L-tyrosine', 10:'NADPH' };
@@ -11454,123 +11576,27 @@ void main(void){
   // A tiny SVG of the orbital's REAL shape for its config-panel button: s = sphere, p (π) = dumbbell,
   // sp/sp²/sp³ hybrids AND lone pairs = an asymmetric hybrid lobe (big front lobe + small back lobe),
   // d/f = a 4-lobe clover. Filled with the element's colour, dark-brown outline — matches the 3-D look.
-  const rgbCss = c => 'rgb('+Math.round(c[0]*255)+','+Math.round(c[1]*255)+','+Math.round(c[2]*255)+')';
-  const orbShapeSVG = (oid, fill) => {
-    const stroke = '#4a3320', sw = 2;
-    const lobe = (cx,cy,rx,ry) => '<ellipse cx="'+cx+'" cy="'+cy+'" rx="'+rx+'" ry="'+ry+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>';
-    let inner;
-    if(oid >= 1000){                       // hybrid (1000+) OR lone pair (2000+) → big lobe + small back lobe
-      inner = lobe(20,31,4.6,6) + lobe(20,13,9,12);
-    } else if(oid === 900){                // π = unhybridised valence p → dumbbell
-      inner = lobe(20,11,8,10) + lobe(20,29,8,10);
-    } else {
-      const type = Math.floor((oid % 100)/10);
-      if(type === 1) inner = lobe(20,11,8,10) + lobe(20,29,8,10);                                   // atomic p → dumbbell
-      else if(type >= 2) inner = lobe(11,11,6,7)+lobe(29,11,6,7)+lobe(11,29,6,7)+lobe(29,29,6,7);    // d/f → clover
-      else inner = '<circle cx="20" cy="20" r="12" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>';   // s → sphere
-    }
-    return '<svg class="orb-shape" width="28" height="28" viewBox="0 0 40 40" aria-hidden="true">'+inner+'</svg>';
-  };
 
   const showConfig = atom => {
-    const e = atom.e; let Z = info(e).z;
+    const e = atom.e;
     const ca = document.getElementById('center-atom'); if(!ca) return;
-    ca.innerHTML = '';
     const maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
     const bonds = (!atom.spawn && bondCntEA[e]) ? bondCntEA[e][atom.idx] : 0, sn = bonds + lonePairs(e);   // spawned atoms are unbonded
     const hyb = (bonds>0 && maxN>1 && hybLabel[sn]) ? hybLabel[sn] : null;
-    // ── Orbital render (the atom's real lobes — same 'orb' shader as the 3-D scene) — LEFT region ──
-    const orbViz = document.createElement('canvas');
-    orbViz.width = orbViz.height = 256;
-    orbViz.style.cssText = 'width:210px;height:210px;display:block;margin:0 auto;';
-    // Title: Finnish element name + "atomi" (e.g. "Hiiliatomi"), serif face like the sketch.
-    const title = document.createElement('div');
-    title.textContent = elemNameFi(e);
-    title.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:19px;font-weight:bold;color:var(--brown);text-align:center;margin:0 0 4px;letter-spacing:.3px;";
-
-    // ── Electron-cloud table ── one css-grid so every column shares an edge; per-cell left borders join
-    //    into continuous vertical rules. Shells run valence-first (top) → core (bottom); they are set apart
-    //    ONLY by a gap that breaks those vertical rules — no horizontal lines, no "N. kuori" text.
-    const EV_AJ = 0.1602176634;                        // 1 eV = 0.16022 aJ   (1 aJ = 1e-18 J)
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,auto);align-items:stretch;';
-    const gcell = (col, css) => { const d = document.createElement('div');
-      d.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:3px 5px;'   // tight → the 4-column table fits the narrow right module
-        + (col>0 ? 'border-left:2px solid var(--brown);' : '') + (css||'');
-      return d; };
-    ['orbitaali','muoto','elektronit','energia'].forEach((t,i)=>{ const c = gcell(i,'font-size:10.5px;font-weight:bold;opacity:.72;padding-bottom:4px;');
-      c.textContent = t; grid.appendChild(c); });
-    // Group the atom's real orbitals by shell n (hybrids / π / lone pairs sit in the valence shell).
-    const shellN = oid => oid >= 900 ? maxN : Math.floor(oid/100);
-    const rows = actualOrbitals(atom).map(oid => ({ oid, ev: orbEnergyEV(e, oid, hyb, maxN), n: shellN(oid) }));
-    const shells = [...new Set(rows.map(r => r.n))].sort((a,b)=> b-a);   // valence shell (highest n) on top, core at the bottom
-    // Energies are RELATIVE to the most-bound orbital → the deepest (1s) reads 0, higher shells sit above it.
-    const eMin = rows.length ? Math.min(...rows.map(r => r.ev)) : 0;
-    const fmtAJ = ev => { const a = (ev - eMin) * EV_AJ; return (a < 1e-9 ? '0' : (a >= 10 ? a.toFixed(0) : a.toFixed(2)).replace('.', ',')) + ' aJ'; };
-    const cellsByOid = new Map();
-    let hovOid = -1;
-    const repaint = () => { for(const [t,cells] of cellsByOid){ const on = (+t===gFocusId), hv = (+t===hovOid);
-      const bg = on ? 'var(--sage)' : (hv ? 'var(--paper2)' : 'transparent');
-      for(const c of cells) c.style.background = bg; } };
-    for(const n of shells){
-      const gap = document.createElement('div');   // a GAP (no horizontal line) so the vertical column rules
-      gap.style.cssText = 'grid-column:1/-1;height:12px;';   // break here → that break alone separates the shells
-      grid.appendChild(gap);
-      for(const {oid, ev} of rows.filter(r => r.n===n).sort((a,b)=> a.ev - b.ev)){
-        const ne = orbElectrons(e, oid);
-        const nameC = gcell(0,'font-size:13px;font-weight:bold;');
-    // the axis (or d-lobe) designation is a subscript: 2p<sub>x</sub>, 3d<sub>xy</sub> - not part of the shell number
-    nameC.innerHTML = '<span class="orb-name">'+orbLabel(oid, hyb, maxN).replace(/^(\d+[pd])([a-z][a-z0-9\u00b2\-]*)$/i, '$1<sub>$2</sub>')+'</span>';
-        const shapeC = gcell(1); shapeC.innerHTML = orbShapeSVG(+oid, rgbCss(info(e).c));   // muoto = the orbital's real shape
-        const box = document.createElement('span'); box.className = 'orb-box';
-        const isBond = (oid >= 1000 && oid < 2000) || oid === 900;   // σ hybrid or π → one of the two electrons comes from the OTHER atom
-        for(let k=0;k<ne;k++){ const dot=document.createElement('span');
-          dot.className = (isBond && k === ne-1) ? 'orb-e orb-e-shared' : 'orb-e';   // partner atom's electron = darker
-          box.appendChild(dot); }
-        const elecC = gcell(2); elecC.appendChild(box);
-        const enC = gcell(3,'font-size:11px;font-weight:bold;color:var(--brown);font-variant-numeric:tabular-nums;white-space:nowrap;'); enC.textContent = fmtAJ(ev);
-        const cells = [nameC, shapeC, elecC, enC];
-        cellsByOid.set(oid, cells);
-        for(const c of cells){ c.style.cursor = 'pointer'; c.title = ne + ' elektronia';
-          c.onmouseenter = () => { hovOid = oid; repaint(); };
-          c.onmouseleave = () => { hovOid = -1; repaint(); };
-          c.onclick = () => { gFocusId = (gFocusId===oid) ? -1 : oid;
-            clearTimeout(flashTimer); flashTimer = null;   // isolating an orbital cancels the select-flash
-            selOut.material = flashMat;   // the isolated orbital keeps the full selection green - the others drop to mild (setSelOut)
-            setSelOut(atom);              // isolate: full on the one, mild on the rest - de-isolate: every lobe full green again
-            repaint(); };
-          grid.appendChild(c); }
-      }
-    }
-    repaint();
-    // ── 3D nucleus render (protons red - neutrons grey), flanked by proton (left) + neutron (right) counts ──
-    const nucViz = document.createElement('canvas'); nucViz.width = nucViz.height = 128;
-    nucViz.style.cssText = 'width:82px;height:82px;flex:0 0 auto;';
-    const Nn = Math.max(0, info(e).n - Z);
-    // Finnish partitive only from two up - one proton is "1 protoni", not "1 protonia". nowrap + auto
-    // basis so the count and the word stay on ONE line instead of the narrow column breaking them apart.
-    const protonLbl = document.createElement('div'); protonLbl.textContent = Z + (Z === 1 ? ' protoni' : ' protonia');
-    protonLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#c0403a;text-align:right;flex:0 0 auto;white-space:nowrap;';
-    const neutronLbl = document.createElement('div'); neutronLbl.textContent = Nn > 0 ? Nn + (Nn === 1 ? ' neutroni' : ' neutronia') : '';   // hide neutrons when there are none (H)
-    neutronLbl.style.cssText = 'font-size:13px;font-weight:bold;color:#6a6a5a;text-align:left;flex:0 0 auto;white-space:nowrap;';
-    const nucRow = document.createElement('div');
-    nucRow.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:2px;flex:0 0 auto;';
-    nucRow.appendChild(protonLbl); nucRow.appendChild(nucViz); nucRow.appendChild(neutronLbl);
-    // Vertical stack in the narrow right-side info module: name → 3D orbital render → orbital table → nucleus row.
-    grid.style.margin = '0 auto';   // centre the table in the column
-    // Section labels: the orbital render + energy table are the ELECTRON CLOUD; the proton/neutron ball is the NUCLEUS.
-    const cloudLbl = document.createElement('div'); cloudLbl.textContent = 'elektronipilvi';
-    cloudLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:2px 0 0;letter-spacing:.3px;";
-    const ydinLbl = document.createElement('div'); ydinLbl.textContent = 'Ydin';
-    ydinLbl.style.cssText = "font-family:Georgia,'Times New Roman',serif;font-size:14px;color:var(--brown);text-align:center;margin:10px 0 0;letter-spacing:.3px;";
-    ca.appendChild(title); ca.appendChild(cloudLbl); ca.appendChild(orbViz); ca.appendChild(grid); ca.appendChild(ydinLbl); ca.appendChild(nucRow);
+    const rows = actualOrbitals(atom).map(oid => ({ oid, ev: orbEnergyEV(e, oid, hyb, maxN) }));
+    const { orbViz, nucViz } = buildAtomCard(ORBKIT, ca, { e, rows, hyb, maxN,
+      getFocus: () => gFocusId,
+      onRowClick: oid => { gFocusId = (gFocusId===oid) ? -1 : oid;
+        clearTimeout(flashTimer); flashTimer = null;   // isolating an orbital cancels the select-flash
+        selOut.material = flashMat;   // the isolated orbital keeps the full selection green - the others drop to mild (setSelOut)
+        setSelOut(atom); } });
     ca.style.display = 'flex';
     hideCenterProtein(); if(updateCofInfo) updateCofInfo(-1); selPanel.style.display = 'none';   // atom info OWNS the info module
     renderPreviews(atom, orbViz, nucViz);   // 3D orbitals (+ composited nucleus) → the render canvas, real-scale 3D nucleus → the nucleus canvas
   };
 
   // The full atom info now lives in the centre console module — built by showConfig, hidden here.
-  const hideCenterAtom = () => { const ca=document.getElementById('center-atom'); if(ca){ ca.style.display='none'; ca.innerHTML=''; } };
+  const hideCenterAtom = () => { gCardSpin = null; const ca=document.getElementById('center-atom'); if(ca){ ca.style.display='none'; ca.innerHTML=''; } };
   // Clear the current ATOM selection (outline / nucleus / electron poke-through / config panel).
   const clearAtomSel = () => {
     clearTimeout(flashTimer); flashTimer = null;   // stop a running flash so it can't re-show the outline
@@ -12688,16 +12714,30 @@ const infoOf = (key, sp) => { const P = PROTEINS.find(x => x[0] === key), name =
   if(ATOMS.includes(key)){ const E = ELEM[key], sh = (ECONF[key] || [[1,0]]).map(q => q[0] + SHELL_L[q[1]]).join(' ');
     extra = '<br>' + E.z + ' protonia, ' + (E.n - E.z) + ' neutronia<br>kuoret ' + sh; }
   return '<b>' + name + '</b><br>' + sub + '<br>' + sp.model.na + ' atomia' + (sp.model.nb ? ', ' + sp.model.nb + ' sidosta' : '') + extra; };
-const showInfo = (key, sp, img) => { selected = null;
-  card.innerHTML = (img && !/R0lGOD/.test(img) ? '<img src="' + img + '" alt="" style="display:block;width:96px;height:96px;margin:2px auto 8px;border-radius:14px;background:#e7d4ac">' : '') + infoOf(key, sp);
-  card.style.display = 'block'; };
+const KIT = mkOrbKit(econf);
+const resetCard = () => { stopCardRender(); card.innerHTML = ''; card.style.width = ''; card.style.maxWidth = ''; card.style.flexDirection = ''; card.style.alignItems = ''; card.style.gap = ''; card.style.display = 'block'; };
+const showInfo = (key, sp, img) => { selected = null; resetCard();
+  if(ATOMS.includes(key)){   // an atom: the viewer's card, built by the same code (buildAtomCard)
+    const e = codeOf(key), maxN = econf(e).reduce((mx,sh)=>Math.max(mx,sh[0]),0);
+    const rows = KIT.atomicOrbitals(e).map(oid => ({ oid, ev: KIT.orbEnergyEV(e, oid, null, maxN) }));
+    let focus = -1;
+    card.style.width = '300px'; card.style.maxWidth = '300px'; card.style.display = 'flex'; card.style.flexDirection = 'column'; card.style.alignItems = 'center'; card.style.gap = '6px';
+    const built = buildAtomCard(KIT, card, { e, rows, hyb:null, maxN, getFocus: () => focus, onRowClick: oid => { focus = focus === oid ? -1 : oid; } });
+    KIT.draw2DNucleus(built.nucViz, e);
+    if(img && !/R0lGOD/.test(img)){ const im = new Image(); im.onload = () => { if(cardSt) return; const c = built.orbViz.getContext('2d'); c.clearRect(0,0,256,256); c.drawImage(im, 0, 0, 256, 256); }; im.src = img; }   // the list picture until the live render lands
+    startCardRender(key, sp, built.orbViz);
+    return; }
+  if(sp.isProt){ card.innerHTML = (img && !/R0lGOD/.test(img) ? '<img src="' + img + '" alt="" style="display:block;width:96px;height:96px;margin:2px auto 8px;border-radius:14px;background:#e7d4ac">' : '') + infoOf(key, sp); return; }
+  const cv = document.createElement('canvas'); cv.width = cv.height = CARD; cv.style.cssText = 'display:block;width:180px;height:180px;margin:2px auto 8px;';   // a molecule: its live, spinning render
+  card.appendChild(cv); const txt = document.createElement('div'); txt.innerHTML = infoOf(key, sp); card.appendChild(txt);
+  startCardRender(key, sp, cv); };
 host.addEventListener('contextmenu', async e => { const el = e.target.closest('.atomi'); if(!el) return; e.preventDefault();
   const key = el.dataset.sp, tila = el.querySelector('.tila');
   try { if(!SPECIES[key]) tila.textContent = 'ladataan…'; const sp = await ensureSpecies(key); tila.textContent = ''; if(!sp) return; queueThumb(key);
     showInfo(key, sp, el.querySelector('img').src); }
   catch(err){ tila.textContent = 'virhe: ' + String(err && (err.message || err)).slice(0, 60); } });
 const FORMULA = { H2:'H₂', O2:'O₂', OH:'OH', H2O:'H₂O', CO2:'CO₂', Pi:'PO₄³⁻', p:'H⁺', ATP:'ATP', ADP:'ADP', NADP:'NADP⁺', CHL:'klorofylli a', PQ:'plastokinoni' };
-const select = m => { selected = m; if(!m){ card.style.display = 'none'; return; }
+const select = m => { selected = m; if(!m){ card.style.display = 'none'; return; } resetCard();
   const P = PROTEINS.find(x => x[0] === m.sp.key), name = NAME_FI[m.sp.key] || m.sp.key, sub = P ? P[2].replace('.mol2','') : (FORMULA[m.sp.key] || (ATOMS.includes(m.sp.key) ? m.sp.key[0] + m.sp.key.slice(1).toLowerCase() + '-atomi' : m.sp.key));
   card.innerHTML = '<b>' + name + '</b><br>' + sub + '<br>' + m.sp.model.na + ' atomia' + (m.sp.model.nb ? ', ' + m.sp.model.nb + ' sidosta' : '') + '<br><span style="opacity:.7">nopeus ' + Math.hypot(m.vx, m.vy, m.vz).toFixed(1) + ' Å/s</span>';
   card.style.display = 'block';
@@ -12735,6 +12775,28 @@ const THUMB = 128, thumbRT = new BABYLON.RenderTargetTexture('thumb', THUMB, sce
 const thumbCam = new BABYLON.ArcRotateCamera('thumbCam', -Math.PI/2 + 0.55, Math.PI/2 - 0.5, 10, new BABYLON.Vector3(50000, 0, 0), scene); thumbCam.fov = 0.6; thumbCam.minZ = 0.1; thumbCam.maxZ = 5000; thumbRT.activeCamera = thumbCam;
 scene.customRenderTargets = scene.customRenderTargets || [];   // NOT added there - rendered by hand below, one per frame
 const thumbQueue = [], thumbDone = {}, thumbTries = {};
+/* the info card's LIVE render: the species is spawned held at CARD_X (past the thumbnail's 50000, so the two never
+   share a frame), the card camera turns slowly or follows a drag, and every other frame the target is rendered and
+   blitted onto the card's canvas. Proteins keep their dot picture. */
+const CARD = 256, CARD_X = 52000;
+const cardRT = new BABYLON.RenderTargetTexture('cardRT', CARD, scene, false, true); cardRT.clearColor = new BABYLON.Color4(0,0,0,0);
+const cardCam = new BABYLON.ArcRotateCamera('cardCam', -Math.PI/2.5, Math.PI/2.7, 10, new BABYLON.Vector3(CARD_X, 0, 0), scene); cardCam.fov = 0.7; cardCam.minZ = 0.1; cardCam.maxZ = 5000; cardRT.activeCamera = cardCam;
+cardCam.freezeProjectionMatrix(BABYLON.Matrix.PerspectiveFovLH(0.7, 1.0, 0.1, 5000));
+let cardMol = null, cardSt = null, cardBusy = false, cardTick = 0;
+const stopCardRender = () => { if(cardMol){ remove(cardMol); cardMol = null; } cardSt = null; };
+const startCardRender = (key, sp, canvas) => { stopCardRender(); const m = spawn(key, CARD_X, 0, 0, 0); if(!m) return;
+  m.held = true; m.thumb = true; m.ang = 0; m.rockAmp = 0; m.angV = 0; cardMol = m;
+  cardCam.target.set(CARD_X, 0, 0); cardCam.alpha = -Math.PI/2.5; cardCam.beta = Math.PI/2.7; cardCam.upVector.set(0, 1, 0);
+  cardCam.radius = Math.max(0.6, sp.orbR*(sp.model.na > 1 ? 2.6 : 3.0));
+  cardSt = { canvas, drag:false, dAlpha:0, dBeta:0 }; spinHook(canvas, cardSt); };
+scene.onAfterRenderObservable.add(() => { const m = cardMol, st = cardSt; if(!m || !st || cardBusy || (++cardTick & 1)) return;
+  if(!mols.includes(m)){ cardMol = null; return; }   // gone meanwhile (eraser, reset)
+  const dt = Math.min(0.1, scene.getEngine().getDeltaTime()/1000);
+  if(!st.drag) cardCam.alpha += 0.45*dt;
+  cardCam.alpha += st.dAlpha; cardCam.beta = Math.max(0.05, Math.min(Math.PI - 0.05, cardCam.beta + st.dBeta)); st.dAlpha = 0; st.dBeta = 0;
+  const sp = m.sp; cardRT.renderList = (sp.coreN + sp.bondN) ? [coreMesh, bondMesh, nucMesh] : [shellMesh, nucMesh];
+  const save = scene.activeCamera; scene.activeCamera = cardCam; cardRT.render(); scene.activeCamera = save;
+  cardBusy = true; Promise.resolve(cardRT.readPixels()).then(px => { if(px && cardSt === st) blitRTT(cardRT, px, st.canvas); }).finally(() => { cardBusy = false; }); });
 const queueThumb = key => { if(!thumbDone[key] && !thumbQueue.includes(key)) thumbQueue.push(key); };
 const thumbCanvas = document.createElement('canvas'); thumbCanvas.width = THUMB; thumbCanvas.height = THUMB;
 /* The card's dot picture for a protein (the viewer's drawProteinImage): every atom a dot, back-to-front,
